@@ -1,0 +1,17 @@
+# darshini — main entry point.
+#
+# Scaffold stage: prints version and exits. Real form (directory walk
+# + per-entry stat + color/icon/git-status columns + tree mode +
+# mime-type recognition) lands once development begins. Renders
+# through darshana (TTY/ANSI/cursor) once that dep is wired.
+#
+# Stdlib auto-included via cyrius.cyml [deps].stdlib.
+
+fn main() {
+    alloc_init();
+    println("darshini v0.1.0 — scaffold");
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);

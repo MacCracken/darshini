@@ -4,6 +4,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] — M4: color via darshana
+
+### Added
+- Per-entry color on TTY output. File-type detection drives the
+  ADR-0001 palette: directory → blue, symlink (live) → cyan,
+  symlink (broken) → red, executable regular file → green,
+  fifo → yellow, socket → bright magenta, block / char device
+  → bright yellow, regular non-executable → no color.
+- `--no-color`: long-form flag to force-off even on a TTY.
+  Bundles parse-fine with other short flags (`-l --no-color`).
+- Pipe-aware default: stdout-not-a-TTY → no color (no escape
+  bytes emitted). Same gate as M3's single-column-on-pipe.
+- Broken-symlink detection: symlinks pay an extra `sys_stat`
+  per entry to distinguish broken (red) from live (cyan). Cost
+  scales with symlink count, not entry count.
+- `src/color.cyr` — `color_for_mode(mode)` pure picker,
+  `compute_colors(entries, dir_str)` parallel-vec builder with
+  broken-symlink follow, `emit_colored(name, color)` write wrap.
+- `docs/adr/0001-color-scheme.md` — first ADR. Frozen palette
+  for v1.0, divergence-vs-`ls` notes, accessibility rationale.
+- `[deps.darshana]` — first external dep, pinned at 0.5.3. All
+  ANSI escapes route through `tty_sgr` / `tty_sgr_reset` per
+  the CLAUDE.md "no raw ANSI inline" hard rule.
+- Tests: 14 new assertions on `color_for_mode` (every file
+  type → its SGR code). Total now 107/107.
+
+### Notes
+- The 8/16-color named-color subset is the v1.0 contract. 256
+  / 24-bit truecolor primitives are available in darshana but
+  unused — keeps the palette portable across serial consoles,
+  tmux scrollback, screen readers, log archives.
+- `NO_COLOR` / `CLICOLOR` env-var honors aren't wired. `--no-color`
+  covers the explicit override; TTY detection covers script
+  safety. Env-var support is a follow-up if downstream asks.
+- LS_COLORS-style dotfile config is out-of-scope per roadmap.
+
 ## [0.4.0] — M3: multi-column auto-layout + `-1`
 
 ### Added

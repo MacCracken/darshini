@@ -5,9 +5,9 @@
 
 ## Version
 
-**0.4.0** — M3 (multi-column auto-layout + `-1` force-single)
-shipped 2026-05-22, same day as M1 (v0.2.0) and M2 (v0.3.0).
-Scaffolded as **0.1.0** on 2026-05-19 via `cyrius init darshini`.
+**0.5.0** — M4 (color via darshana) shipped 2026-05-22. Same day
+as M1 (v0.2.0), M2 (v0.3.0), M3 (v0.4.0). Scaffolded as **0.1.0**
+on 2026-05-19 via `cyrius init darshini`.
 
 ## Toolchain
 
@@ -30,10 +30,11 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
   collect-stat-then-emit-aligned)
 - `src/columns.cyr` — `term_width` (ioctl TIOCGWINSZ),
   `pick_cols`, `render_columns` (vertical-then-horizontal)
+- `src/color.cyr` — `color_for_mode` picker, `compute_colors`
+  fs-side parallel-vec builder, `emit_colored` write wrap
 
-M4+ onward fills:
+M5+ onward fills:
 
-- `src/color.cyr` — darshana ANSI routing (M4)
 - `src/icons.cyr` — icon-mapping loader (M5)
 - `src/tree.cyr` — recursive box-drawn rendering (M6)
 - `src/git.cyr` — `.git/`-direct status column (M7)
@@ -46,7 +47,7 @@ M4+ onward fills:
 | Basic listing | M1 | **shipped** (v0.2.0) |
 | `-l` long format + `-h` human sizes | M2 | **shipped** (v0.3.0) |
 | Multi-column auto-layout, `-1` | M3 | **shipped** (v0.4.0) |
-| Color via darshana | M4 | pending |
+| Color via darshana | M4 | **shipped** (v0.5.0) |
 | Icons via CYML mapping | M5 | pending |
 | `-T` / `--tree` | M6 | pending |
 | `--git` status column | M7 | pending |
@@ -54,10 +55,11 @@ M4+ onward fills:
 
 ## Tests
 
-- `tests/darshini.tcyr` — 93 assertions across M1 (lower_byte,
+- `tests/darshini.tcyr` — 107 assertions across M1 (lower_byte,
   str_lt_ci, sort_entries, classify_path, check_dir_readable),
   M2 (format_perms, format_size_decimal, format_size_human,
-  format_mtime), and M3 (pick_cols, _columns_total_width)
+  format_mtime), M3 (pick_cols, _columns_total_width), and
+  M4 (color_for_mode)
 - `tests/darshini.bcyr` — benchmark stub
 - `tests/darshini.fcyr` — fuzz stub
 
@@ -69,8 +71,10 @@ Direct (declared in `cyrius.cyml`):
   chrono, assert, bench. `args` + `fs` added at M1 (argv access
   + getdents64-backed dir_list); `chrono` added at M2 for
   `epoch_to_date` + the 2-digit / 4-digit formatting helpers.
-
-M4 adds `[deps.darshana]` for ANSI / color primitives.
+- `[deps.darshana]` (git, tag 0.5.3) — TTY/ANSI/cursor primitives.
+  First external dep; landed at M4 for the color escapes. All
+  raw ANSI routes through darshana's `tty_sgr` / `tty_sgr_reset`
+  per CLAUDE.md.
 
 ## Consumers
 
@@ -79,13 +83,14 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next ship is M4 (color via
-darshana), targeting v0.5.0. Wires up the first `[deps.darshana]`
-external dependency; per-entry color by file type (dir,
-executable, symlink, broken symlink, regular file); TTY auto-
-detect (no color on pipe — already implemented for column
-layout, the same gate applies); `--no-color` flag to force-off.
-First ADR (`docs/adr/0001-color-scheme.md`) lands here.
+See [`roadmap.md`](roadmap.md). Next ship is M5 (icons via CYML
+mapping), targeting v0.6.0. New `icons/default.cyml` ships a
+curated mapping of `<ext>` → `<glyph>` + ANSI color, with
+special-case entries for well-known filenames
+(`Makefile`, `Dockerfile`, `README*`, etc.). `--no-icons` flag
+to suppress. Second ADR (`docs/adr/0002-icon-format.md`)
+documents the schema + rationale. Tests: every shipped icon
+renders for its trigger.
 
 ## Known gotchas
 

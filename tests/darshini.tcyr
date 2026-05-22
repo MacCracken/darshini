@@ -1,4 +1,4 @@
-# darshini test suite — M1 + M2 + M3.
+# darshini test suite — M1 + M2 + M3 + M4.
 # Stdlib auto-included via cyrius.cyml.
 #
 # M1 coverage (carried forward from v0.2.0):
@@ -18,11 +18,15 @@
 #     several term widths; degenerate widths (0, too-narrow);
 #     uniform vs jagged name lengths
 #   * _columns_total_width — exact byte width for known layouts
+#
+# M4 coverage (new at v0.5.0):
+#   * color_for_mode — every file type → its ADR-0001 SGR code
 
-include "src/render.cyr"
 include "src/walk.cyr"
-include "src/long.cyr"
+include "src/color.cyr"
+include "src/render.cyr"
 include "src/columns.cyr"
+include "src/long.cyr"
 
 fn make_str(c): i64 {
     return str_clone(str_from(c));
@@ -306,6 +310,37 @@ fn main(): i64 {
     }
     assert_eq(pick_cols(hundred, 80), 8, "100 uniform 8-char at tw=80 -> 8 cols");
     assert_eq(pick_cols(hundred, 40), 4, "100 uniform 8-char at tw=40 -> 4 cols");
+
+    # ============================================================
+    # M4 — color picker (mode bits -> ADR-0001 SGR code)
+    # ============================================================
+
+    test_group("color_for_mode");
+    # Directory (any perms) -> BLUE
+    assert_eq(color_for_mode(0x41ED), TTY_FG_BLUE, "dir 0755 -> BLUE");
+    assert_eq(color_for_mode(0x41C0), TTY_FG_BLUE, "dir 0700 -> BLUE");
+    # Symlink -> CYAN (broken detection lives in compute_colors, not here)
+    assert_eq(color_for_mode(0xA1FF), TTY_FG_CYAN, "symlink -> CYAN (live; broken is compute_colors)");
+    # FIFO -> YELLOW
+    assert_eq(color_for_mode(0x11A4), TTY_FG_YELLOW, "fifo -> YELLOW");
+    # Socket -> BRIGHT_MAGENTA
+    assert_eq(color_for_mode(0xC1A4), TTY_FG_BRIGHT_MAGENTA, "socket -> BRIGHT_MAGENTA");
+    # Block device -> BRIGHT_YELLOW
+    assert_eq(color_for_mode(0x61A4), TTY_FG_BRIGHT_YELLOW, "blkdev -> BRIGHT_YELLOW");
+    # Char device -> BRIGHT_YELLOW
+    assert_eq(color_for_mode(0x21A4), TTY_FG_BRIGHT_YELLOW, "chrdev -> BRIGHT_YELLOW");
+    # Regular non-executable -> 0 (no color)
+    assert_eq(color_for_mode(0x81A4), 0, "regular 0644 -> 0 (no color)");
+    assert_eq(color_for_mode(0x8000), 0, "regular 0000 -> 0 (no color)");
+    # Regular file with any exec bit -> GREEN
+    assert_eq(color_for_mode(0x81ED), TTY_FG_GREEN, "regular 0755 -> GREEN");
+    assert_eq(color_for_mode(0x81C0 | S_IXUSR), TTY_FG_GREEN, "regular x-by-user -> GREEN");
+    assert_eq(color_for_mode(0x81C0 | S_IXGRP), TTY_FG_GREEN, "regular x-by-group -> GREEN");
+    assert_eq(color_for_mode(0x81C0 | S_IXOTH), TTY_FG_GREEN, "regular x-by-other -> GREEN");
+    # Setuid bit alone (no exec) on a regular file -> still 0
+    # (setuid without x is unusual; we don't promote color on it,
+    # we only render the 'S' in the perm string).
+    assert_eq(color_for_mode(0x89A4), 0, "regular setuid no-x -> 0 (no color)");
 
     return assert_summary();
 }

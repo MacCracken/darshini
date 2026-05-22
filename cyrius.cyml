@@ -14,6 +14,16 @@ output = "darshini"
 [deps]
 stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "args", "fs", "chrono", "assert", "bench"]
 
-# Future: [deps.darshana] for TTY/ANSI/cursor rendering primitives;
-# possibly [deps.chakshu] later for AI-augmented mime-prediction or
-# repo-context-aware coloring. Scaffold stage is independent.
+# darshana — TTY/ANSI/cursor primitives. Per CLAUDE.md's hard rule
+# (no raw ANSI inline), every color escape darshini emits routes
+# through darshana's tty_sgr / tty_sgr_reset. Pinned at 0.5.3 (the
+# 8/16-color named-color surface + 24-bit truecolor — we use only
+# the 16-color names today). Roadmap M4 dep gate is "≥ 0.3.0";
+# we're well past that.
+[deps.darshana]
+git = "https://github.com/MacCracken/darshana.git"
+tag = "0.5.3"
+modules = ["dist/darshana.cyr"]
+
+# Future: possibly [deps.chakshu] later for AI-augmented mime-
+# prediction or repo-context-aware coloring (v2.0 territory).

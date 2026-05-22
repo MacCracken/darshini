@@ -45,7 +45,7 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-Pre-1.0. v0.4.0 — M1 + M2 + M3 shipped:
+Pre-1.0. v0.5.0 — M1 + M2 + M3 + M4 shipped:
 
 - M1: basic listing — `darshini` / `darshini <path>`,
   case-insensitive alphabetical, error-discriminated.
@@ -55,9 +55,13 @@ Pre-1.0. v0.4.0 — M1 + M2 + M3 shipped:
   packs entries into the widest fit (vertical-then-horizontal).
   `darshini -1` forces single-column. `darshini | cat` (pipe)
   is single-column automatically.
+- M4: per-entry color — dirs blue, executables green, symlinks
+  cyan (broken red), fifos yellow, etc. (palette frozen in
+  [ADR 0001](docs/adr/0001-color-scheme.md)). `--no-color`
+  forces plain. Pipe → no escapes, automatically.
 
-No colors, icons, git column or tree mode yet — M4–M7. Linux
-x86_64 only through v1.0; other platforms post-v1.
+No icons, git column or tree mode yet — M5–M7. Linux x86_64
+only through v1.0; other platforms post-v1.
 
 ## Build
 

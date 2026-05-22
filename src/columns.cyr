@@ -106,7 +106,11 @@ fn pick_cols(entries, term_width): i64 {
 # then-horizontally (idx = c*rows + r). `col_widths[c]` gives the
 # per-column max name length. Partial trailing rows stop at the
 # last filled cell — no trailing spaces past the last name.
-fn _columns_emit(entries, n, cols, rows, col_widths): i64 {
+#
+# `colors` (M4): if non-zero, a parallel vec<i64> of SGR codes
+# per ADR 0001. Padding math uses `str_len` (visible-width) so
+# escapes don't disturb alignment.
+fn _columns_emit(entries, n, cols, rows, col_widths, colors): i64 {
     var sep = 2;
     var r = 0;
     while (r < rows) {
@@ -123,7 +127,9 @@ fn _columns_emit(entries, n, cols, rows, col_widths): i64 {
             var idx = c * rows + r;
             var name = vec_get(entries, idx);
             var nlen = str_len(name);
-            sys_write(STDOUT_FD, str_data(name), nlen);
+            var col_code = 0;
+            if (colors != 0) { col_code = vec_get(colors, idx); }
+            emit_colored(name, col_code);
             if (c < last_c) {
                 var w = load64(col_widths + c * 8);
                 var pad = w - nlen + sep;
@@ -145,11 +151,13 @@ fn _columns_emit(entries, n, cols, rows, col_widths): i64 {
 # widths, emit. Falls back to single-column print_entries when
 # the picker chooses 1 column (typical on narrow TTYs / huge
 # names).
-fn render_columns(entries, term_width): i64 {
+#
+# `colors` (M4): see _columns_emit. Pass 0 for plain output.
+fn render_columns(entries, term_width, colors): i64 {
     var n = vec_len(entries);
     if (n == 0) { return 0; }
     var cols = pick_cols(entries, term_width);
-    if (cols <= 1) { return print_entries(entries); }
+    if (cols <= 1) { return print_entries(entries, colors); }
     var rows = (n + cols - 1) / cols;
     var col_widths = alloc(cols * 8);
     var c = 0;
@@ -167,5 +175,5 @@ fn render_columns(entries, term_width): i64 {
         store64(col_widths + c * 8, max_w);
         c = c + 1;
     }
-    return _columns_emit(entries, n, cols, rows, col_widths);
+    return _columns_emit(entries, n, cols, rows, col_widths, colors);
 }

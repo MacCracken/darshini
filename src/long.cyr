@@ -46,6 +46,8 @@ fn _emit_spaces(n): i64 {
 
 # Render the long-format listing for the entries inside `dir_str`.
 # `want_human` controls size formatting (decimal vs IEC X.YK/M/G/T).
+# `colors` (M4): if non-zero, a parallel vec<i64> of SGR codes
+# per ADR 0001 used to colorize the name column.
 # Both passes over the entries: pass 1 collects per-row state +
 # tracks the max size-string width; pass 2 emits aligned rows.
 #
@@ -53,7 +55,7 @@ fn _emit_spaces(n): i64 {
 # `l...` with their own length rather than the target's. M2
 # scope: no symlink-target rendering yet — the `-> target` tail
 # lands when the symlink-display ADR opens for M6 / M7 territory.
-fn render_long(entries, dir_str, want_human): i64 {
+fn render_long(entries, dir_str, want_human, colors): i64 {
     var n = vec_len(entries);
     var rows = vec_new();
     var max_size_w = 0;
@@ -125,9 +127,11 @@ fn render_long(entries, dir_str, want_human): i64 {
         }
         sys_write(STDOUT_FD, mtime_buf, 16);
         sys_write(STDOUT_FD, " ", 1);
-        # name
+        # name (colorized per ADR 0001 when colors vec was supplied)
         var name = vec_get(entries, i);
-        sys_write(STDOUT_FD, str_data(name), str_len(name));
+        var col_code = 0;
+        if (colors != 0) { col_code = vec_get(colors, i); }
+        emit_colored(name, col_code);
         sys_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }
@@ -140,12 +144,18 @@ fn render_long(entries, dir_str, want_human): i64 {
 # Uses lstat so a symlink renders as itself rather than its
 # target's stat. The path bytes are emitted verbatim (no
 # basename trimming) for parity with ls.
-fn render_long_one(path_cstr, want_human): i64 {
+#
+# `want_color` (M4): when 1, the name column is colorized per
+# ADR 0001. For symlinks we do the extra `sys_stat` to detect
+# broken targets inline (compute_colors does the same for
+# directory listings).
+fn render_long_one(path_cstr, want_human, want_color): i64 {
     var stat_buf = alloc(144);
     var rc = lstat_path(path_cstr, stat_buf);
     if (rc < 0) { return 1; }
+    var mode = load32(stat_buf + STAT_MODE);
     var perm_buf = alloc(10);
-    format_perms(load32(stat_buf + STAT_MODE), perm_buf);
+    format_perms(mode, perm_buf);
     var size_buf = alloc(32);
     var size = load64(stat_buf + STAT_SIZE);
     var size_len = 0;
@@ -159,7 +169,21 @@ fn render_long_one(path_cstr, want_human): i64 {
     sys_write(STDOUT_FD, " ", 1);
     sys_write(STDOUT_FD, mtime_buf, 16);
     sys_write(STDOUT_FD, " ", 1);
+    var col_code = 0;
+    if (want_color == 1) {
+        var fmt = mode & S_IFMT;
+        if (fmt == S_IFLNK) {
+            var probe[144];
+            var rc2 = sys_stat(path_cstr, &probe);
+            if (rc2 < 0) { col_code = TTY_FG_RED; }
+            else { col_code = TTY_FG_CYAN; }
+        } else {
+            col_code = color_for_mode(mode);
+        }
+    }
+    if (col_code != 0) { tty_sgr(col_code); }
     sys_write(STDOUT_FD, path_cstr, strlen(path_cstr));
+    if (col_code != 0) { tty_sgr_reset(); }
     sys_write(STDOUT_FD, "\n", 1);
     return 0;
 }

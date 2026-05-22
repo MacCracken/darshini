@@ -1,0 +1,87 @@
+# darshini — per-entry color (M4).
+#
+# Maps stat-derived file types to darshana SGR codes per ADR 0001.
+# All ANSI escapes route through darshana's `tty_sgr` /
+# `tty_sgr_reset` per the CLAUDE.md hard rule (no raw ANSI inline).
+#
+# Two-tier surface:
+#   color_for_mode(mode)       — pure: mode bits → SGR code (no I/O)
+#   compute_colors(entries, dir_str)
+#                              — fs side: lstat + follow-stat per
+#                                entry, returns parallel vec<i64>
+#                                of SGR codes (0 = no color)
+#   emit_colored(name, color)  — write the name bytes optionally
+#                                wrapped in SGR + reset
+
+# Map a stat mode (lstat-flavored) to the SGR foreground code per
+# ADR 0001. Returns 0 when the entry should render uncolored
+# (regular non-executable file). Symlinks return CYAN here —
+# broken-symlink detection requires a follow-stat against the
+# path, which only `compute_colors` can do.
+fn color_for_mode(mode): i64 {
+    var fmt = mode & S_IFMT;
+    if (fmt == S_IFDIR)  { return TTY_FG_BLUE; }
+    if (fmt == S_IFLNK)  { return TTY_FG_CYAN; }
+    if (fmt == S_IFIFO)  { return TTY_FG_YELLOW; }
+    if (fmt == S_IFSOCK) { return TTY_FG_BRIGHT_MAGENTA; }
+    if (fmt == S_IFBLK)  { return TTY_FG_BRIGHT_YELLOW; }
+    if (fmt == S_IFCHR)  { return TTY_FG_BRIGHT_YELLOW; }
+    if (fmt == S_IFREG) {
+        var x_bits = S_IXUSR | S_IXGRP | S_IXOTH;
+        if ((mode & x_bits) != 0) { return TTY_FG_GREEN; }
+        return 0;
+    }
+    return 0;
+}
+
+# Build a parallel vec<i64> of SGR codes for `entries` (Strs of
+# basenames, dir_str is the parent). Entries whose lstat fails
+# get color 0 (rendered uncolored). Symlinks pay an extra
+# `sys_stat` to detect broken targets — broken symlinks render
+# RED, live symlinks CYAN per ADR 0001.
+#
+# Caller responsibility: only invoke when want_color is true and
+# only pass the result to render fns that accept a non-zero
+# `colors` arg. Don't call this for the no-color path (it's the
+# expensive one).
+fn compute_colors(entries, dir_str): i64 {
+    var n = vec_len(entries);
+    var colors = vec_new();
+    var i = 0;
+    while (i < n) {
+        var name = vec_get(entries, i);
+        var full = path_join(dir_str, name);
+        var stat_buf = alloc(144);
+        var rc = lstat_path(str_data(full), stat_buf);
+        var c = 0;
+        if (rc >= 0) {
+            var mode = load32(stat_buf + STAT_MODE);
+            var fmt = mode & S_IFMT;
+            if (fmt == S_IFLNK) {
+                # Follow to detect broken-symlink. sys_stat (not
+                # lstat) walks the symlink chain; ENOENT / ELOOP
+                # mean the target is unreachable.
+                var probe[144];
+                var rc2 = sys_stat(str_data(full), &probe);
+                if (rc2 < 0) { c = TTY_FG_RED; }
+                else { c = TTY_FG_CYAN; }
+            } else {
+                c = color_for_mode(mode);
+            }
+        }
+        vec_push(colors, c);
+        i = i + 1;
+    }
+    return colors;
+}
+
+# Write `name` bytes to stdout, optionally wrapped in the SGR
+# pair `\x1b[<color>m ... \x1b[0m`. `color == 0` means write
+# plain — the caller doesn't need to branch. Three syscalls in
+# the colored path (set, payload, reset); one in the plain path.
+fn emit_colored(name, color): i64 {
+    if (color != 0) { tty_sgr(color); }
+    sys_write(STDOUT_FD, str_data(name), str_len(name));
+    if (color != 0) { tty_sgr_reset(); }
+    return 0;
+}

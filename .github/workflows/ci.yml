@@ -98,6 +98,39 @@ jobs:
           test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
           echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }
 
+      - name: Smoke — pipe emits no color escapes
+        # M4 contract: pipe → no SGR escapes (not just no column
+        # layout, no color either). A regression that leaks `\x1b[`
+        # into pipe output would be a CLAUDE.md hard-rule violation
+        # (color must never reach a script consumer).
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} > /tmp/plain
+          if grep -qP '\x1b\[' /tmp/plain; then
+            echo "pipe output contained ANSI escapes:"
+            cat -v /tmp/plain
+            exit 1
+          fi
+
+      - name: Smoke — TTY emits color, --no-color suppresses
+        # M4 contract: TTY-attached stdout shows escapes;
+        # `--no-color` suppresses them even under TTY. Uses
+        # `script -qec` to allocate a pty for the child.
+        run: |
+          set -e
+          script -qec "./build/${{ github.event.repository.name }}" /dev/null > /tmp/tty_colored
+          grep -qP '\x1b\[' /tmp/tty_colored || {
+            echo "TTY-attached output had no ANSI escapes (color not firing):"
+            cat -v /tmp/tty_colored
+            exit 1
+          }
+          script -qec "./build/${{ github.event.repository.name }} --no-color" /dev/null > /tmp/tty_plain
+          if grep -qP '\x1b\[' /tmp/tty_plain; then
+            echo "--no-color failed to suppress ANSI escapes:"
+            cat -v /tmp/tty_plain
+            exit 1
+          fi
+
       - name: Smoke — pipe is single column
         # M3 contract: stdout-not-a-TTY → one entry per line.
         # `wc -l` on the listing should equal the entry count;

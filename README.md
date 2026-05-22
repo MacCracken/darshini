@@ -45,7 +45,10 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-Pre-1.0 scaffold (0.1.0). No directory walking, no rendering yet.
+Pre-1.0. v0.2.0 — M1 shipped: directory walk + basic listing
+(`darshini` / `darshini <path>`, alphabetical, pipe-safe). No
+colors, icons, columns, git column or tree mode yet — those land
+M3–M7.
 
 ## Build
 

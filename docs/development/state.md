@@ -5,7 +5,8 @@
 
 ## Version
 
-**0.1.0** — scaffolded 2026-05-19 via `cyrius init darshini`. No releases yet.
+**0.2.0** — M1 (directory walk + basic listing) shipped 2026-05-22.
+Scaffolded as **0.1.0** on 2026-05-19 via `cyrius init darshini`.
 
 ## Toolchain
 
@@ -18,12 +19,14 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 
 ## Source
 
-- `src/main.cyr` — entry point; currently prints scaffold version line
+- `src/main.cyr` — entry point + dispatch (argv → classify → list/echo/err)
+- `src/walk.cyr` — `classify_path`, `check_dir_readable`, `list_dir`
+- `src/render.cyr` — `lower_byte`, `str_lt_ci`, `sort_entries`, `print_entries`
 
-M1+ onward fills:
+M2+ onward fills:
 
-- `src/walk.cyr` — directory walking + per-entry stat
-- `src/render.cyr` — line / column / tree formatting
+- `src/walk.cyr` grows per-entry stat (mode, size, mtime, owner) at M2
+- `src/render.cyr` grows long-format row formatting + column layout at M2 / M3
 - `src/color.cyr` — darshana ANSI routing (M4)
 - `src/icons.cyr` — icon-mapping loader (M5)
 - `src/tree.cyr` — recursive box-drawn rendering (M6)
@@ -32,11 +35,9 @@ M1+ onward fills:
 
 ## Features
 
-_None shipped yet. Targets through v1.0:_
-
 | Feature | Milestone | Status |
 |---------|-----------|--------|
-| Basic listing | M1 | pending |
+| Basic listing | M1 | **shipped** (v0.2.0) |
 | `-l` long format + `-h` human sizes | M2 | pending |
 | Multi-column auto-layout, `-1` | M3 | pending |
 | Color via darshana | M4 | pending |
@@ -47,7 +48,8 @@ _None shipped yet. Targets through v1.0:_
 
 ## Tests
 
-- `tests/darshini.tcyr` — primary suite (currently empty per cyrius init defaults)
+- `tests/darshini.tcyr` — 30 assertions across M1's pure-function
+  surface + the fs probes against the project tree
 - `tests/darshini.bcyr` — benchmark stub
 - `tests/darshini.fcyr` — fuzz stub
 
@@ -55,7 +57,9 @@ _None shipped yet. Targets through v1.0:_
 
 Direct (declared in `cyrius.cyml`):
 
-- stdlib — string, fmt, alloc, io, vec, str, syscalls, assert, bench
+- stdlib — string, fmt, alloc, io, vec, str, syscalls, args, fs,
+  assert, bench (`args` + `fs` added at M1 for argv access +
+  getdents64-backed dir_list)
 
 M4 adds `[deps.darshana]` for ANSI / color primitives.
 
@@ -66,4 +70,17 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next ship is M1 (directory walk + basic listing), targeting v0.2.0.
+See [`roadmap.md`](roadmap.md). Next ship is M2 (`-l` long format
++ `-h` human-readable sizes), targeting v0.3.0. Builds on M1's
+`classify_path` by stashing the full stat buf and surfacing
+permissions / size / mtime through `render.cyr`.
+
+## Known gotchas
+
+- **`var buf[N]` is N bytes, not N slots.** Cyrius 6.0.1 contradicts
+  the language guide here. `classify_path` sizes its stat buffer
+  as `var buf[144]` (= `STAT_BUFSZ`). Misreading the guide and
+  writing `var buf[18]` silently corrupts adjacent rodata
+  (caught at M1 when `"\n"` literal in the same TU started
+  emitting 0xed). Audit any new stat / read syscall buffer
+  sizing against actual byte width.

@@ -1,0 +1,55 @@
+# darshini — filesystem walking.
+#
+# Stats a user-supplied path, discriminates dir / non-dir / error,
+# and (for directories) reads entries via lib/fs.cyr's dir_list
+# wrapper around getdents64. Returns explicit negative-errno on
+# stat failure so the caller can render the right message
+# (ENOENT vs EACCES vs other).
+#
+# Pure walk — no sorting, no rendering. Composes with render.cyr.
+
+# Stat a null-terminated path and classify the result:
+#   1                — path exists, is a directory
+#   0                — path exists, is not a directory (regular,
+#                      symlink, fifo, socket, blockdev, chardev)
+#   negative errno   — stat failed (0 - ENOENT, 0 - EACCES, etc.)
+#
+# Buf is stack-local — sized in **bytes** (Cyrius 6.0.1 `var
+# buf[N]` is N bytes, not N i64 slots — the language guide is
+# wrong; see feedback memory). STAT_BUFSZ matches the x86_64
+# struct stat size in syscalls_x86_64_linux.cyr (144 bytes). M1
+# is Linux x86_64 only; the aarch64 layout differs and gets
+# handled in a follow-up via the Stat enum, which already
+# abstracts the st_mode offset arch-cleanly.
+fn classify_path(cpath): i64 {
+    var buf[144];
+    var rc = sys_stat(cpath, &buf);
+    if (rc < 0) { return rc; }
+    var mode = load32(&buf + STAT_MODE);
+    var fmt = mode & 0xF000;
+    if (fmt == 0x4000) { return 1; }
+    return 0;
+}
+
+# Probe whether a directory can be opened for reading. Returns 0
+# on success, negative errno on failure (typically -EACCES). The
+# fd is closed immediately — this is a discriminator, not a
+# resource handle. Pairs with classify_path: classify confirms
+# the path exists + is a dir, then this confirms readability
+# before list_dir runs. dir_list itself swallows open failures
+# (silently returns an empty vec), so without this check
+# permission-denied is indistinguishable from empty-dir.
+fn check_dir_readable(cpath): i64 {
+    var fd = sys_open(cpath, O_RDONLY, 0);
+    if (fd < 0) { return fd; }
+    sys_close(fd);
+    return 0;
+}
+
+# Read a directory's entries via getdents64 and return a vec<Str>.
+# Wraps lib/fs.cyr's dir_list — kept thin so the M3 column-layout
+# pass can grow the return shape without breaking M1 callers.
+# `.` and `..` are filtered by dir_list itself.
+fn list_dir(path: Str): i64 {
+    return dir_list(path);
+}

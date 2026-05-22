@@ -1,16 +1,72 @@
-# darshini — main entry point.
+# darshini — main entry point (M1: directory walk + basic listing).
 #
-# Scaffold stage: prints version and exits. Real form (directory walk
-# + per-entry stat + color/icon/git-status columns + tree mode +
-# mime-type recognition) lands once development begins. Renders
-# through darshana (TTY/ANSI/cursor) once that dep is wired.
+# Single-shot CLI: stat the path, dispatch to dir-list or
+# file-print, exit. Pipe-aware will arrive at M3 (column layout);
+# for the M1 default of one-entry-per-line, the output is already
+# safe under `darshini | cat`.
 #
 # Stdlib auto-included via cyrius.cyml [deps].stdlib.
+include "src/render.cyr"
+include "src/walk.cyr"
 
-fn main() {
-    alloc_init();
-    println("darshini v0.1.0 — scaffold");
+fn print_cstr_fd(fd, c): i64 {
+    sys_write(fd, c, strlen(c));
     return 0;
+}
+
+fn emit_error(prog_path, path_cstr, msg): i64 {
+    print_cstr_fd(STDERR_FD, prog_path);
+    print_cstr_fd(STDERR_FD, ": ");
+    print_cstr_fd(STDERR_FD, path_cstr);
+    print_cstr_fd(STDERR_FD, ": ");
+    print_cstr_fd(STDERR_FD, msg);
+    sys_write(STDERR_FD, "\n", 1);
+    return 0;
+}
+
+fn run(path_cstr): i64 {
+    var c = classify_path(path_cstr);
+    if (c == 0 - ENOENT) {
+        emit_error("darshini", path_cstr, "no such file or directory");
+        return 1;
+    }
+    if (c == 0 - EACCES) {
+        emit_error("darshini", path_cstr, "permission denied");
+        return 1;
+    }
+    if (c < 0) {
+        emit_error("darshini", path_cstr, "cannot stat");
+        return 1;
+    }
+    if (c == 1) {
+        var rd = check_dir_readable(path_cstr);
+        if (rd == 0 - EACCES) {
+            emit_error("darshini", path_cstr, "permission denied");
+            return 1;
+        }
+        if (rd < 0) {
+            emit_error("darshini", path_cstr, "cannot open directory");
+            return 1;
+        }
+        var entries = list_dir(str_from(path_cstr));
+        sort_entries(entries);
+        print_entries(entries);
+        return 0;
+    }
+    # Non-directory path: echo it (matches `ls FILE` semantics).
+    print_cstr_fd(STDOUT_FD, path_cstr);
+    sys_write(STDOUT_FD, "\n", 1);
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+    args_init();
+    var path_cstr = ".";
+    if (argc() >= 2) {
+        path_cstr = argv(1);
+    }
+    return run(path_cstr);
 }
 
 var r = main();

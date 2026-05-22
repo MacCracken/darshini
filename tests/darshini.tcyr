@@ -1,13 +1,107 @@
-# darshini test suite
-# Stdlib auto-included via cyrius.cyml
+# darshini test suite — M1 (directory walk + basic listing).
+# Stdlib auto-included via cyrius.cyml.
+#
+# Coverage:
+#   * lower_byte — ASCII case-fold edges
+#   * str_lt_ci — equal, prefix, case-insensitive ordering
+#   * sort_entries — alphabetize a vec<Str> in place
+#   * classify_path + check_dir_readable — repo-local fixtures
+#     (cwd is the project root under `cyrius test`)
+#
+# Live-fs work (mktemp + chmod + permission-denied dispatch) is
+# exercised end-to-end by `./build/darshini /tmp/...` against
+# ad-hoc fixtures and documented as M1 acceptance checks.
+# Re-introducing them as automated tests waits for a tmpdir
+# helper or a sys_mkdir wrapper at the test-harness level.
 
-fn main() {
+include "src/render.cyr"
+include "src/walk.cyr"
+
+fn make_str(c): i64 {
+    return str_clone(str_from(c));
+}
+
+fn vec_of3(a, b, c): i64 {
+    var v = vec_new();
+    vec_push(v, a);
+    vec_push(v, b);
+    vec_push(v, c);
+    return v;
+}
+
+fn main(): i64 {
     alloc_init();
-    test_group("smoke");
-    assert(1, "true is true");
-    assert_eq(1 + 1, 2, "math works");
+
+    test_group("lower_byte");
+    assert_eq(lower_byte(65), 97, "A -> a");
+    assert_eq(lower_byte(90), 122, "Z -> z");
+    assert_eq(lower_byte(97), 97, "a -> a");
+    assert_eq(lower_byte(48), 48, "0 unchanged");
+    assert_eq(lower_byte(64), 64, "@ unchanged (just below A)");
+    assert_eq(lower_byte(91), 91, "[ unchanged (just above Z)");
+
+    test_group("str_lt_ci");
+    var a = make_str("apple");
+    var b = make_str("banana");
+    var a_upper = make_str("APPLE");
+    var apricot = make_str("apricot");
+    var app = make_str("app");
+    assert_eq(str_lt_ci(a, b), 1, "apple < banana");
+    assert_eq(str_lt_ci(b, a), 0, "banana not < apple");
+    assert_eq(str_lt_ci(a, a), 0, "apple not < apple");
+    assert_eq(str_lt_ci(a, a_upper), 0, "apple not < APPLE (case-fold equal)");
+    assert_eq(str_lt_ci(a_upper, a), 0, "APPLE not < apple (case-fold equal)");
+    assert_eq(str_lt_ci(a, apricot), 1, "apple < apricot");
+    assert_eq(str_lt_ci(app, a), 1, "app < apple (prefix shorter)");
+    assert_eq(str_lt_ci(a, app), 0, "apple not < app (prefix shorter)");
+
+    test_group("sort_entries");
+    # In-place sort — already-sorted input stays put.
+    var sorted_in = vec_of3(make_str("alpha"), make_str("beta"), make_str("gamma"));
+    sort_entries(sorted_in);
+    assert_eq(str_eq(vec_get(sorted_in, 0), make_str("alpha")), 1, "sorted[0] = alpha");
+    assert_eq(str_eq(vec_get(sorted_in, 1), make_str("beta")), 1, "sorted[1] = beta");
+    assert_eq(str_eq(vec_get(sorted_in, 2), make_str("gamma")), 1, "sorted[2] = gamma");
+
+    # Reverse-sorted input flips.
+    var rev = vec_of3(make_str("gamma"), make_str("beta"), make_str("alpha"));
+    sort_entries(rev);
+    assert_eq(str_eq(vec_get(rev, 0), make_str("alpha")), 1, "reverse->[0] = alpha");
+    assert_eq(str_eq(vec_get(rev, 1), make_str("beta")), 1, "reverse->[1] = beta");
+    assert_eq(str_eq(vec_get(rev, 2), make_str("gamma")), 1, "reverse->[2] = gamma");
+
+    # Mixed-case input groups case-insensitively but preserves the
+    # original spelling at each position.
+    var mixed = vec_of3(make_str("Charlie"), make_str("alpha"), make_str("Beta"));
+    sort_entries(mixed);
+    assert_eq(str_eq(vec_get(mixed, 0), make_str("alpha")), 1, "mixed->[0] = alpha");
+    assert_eq(str_eq(vec_get(mixed, 1), make_str("Beta")), 1, "mixed->[1] = Beta (preserved case)");
+    assert_eq(str_eq(vec_get(mixed, 2), make_str("Charlie")), 1, "mixed->[2] = Charlie");
+
+    # Empty + single-element vecs are no-ops.
+    var empty = vec_new();
+    sort_entries(empty);
+    assert_eq(vec_len(empty), 0, "empty vec stays empty");
+
+    var single = vec_new();
+    vec_push(single, make_str("only"));
+    sort_entries(single);
+    assert_eq(str_eq(vec_get(single, 0), make_str("only")), 1, "single-element vec");
+
+    test_group("classify_path");
+    # Project root is cwd under `cyrius test`. README.md and src/
+    # both ship in the scaffold; /tmp shouldn't have a directory
+    # named after a uuid we just invented.
+    assert_eq(classify_path("README.md"), 0, "README.md is non-dir");
+    assert_eq(classify_path("src"), 1, "src/ is dir");
+    assert_eq(classify_path("./absolutely-nope-no-such-path-xyzzy"), 0 - ENOENT, "missing path -> -ENOENT");
+
+    test_group("check_dir_readable");
+    assert_eq(check_dir_readable("src"), 0, "src/ readable -> 0");
+    assert_eq(check_dir_readable("./absolutely-nope-no-such-path-xyzzy"), 0 - ENOENT, "missing -> -ENOENT");
+
     return assert_summary();
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+syscall(SYS_EXIT, exit_code);

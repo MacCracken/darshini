@@ -181,17 +181,24 @@ jobs:
             || { echo "pipe output had multi-field lines"; cat /tmp/pipe; exit 1; }
 
       - name: Smoke — -1 forces single column under TTY
-        # `script -qc CMD /dev/null` allocates a pty so the child
+        # `script -qec CMD /dev/null` allocates a pty so the child
         # sees a TTY on stdout. Without -1, the column layout would
         # kick in; with -1, single column wins. Locks in the
         # `-1` override semantics.
+        #
+        # `--no-color --no-icons` strips the M4/M5 decoration that
+        # would otherwise turn each line into a multi-field
+        # `<ESC>[34m<icon-bytes> name<ESC>[0m` shape (awk's
+        # default FS splits on whitespace and sees the inner
+        # space as a field boundary). The structural check here
+        # is "one entry per line"; decoration smokes test the
+        # decoration paths separately.
         run: |
           set -e
-          script -qec "./build/${{ github.event.repository.name }} -1" /dev/null > /tmp/single
-          # Drop the trailing CR `script` leaves on each line.
+          script -qec "./build/${{ github.event.repository.name }} -1 --no-color --no-icons" /dev/null > /tmp/single
           tr -d '\r' < /tmp/single > /tmp/single.clean
           awk 'NF != 1 { bad=1 } END { exit bad+0 }' /tmp/single.clean \
-            || { echo "-1 produced multi-field lines under TTY"; cat /tmp/single.clean; exit 1; }
+            || { echo "-1 produced multi-field lines under TTY (decoration stripped):"; cat /tmp/single.clean; exit 1; }
           lines=$(wc -l < /tmp/single.clean)
           test "$lines" -gt 5 || { echo "expected >5 entries under -1, got $lines"; exit 1; }
 

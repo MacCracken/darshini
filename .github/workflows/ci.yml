@@ -97,3 +97,28 @@ jobs:
           set -e
           test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
           echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }
+
+      - name: Smoke — long format -lh shape
+        # M2 acceptance: `darshini -lh` produces aligned 4-column
+        # rows (perms / size / mtime / name). Greps for a row
+        # matching the exact column structure on a known file
+        # (CHANGELOG.md) to lock in the perm-string, the human-
+        # size suffix, and the UTC mtime YYYY-MM-DD HH:MM shape.
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} -lh > /tmp/long
+          # Header row sanity: perms are 10 chars starting with -
+          # or d/l/p/s/b/c; size has a digit; mtime matches the
+          # YYYY-MM-DD HH:MM pattern; then a filename.
+          grep -E '^[-dlpsbc][rwxstST-]{9} +[0-9]+(\.[0-9][KMGT])? [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} CHANGELOG\.md$' /tmp/long || {
+            echo "no aligned CHANGELOG.md row matched in -lh output:"
+            cat /tmp/long
+            exit 1
+          }
+          # Unknown-flag rejection
+          set +e
+          out=$(./build/${{ github.event.repository.name }} -X 2>&1)
+          rc=$?
+          set -e
+          test "$rc" -eq 1 || { echo "expected exit 1 on unknown flag, got $rc"; exit 1; }
+          echo "$out" | grep -q "unknown flag" || { echo "unknown-flag message not surfaced; got: $out"; exit 1; }

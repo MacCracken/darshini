@@ -1,0 +1,165 @@
+# darshini — long-format orchestration (the `-l` / `-lh` path).
+#
+# Single-shot per directory: lstat every entry, render the four
+# columns (permissions / size / mtime / name) into aligned rows,
+# emit. Multi-pass over the entry list because the size column
+# is variable-width — we need to know the maximum width before
+# we can right-align.
+#
+# Entries that fail lstat (broken symlinks, races) keep their
+# slot in the listing with `?` placeholders so the alignment
+# stays intact and the user sees the missing-row at a glance.
+
+# Per-row state collected during the first pass and consumed by
+# the second. Heap-alloced 16-byte struct: { stat_buf@0, size_buf@8 }.
+# size_buf is itself a small heap buffer (32 bytes max for the
+# decimal-or-human-formatted size string + length prefix).
+#   stat_buf @ 0   — pointer to a 144-byte stat buffer (or 0 if
+#                    lstat failed for this entry; len in size_buf
+#                    will be the literal "?" placeholder).
+#   size_buf @ 8   — pointer to {size_data@0, size_len@8}, where
+#                    size_data is N ASCII bytes (e.g. "4.2K", "1024").
+
+fn _long_row_new(stat_buf, size_data, size_len): i64 {
+    var row = alloc(16);
+    var sz = alloc(16);
+    store64(sz, size_data);
+    store64(sz + 8, size_len);
+    store64(row, stat_buf);
+    store64(row + 8, sz);
+    return row;
+}
+
+fn _long_row_stat(row): i64 { return load64(row); }
+fn _long_row_size_data(row): i64 { return load64(load64(row + 8)); }
+fn _long_row_size_len(row): i64 { return load64(load64(row + 8) + 8); }
+
+# Write `n` spaces to stdout. Used to right-align the size column.
+fn _emit_spaces(n): i64 {
+    var i = 0;
+    while (i < n) {
+        sys_write(STDOUT_FD, " ", 1);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Render the long-format listing for the entries inside `dir_str`.
+# `want_human` controls size formatting (decimal vs IEC X.YK/M/G/T).
+# Both passes over the entries: pass 1 collects per-row state +
+# tracks the max size-string width; pass 2 emits aligned rows.
+#
+# Per CLAUDE.md: lstat (not stat) is used so symlinks render as
+# `l...` with their own length rather than the target's. M2
+# scope: no symlink-target rendering yet — the `-> target` tail
+# lands when the symlink-display ADR opens for M6 / M7 territory.
+fn render_long(entries, dir_str, want_human): i64 {
+    var n = vec_len(entries);
+    var rows = vec_new();
+    var max_size_w = 0;
+    var i = 0;
+    while (i < n) {
+        var name = vec_get(entries, i);
+        var full = path_join(dir_str, name);
+        var stat_buf = alloc(144);
+        var rc = lstat_path(str_data(full), stat_buf);
+        var size_buf = alloc(32);
+        var size_len = 0;
+        if (rc < 0) {
+            # Stat failed mid-listing (race or broken symlink with
+            # path-resolution quirk). Mark the row with a `?` and
+            # zero the stat-buf pointer so the emit pass knows to
+            # substitute placeholders for perms and mtime too.
+            store8(size_buf, 63);              # '?'
+            size_len = 1;
+            stat_buf = 0;
+        } else {
+            var size = load64(stat_buf + STAT_SIZE);
+            if (want_human == 1) {
+                size_len = format_size_human(size, size_buf);
+            } else {
+                size_len = format_size_decimal(size, size_buf);
+            }
+        }
+        if (size_len > max_size_w) { max_size_w = size_len; }
+        vec_push(rows, _long_row_new(stat_buf, size_buf, size_len));
+        i = i + 1;
+    }
+    # Emit pass.
+    var perm_buf = alloc(10);
+    var mtime_buf = alloc(16);
+    i = 0;
+    while (i < n) {
+        var row = vec_get(rows, i);
+        var sb = _long_row_stat(row);
+        # perms (or `??????????` if stat failed)
+        if (sb == 0) {
+            var k = 0;
+            while (k < 10) {
+                store8(perm_buf + k, 63);
+                k = k + 1;
+            }
+        } else {
+            format_perms(load32(sb + STAT_MODE), perm_buf);
+        }
+        sys_write(STDOUT_FD, perm_buf, 10);
+        sys_write(STDOUT_FD, " ", 1);
+        # size — right-aligned within max_size_w
+        _emit_spaces(max_size_w - _long_row_size_len(row));
+        sys_write(STDOUT_FD, _long_row_size_data(row), _long_row_size_len(row));
+        sys_write(STDOUT_FD, " ", 1);
+        # mtime (or `????-??-?? ??:??` if stat failed)
+        if (sb == 0) {
+            var k2 = 0;
+            while (k2 < 16) {
+                var ch = 63;
+                if (k2 == 4) { ch = 45; }     # '-'
+                if (k2 == 7) { ch = 45; }
+                if (k2 == 10) { ch = 32; }    # ' '
+                if (k2 == 13) { ch = 58; }    # ':'
+                store8(mtime_buf + k2, ch);
+                k2 = k2 + 1;
+            }
+        } else {
+            format_mtime(load64(sb + STAT_MTIME), mtime_buf);
+        }
+        sys_write(STDOUT_FD, mtime_buf, 16);
+        sys_write(STDOUT_FD, " ", 1);
+        # name
+        var name = vec_get(entries, i);
+        sys_write(STDOUT_FD, str_data(name), str_len(name));
+        sys_write(STDOUT_FD, "\n", 1);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Render a single non-directory path as one long-format row.
+# Reached when `-l` is paired with a path that isn't a directory
+# (regular file, symlink, fifo, etc.) — matches `ls -l <file>`.
+# Uses lstat so a symlink renders as itself rather than its
+# target's stat. The path bytes are emitted verbatim (no
+# basename trimming) for parity with ls.
+fn render_long_one(path_cstr, want_human): i64 {
+    var stat_buf = alloc(144);
+    var rc = lstat_path(path_cstr, stat_buf);
+    if (rc < 0) { return 1; }
+    var perm_buf = alloc(10);
+    format_perms(load32(stat_buf + STAT_MODE), perm_buf);
+    var size_buf = alloc(32);
+    var size = load64(stat_buf + STAT_SIZE);
+    var size_len = 0;
+    if (want_human == 1) { size_len = format_size_human(size, size_buf); }
+    else { size_len = format_size_decimal(size, size_buf); }
+    var mtime_buf = alloc(16);
+    format_mtime(load64(stat_buf + STAT_MTIME), mtime_buf);
+    sys_write(STDOUT_FD, perm_buf, 10);
+    sys_write(STDOUT_FD, " ", 1);
+    sys_write(STDOUT_FD, size_buf, size_len);
+    sys_write(STDOUT_FD, " ", 1);
+    sys_write(STDOUT_FD, mtime_buf, 16);
+    sys_write(STDOUT_FD, " ", 1);
+    sys_write(STDOUT_FD, path_cstr, strlen(path_cstr));
+    sys_write(STDOUT_FD, "\n", 1);
+    return 0;
+}

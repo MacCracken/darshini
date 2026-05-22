@@ -1,21 +1,21 @@
-# darshini test suite — M1 (directory walk + basic listing).
+# darshini test suite — M1 + M2.
 # Stdlib auto-included via cyrius.cyml.
 #
-# Coverage:
-#   * lower_byte — ASCII case-fold edges
-#   * str_lt_ci — equal, prefix, case-insensitive ordering
-#   * sort_entries — alphabetize a vec<Str> in place
-#   * classify_path + check_dir_readable — repo-local fixtures
-#     (cwd is the project root under `cyrius test`)
+# M1 coverage (carried forward from v0.2.0):
+#   * lower_byte, str_lt_ci, sort_entries
+#   * classify_path, check_dir_readable
 #
-# Live-fs work (mktemp + chmod + permission-denied dispatch) is
-# exercised end-to-end by `./build/darshini /tmp/...` against
-# ad-hoc fixtures and documented as M1 acceptance checks.
-# Re-introducing them as automated tests waits for a tmpdir
-# helper or a sys_mkdir wrapper at the test-harness level.
+# M2 coverage (new at v0.3.0):
+#   * format_perms — every file-type char, all rwx triples,
+#     setuid/setgid/sticky upper+lower variants
+#   * format_size_decimal — 0, single-digit, multi-digit
+#   * format_size_human — bucket boundaries (1023/1024,
+#     1MB-1/1MB, etc.) + sub-1K decimal pass-through
+#   * format_mtime — known epoch values → known UTC strings
 
 include "src/render.cyr"
 include "src/walk.cyr"
+include "src/long.cyr"
 
 fn make_str(c): i64 {
     return str_clone(str_from(c));
@@ -27,6 +27,13 @@ fn vec_of3(a, b, c): i64 {
     vec_push(v, b);
     vec_push(v, c);
     return v;
+}
+
+# Compare exactly N bytes of buf against the cstr `expected`.
+# Returns 1 on match, 0 otherwise. memeq from lib/string.cyr.
+fn buf_eq_cstr(buf, n, expected): i64 {
+    if (n != strlen(expected)) { return 0; }
+    return memeq(buf, expected, n);
 }
 
 fn main(): i64 {
@@ -56,29 +63,24 @@ fn main(): i64 {
     assert_eq(str_lt_ci(a, app), 0, "apple not < app (prefix shorter)");
 
     test_group("sort_entries");
-    # In-place sort — already-sorted input stays put.
     var sorted_in = vec_of3(make_str("alpha"), make_str("beta"), make_str("gamma"));
     sort_entries(sorted_in);
     assert_eq(str_eq(vec_get(sorted_in, 0), make_str("alpha")), 1, "sorted[0] = alpha");
     assert_eq(str_eq(vec_get(sorted_in, 1), make_str("beta")), 1, "sorted[1] = beta");
     assert_eq(str_eq(vec_get(sorted_in, 2), make_str("gamma")), 1, "sorted[2] = gamma");
 
-    # Reverse-sorted input flips.
     var rev = vec_of3(make_str("gamma"), make_str("beta"), make_str("alpha"));
     sort_entries(rev);
     assert_eq(str_eq(vec_get(rev, 0), make_str("alpha")), 1, "reverse->[0] = alpha");
     assert_eq(str_eq(vec_get(rev, 1), make_str("beta")), 1, "reverse->[1] = beta");
     assert_eq(str_eq(vec_get(rev, 2), make_str("gamma")), 1, "reverse->[2] = gamma");
 
-    # Mixed-case input groups case-insensitively but preserves the
-    # original spelling at each position.
     var mixed = vec_of3(make_str("Charlie"), make_str("alpha"), make_str("Beta"));
     sort_entries(mixed);
     assert_eq(str_eq(vec_get(mixed, 0), make_str("alpha")), 1, "mixed->[0] = alpha");
     assert_eq(str_eq(vec_get(mixed, 1), make_str("Beta")), 1, "mixed->[1] = Beta (preserved case)");
     assert_eq(str_eq(vec_get(mixed, 2), make_str("Charlie")), 1, "mixed->[2] = Charlie");
 
-    # Empty + single-element vecs are no-ops.
     var empty = vec_new();
     sort_entries(empty);
     assert_eq(vec_len(empty), 0, "empty vec stays empty");
@@ -89,9 +91,6 @@ fn main(): i64 {
     assert_eq(str_eq(vec_get(single, 0), make_str("only")), 1, "single-element vec");
 
     test_group("classify_path");
-    # Project root is cwd under `cyrius test`. README.md and src/
-    # both ship in the scaffold; /tmp shouldn't have a directory
-    # named after a uuid we just invented.
     assert_eq(classify_path("README.md"), 0, "README.md is non-dir");
     assert_eq(classify_path("src"), 1, "src/ is dir");
     assert_eq(classify_path("./absolutely-nope-no-such-path-xyzzy"), 0 - ENOENT, "missing path -> -ENOENT");
@@ -99,6 +98,108 @@ fn main(): i64 {
     test_group("check_dir_readable");
     assert_eq(check_dir_readable("src"), 0, "src/ readable -> 0");
     assert_eq(check_dir_readable("./absolutely-nope-no-such-path-xyzzy"), 0 - ENOENT, "missing -> -ENOENT");
+
+    # ============================================================
+    # M2 — long-format column formatters
+    # ============================================================
+
+    test_group("format_perms");
+    var pb = alloc(10);
+    # Regular file, rw-r--r-- (0o100644 = 0x81A4)
+    format_perms(0x81A4, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "-rw-r--r--"), 1, "regular 0644 -> -rw-r--r--");
+    # Directory, rwxr-xr-x (0o040755 = 0x41ED)
+    format_perms(0x41ED, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "drwxr-xr-x"), 1, "dir 0755 -> drwxr-xr-x");
+    # Symlink, lrwxrwxrwx (0o120777 = 0xA1FF) — symlinks always 0777 on linux
+    format_perms(0xA1FF, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "lrwxrwxrwx"), 1, "symlink -> lrwxrwxrwx");
+    # FIFO, prw-r--r-- (0o010644 = 0x11A4)
+    format_perms(0x11A4, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "prw-r--r--"), 1, "fifo");
+    # Socket
+    format_perms(0xC1A4, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "srw-r--r--"), 1, "socket");
+    # Block dev
+    format_perms(0x61A4, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "brw-r--r--"), 1, "block dev");
+    # Char dev
+    format_perms(0x21A4, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "crw-r--r--"), 1, "char dev");
+    # All-empty perms (rare but valid)
+    format_perms(0x8000, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "----------"), 1, "regular 0000");
+    # All bits set + executable (0o100755 = 0x81ED)
+    format_perms(0x81ED, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "-rwxr-xr-x"), 1, "regular 0755");
+    # setuid + x  (0o104755 = 0x89ED) -> rws (lowercase)
+    format_perms(0x89ED, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "-rwsr-xr-x"), 1, "setuid + x -> s");
+    # setuid no x (0o104644 = 0x89A4) -> rwS (uppercase)
+    format_perms(0x89A4, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "-rwSr--r--"), 1, "setuid no x -> S");
+    # setgid + x (0o102755 = 0x85ED) -> rws on group
+    format_perms(0x85ED, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "-rwxr-sr-x"), 1, "setgid + x -> s");
+    # sticky + x on other (0o041777 = 0x43FF) -> rwt (e.g. /tmp)
+    format_perms(0x43FF, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "drwxrwxrwt"), 1, "sticky + x -> t (/tmp shape)");
+    # sticky no x on other (0o041776 = 0x43FE) -> rwT
+    format_perms(0x43FE, pb);
+    assert_eq(buf_eq_cstr(pb, 10, "drwxrwxrwT"), 1, "sticky no x -> T");
+
+    test_group("format_size_decimal");
+    var sb = alloc(32);
+    assert_eq(format_size_decimal(0, sb), 1, "0 -> 1 byte");
+    assert_eq(buf_eq_cstr(sb, 1, "0"), 1, "0 -> '0'");
+    assert_eq(format_size_decimal(7, sb), 1, "7 -> 1 byte");
+    assert_eq(buf_eq_cstr(sb, 1, "7"), 1, "7 -> '7'");
+    assert_eq(format_size_decimal(42, sb), 2, "42 -> 2 bytes");
+    assert_eq(buf_eq_cstr(sb, 2, "42"), 1, "42 -> '42'");
+    assert_eq(format_size_decimal(1024, sb), 4, "1024 -> 4 bytes");
+    assert_eq(buf_eq_cstr(sb, 4, "1024"), 1, "1024 -> '1024'");
+    assert_eq(format_size_decimal(12345678, sb), 8, "12345678 -> 8 bytes");
+    assert_eq(buf_eq_cstr(sb, 8, "12345678"), 1, "12345678 -> '12345678'");
+
+    test_group("format_size_human");
+    # < 1024 → decimal pass-through
+    assert_eq(format_size_human(0, sb), 1, "0 human -> 1 byte");
+    assert_eq(buf_eq_cstr(sb, 1, "0"), 1, "0 -> '0'");
+    assert_eq(format_size_human(1023, sb), 4, "1023 -> 4 bytes");
+    assert_eq(buf_eq_cstr(sb, 4, "1023"), 1, "1023 -> '1023'");
+    # 1024 → 1.0K
+    assert_eq(format_size_human(1024, sb), 4, "1024 -> 4 bytes");
+    assert_eq(buf_eq_cstr(sb, 4, "1.0K"), 1, "1024 -> '1.0K'");
+    # 1843 → 1.7K (1843/1024 ≈ 1.8 — int truncation gives 1.7)
+    assert_eq(format_size_human(1843, sb), 4, "1843 -> '1.7K' shape");
+    assert_eq(buf_eq_cstr(sb, 4, "1.7K"), 1, "1843 -> '1.7K'");
+    # 1048575 (1MB-1) → 1023.9K (7 chars: 4 digits + . + 1 digit + K)
+    assert_eq(format_size_human(1048575, sb), 7, "1MB-1 -> 7 bytes");
+    assert_eq(buf_eq_cstr(sb, 7, "1023.9K"), 1, "1MB-1 -> '1023.9K'");
+    # 1048576 → 1.0M
+    assert_eq(format_size_human(1048576, sb), 4, "1MB -> 4 bytes");
+    assert_eq(buf_eq_cstr(sb, 4, "1.0M"), 1, "1MB -> '1.0M'");
+    # 1073741824 → 1.0G
+    assert_eq(format_size_human(1073741824, sb), 4, "1GB -> 4 bytes");
+    assert_eq(buf_eq_cstr(sb, 4, "1.0G"), 1, "1GB -> '1.0G'");
+    # 1099511627776 → 1.0T
+    assert_eq(format_size_human(1099511627776, sb), 4, "1TB -> 4 bytes");
+    assert_eq(buf_eq_cstr(sb, 4, "1.0T"), 1, "1TB -> '1.0T'");
+
+    test_group("format_mtime");
+    var mb = alloc(16);
+    # Epoch 0 — Unix birth
+    format_mtime(0, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "1970-01-01 00:00"), 1, "epoch 0 -> 1970-01-01 00:00");
+    # Epoch 1234567890 — '09 02 13 23:31:30 UTC (drop seconds)
+    format_mtime(1234567890, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "2009-02-13 23:31"), 1, "1234567890 -> 2009-02-13 23:31");
+    # Epoch 1700000000 — 2023-11-14 22:13:20 UTC
+    format_mtime(1700000000, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "2023-11-14 22:13"), 1, "1700000000 -> 2023-11-14 22:13");
+    # Leap-year boundary: 2000-02-29 00:00:00 UTC = 951782400
+    format_mtime(951782400, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "2000-02-29 00:00"), 1, "leap day 2000 -> 2000-02-29 00:00");
 
     return assert_summary();
 }

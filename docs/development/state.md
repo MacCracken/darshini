@@ -5,8 +5,10 @@
 
 ## Version
 
-**0.2.0** — M1 (directory walk + basic listing) shipped 2026-05-22.
-Scaffolded as **0.1.0** on 2026-05-19 via `cyrius init darshini`.
+**0.3.0** — M2 (`-l` long format + `-h` human-readable sizes)
+shipped 2026-05-22. M1 (basic listing) shipped earlier same day
+as v0.2.0. Scaffolded as **0.1.0** on 2026-05-19 via
+`cyrius init darshini`.
 
 ## Toolchain
 
@@ -19,14 +21,19 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 
 ## Source
 
-- `src/main.cyr` — entry point + dispatch (argv → classify → list/echo/err)
-- `src/walk.cyr` — `classify_path`, `check_dir_readable`, `list_dir`
-- `src/render.cyr` — `lower_byte`, `str_lt_ci`, `sort_entries`, `print_entries`
+- `src/main.cyr` — entry point + argv flag parser + dispatch
+- `src/walk.cyr` — `classify_path`, `check_dir_readable`, `list_dir`,
+  `lstat_path`, `ModeBit` enum (POSIX S_IF*/S_I* constants)
+- `src/render.cyr` — `lower_byte`, `str_lt_ci`, `sort_entries`,
+  `print_entries`, `format_perms`, `format_size_decimal`,
+  `format_size_human`, `format_mtime`
+- `src/long.cyr` — long-format orchestrator (two-pass:
+  collect-stat-then-emit-aligned)
 
-M2+ onward fills:
+M3+ onward fills:
 
-- `src/walk.cyr` grows per-entry stat (mode, size, mtime, owner) at M2
-- `src/render.cyr` grows long-format row formatting + column layout at M2 / M3
+- `src/render.cyr` grows multi-column auto-layout + TTY width
+  probe at M3
 - `src/color.cyr` — darshana ANSI routing (M4)
 - `src/icons.cyr` — icon-mapping loader (M5)
 - `src/tree.cyr` — recursive box-drawn rendering (M6)
@@ -38,7 +45,7 @@ M2+ onward fills:
 | Feature | Milestone | Status |
 |---------|-----------|--------|
 | Basic listing | M1 | **shipped** (v0.2.0) |
-| `-l` long format + `-h` human sizes | M2 | pending |
+| `-l` long format + `-h` human sizes | M2 | **shipped** (v0.3.0) |
 | Multi-column auto-layout, `-1` | M3 | pending |
 | Color via darshana | M4 | pending |
 | Icons via CYML mapping | M5 | pending |
@@ -48,8 +55,9 @@ M2+ onward fills:
 
 ## Tests
 
-- `tests/darshini.tcyr` — 30 assertions across M1's pure-function
-  surface + the fs probes against the project tree
+- `tests/darshini.tcyr` — 74 assertions across M1's pure-function
+  surface + the fs probes against the project tree + M2 column
+  formatters (perms / size / mtime)
 - `tests/darshini.bcyr` — benchmark stub
 - `tests/darshini.fcyr` — fuzz stub
 
@@ -58,8 +66,9 @@ M2+ onward fills:
 Direct (declared in `cyrius.cyml`):
 
 - stdlib — string, fmt, alloc, io, vec, str, syscalls, args, fs,
-  assert, bench (`args` + `fs` added at M1 for argv access +
-  getdents64-backed dir_list)
+  chrono, assert, bench. `args` + `fs` added at M1 (argv access
+  + getdents64-backed dir_list); `chrono` added at M2 for
+  `epoch_to_date` + the 2-digit / 4-digit formatting helpers.
 
 M4 adds `[deps.darshana]` for ANSI / color primitives.
 
@@ -70,10 +79,12 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next ship is M2 (`-l` long format
-+ `-h` human-readable sizes), targeting v0.3.0. Builds on M1's
-`classify_path` by stashing the full stat buf and surfacing
-permissions / size / mtime through `render.cyr`.
+See [`roadmap.md`](roadmap.md). Next ship is M3 (multi-column
+auto-layout + `-1` force-single-column), targeting v0.4.0.
+TTY-width detection via `ioctl(TIOCGWINSZ)` with a 80-col
+fallback. Pipe-aware single-column under non-TTY stdout becomes
+explicit at this milestone (until M3 it's incidental — print
+order is one per line by default).
 
 ## Known gotchas
 
@@ -84,3 +95,12 @@ permissions / size / mtime through `render.cyr`.
   (caught at M1 when `"\n"` literal in the same TU started
   emitting 0xed). Audit any new stat / read syscall buffer
   sizing against actual byte width.
+- **mtime is UTC, not local time** under `-l`. The v1.0 contract
+  picks locale-free + stable over matching `ls -l`'s local-time
+  default; users comparing the two side-by-side will see their
+  UTC-offset as a discrepancy. Documented in the M2 CHANGELOG.
+- **lstat is Linux x86_64 only.** `walk.cyr`'s `lstat_path` uses
+  bare syscall 6; aarch64 needs the at-family detour through
+  `newfstatat`. Cross-compile to aarch64 will need the same
+  arch-dispatch pattern that the stdlib's syscalls peers already
+  use — follow-up before any non-x86 release.

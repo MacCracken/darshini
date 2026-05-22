@@ -4,6 +4,50 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] — M2: `-l` long format + `-h` human-readable sizes
+
+### Added
+- `-l` / `--long`: long-format rows — `permissions size mtime name`,
+  size right-aligned within the listing's max-size width.
+- `-h` / `--human`: IEC-style 1024-based size buckets — `X.YK`,
+  `X.YM`, `X.YG`, `X.YT`. Sub-1K stays plain decimal. Modifier
+  only; without `-l` it's a no-op (no size column shown anyway,
+  matching `ls -h` semantics).
+- Bundled short flags: `-lh` and `-hl` both work.
+- `-l <file>`: under `-l`, a non-directory path renders as a
+  single long row (matching `ls -l <file>` shape) instead of
+  echoing the bare path.
+- `src/long.cyr` — long-format orchestrator. Two-pass: collect
+  per-row stat + size-string, then emit with size column
+  right-aligned to the listing-wide max. Uses lstat (not stat)
+  so symlinks render as themselves rather than their targets.
+- `src/render.cyr` — adds `format_perms` (10-byte ls -l shape,
+  including setuid/setgid/sticky upper+lower variants),
+  `format_size_decimal`, `format_size_human` (decimal +
+  IEC 1024-based), `format_mtime` (`YYYY-MM-DD HH:MM`, UTC).
+- `src/walk.cyr` — adds `lstat_path` (bare syscall 6, no follow)
+  and the `ModeBit` enum (POSIX `S_IF*` / `S_I*` constants).
+- `cyrius.cyml` [deps].stdlib gains `chrono` (auto-included).
+- Tests: 44 new assertions across `format_perms`,
+  `format_size_decimal`, `format_size_human`, `format_mtime`.
+  Total now 74/74.
+
+### Notes
+- Mtime is **UTC**, not local — matches the v1.0 contract
+  ("locale-free, stable"). `ls -l` shows local time so darshini's
+  output may differ by your tz offset. Documenting; not changing.
+- Setuid / setgid / sticky bits render with the standard
+  upper/lower convention: `s`/`S` (setuid + x / no x), same
+  for setgid, `t`/`T` for sticky.
+- Stat-failed rows (broken symlinks etc.) render with `?`
+  placeholders so column alignment survives.
+- M2 is Linux x86_64 only — `lstat_path` uses syscall 6 directly
+  (no portable wrapper in stdlib yet). aarch64 dispatch needs an
+  at-family detour through `newfstatat` — follow-up.
+- M2 doesn't yet render symlink targets (`-> target` tail). That
+  pairs with the symlink-display ADR work planned alongside
+  M6 / M7.
+
 ## [0.2.0] — M1: directory walk + basic listing
 
 ### Added

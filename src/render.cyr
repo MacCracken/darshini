@@ -1,13 +1,16 @@
 # darshini — render helpers.
 #
 # Display-side primitives: case-insensitive ordering, in-place
-# sort over a vec<Str>, one-per-line emit. Pure functions — no
-# filesystem, no I/O dispatch (that belongs in walk.cyr / main.cyr).
+# sort over a vec<Str>, one-per-line emit, and the M2 long-format
+# column formatters (permissions / size / mtime). Pure functions
+# — no filesystem, no I/O dispatch (those live in walk.cyr /
+# long.cyr / main.cyr).
 #
-# At M1 the output is plain text, one entry per line. M3 adds
-# multi-column auto-layout; M4 routes the bytes through darshana
-# for color. The comparator stays the canonical ordering function
-# across all those modes.
+# At M1 the output was plain text, one entry per line. M2 adds
+# the formatters for the `-l` long format; M3 will add multi-
+# column auto-layout; M4 routes the bytes through darshana for
+# color. The case-insensitive comparator stays the canonical
+# ordering function across all those modes.
 
 # Return ASCII lower-case for a byte, pass-through for everything
 # else. Locale-free by design — the v1.0 contract is byte-stable
@@ -89,8 +92,148 @@ fn print_entries(entries): i64 {
     while (i < vec_len(entries)) {
         var s = vec_get(entries, i);
         sys_write(STDOUT_FD, str_data(s), str_len(s));
-        sys_write(STDOUT_FD, "\x0a", 1);
+        sys_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }
     return 0;
+}
+
+# ================================================================
+# M2 long-format formatters.
+# ================================================================
+# Each writes ASCII bytes to a caller-provided buffer and returns
+# the number of bytes written. Variable-width outputs (sizes) use
+# the return value for alignment; fixed-width outputs (perms,
+# mtime) ignore it but the contract is the same.
+
+# Render the 10-char permission string into buf, ls -l shape:
+# `drwxr-xr-x`. Always writes exactly 10 bytes. Returns 10.
+# Setuid (s/S), setgid (s/S), and sticky (t/T) bits land in the
+# usual ls positions — uppercase when the underlying execute bit
+# is clear (suid-without-x is unusual but valid; ls renders it
+# distinctly).
+fn format_perms(mode, buf): i64 {
+    var fmt = mode & S_IFMT;
+    var type_ch = 45;          # '-'
+    if (fmt == S_IFDIR)  { type_ch = 100; }   # 'd'
+    if (fmt == S_IFLNK)  { type_ch = 108; }   # 'l'
+    if (fmt == S_IFIFO)  { type_ch = 112; }   # 'p'
+    if (fmt == S_IFSOCK) { type_ch = 115; }   # 's'
+    if (fmt == S_IFBLK)  { type_ch = 98;  }   # 'b'
+    if (fmt == S_IFCHR)  { type_ch = 99;  }   # 'c'
+    store8(buf, type_ch);
+    # User triple.
+    var u_r = 45;  if ((mode & S_IRUSR) != 0) { u_r = 114; }  # 'r'
+    var u_w = 45;  if ((mode & S_IWUSR) != 0) { u_w = 119; }  # 'w'
+    var u_x = 45;
+    if ((mode & S_IXUSR) != 0) { u_x = 120; }                 # 'x'
+    if ((mode & S_ISUID) != 0) {
+        u_x = 83;                                              # 'S' (no exec)
+        if ((mode & S_IXUSR) != 0) { u_x = 115; }              # 's'
+    }
+    store8(buf + 1, u_r);
+    store8(buf + 2, u_w);
+    store8(buf + 3, u_x);
+    # Group triple.
+    var g_r = 45;  if ((mode & S_IRGRP) != 0) { g_r = 114; }
+    var g_w = 45;  if ((mode & S_IWGRP) != 0) { g_w = 119; }
+    var g_x = 45;
+    if ((mode & S_IXGRP) != 0) { g_x = 120; }
+    if ((mode & S_ISGID) != 0) {
+        g_x = 83;
+        if ((mode & S_IXGRP) != 0) { g_x = 115; }
+    }
+    store8(buf + 4, g_r);
+    store8(buf + 5, g_w);
+    store8(buf + 6, g_x);
+    # Other triple.
+    var o_r = 45;  if ((mode & S_IROTH) != 0) { o_r = 114; }
+    var o_w = 45;  if ((mode & S_IWOTH) != 0) { o_w = 119; }
+    var o_x = 45;
+    if ((mode & S_IXOTH) != 0) { o_x = 120; }
+    if ((mode & S_ISVTX) != 0) {
+        o_x = 84;                                              # 'T' (no exec)
+        if ((mode & S_IXOTH) != 0) { o_x = 116; }              # 't'
+    }
+    store8(buf + 7, o_r);
+    store8(buf + 8, o_w);
+    store8(buf + 9, o_x);
+    return 10;
+}
+
+# Render `size` as a plain decimal byte count. Writes the digits
+# left-to-right starting at buf; returns the count. Handles 0
+# explicitly. Negative sizes shouldn't occur on stat output but
+# are clamped to 0 for safety.
+fn format_size_decimal(size, buf): i64 {
+    if (size < 0) { size = 0; }
+    if (size == 0) {
+        store8(buf, 48);
+        return 1;
+    }
+    var tmp[24];
+    var ti = 0;
+    var n = size;
+    while (n > 0) {
+        store8(&tmp + ti, 48 + n % 10);
+        n = n / 10;
+        ti = ti + 1;
+    }
+    var i = 0;
+    while (i < ti) {
+        store8(buf + i, load8(&tmp + ti - 1 - i));
+        i = i + 1;
+    }
+    return ti;
+}
+
+# Render `size` as a human-readable string in IEC-style 1024-based
+# buckets: < 1K stays decimal; otherwise X.YK / X.YM / X.YG / X.YT.
+# Matches `ls -h` / `eza -h` defaults. Returns bytes written.
+# One decimal place when size >= 1024; sub-1K is integer with no
+# suffix (so a `1` byte file shows as `1`, matching ls).
+fn format_size_human(size, buf): i64 {
+    if (size < 0) { size = 0; }
+    if (size < 1024) { return format_size_decimal(size, buf); }
+    var unit_ch = 75;             # 'K'
+    var scale = 1024;
+    if (size >= 1048576) {        # 1024^2
+        unit_ch = 77;             # 'M'
+        scale = 1048576;
+    }
+    if (size >= 1073741824) {     # 1024^3
+        unit_ch = 71;             # 'G'
+        scale = 1073741824;
+    }
+    if (size >= 1099511627776) {  # 1024^4
+        unit_ch = 84;             # 'T'
+        scale = 1099511627776;
+    }
+    var whole = size / scale;
+    var frac10 = (size * 10 / scale) % 10;
+    var n = format_size_decimal(whole, buf);
+    store8(buf + n, 46);          # '.'
+    store8(buf + n + 1, 48 + frac10);
+    store8(buf + n + 2, unit_ch);
+    return n + 3;
+}
+
+# Render mtime epoch seconds as `YYYY-MM-DD HH:MM` (16 bytes, UTC).
+# Locale-free per the v1.0 contract; the seconds component is
+# dropped vs ISO-8601 to match ls(1) -l width expectations. UTC
+# (no zone offset) keeps the column stable across machines and
+# crucially makes tests deterministic — the M2 acceptance check
+# fixtures have known epoch values.
+fn format_mtime(epoch, buf): i64 {
+    var d = epoch_to_date(epoch);
+    _chrono_w4(buf, 0, load64(d));            # year
+    store8(buf + 4, 45);                       # '-'
+    _chrono_w2(buf, 5, load64(d + 8));        # month
+    store8(buf + 7, 45);                       # '-'
+    _chrono_w2(buf, 8, load64(d + 16));       # day
+    store8(buf + 10, 32);                      # ' '
+    _chrono_w2(buf, 11, load64(d + 24));      # hour
+    store8(buf + 13, 58);                      # ':'
+    _chrono_w2(buf, 14, load64(d + 32));      # minute
+    return 16;
 }

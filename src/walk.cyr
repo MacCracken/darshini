@@ -6,7 +6,41 @@
 # stat failure so the caller can render the right message
 # (ENOENT vs EACCES vs other).
 #
-# Pure walk — no sorting, no rendering. Composes with render.cyr.
+# Pure walk — no sorting, no rendering. Composes with render.cyr
+# and long.cyr.
+
+# POSIX mode bits. Cyrius stdlib doesn't define these (yet) — we
+# carry them locally rather than guess at the right shared home.
+# When stdlib grows a stat.cyr these can be folded out.
+enum ModeBit {
+    S_IFMT  = 0xF000;
+    S_IFREG = 0x8000;
+    S_IFDIR = 0x4000;
+    S_IFLNK = 0xA000;
+    S_IFIFO = 0x1000;
+    S_IFSOCK = 0xC000;
+    S_IFBLK = 0x6000;
+    S_IFCHR = 0x2000;
+    S_ISUID = 0x0800;
+    S_ISGID = 0x0400;
+    S_ISVTX = 0x0200;
+    S_IRUSR = 0x0100;
+    S_IWUSR = 0x0080;
+    S_IXUSR = 0x0040;
+    S_IRGRP = 0x0020;
+    S_IWGRP = 0x0010;
+    S_IXGRP = 0x0008;
+    S_IROTH = 0x0004;
+    S_IWOTH = 0x0002;
+    S_IXOTH = 0x0001;
+}
+
+# x86_64 lstat(2) — syscall 6 — does NOT follow symlinks (unlike
+# SYS_STAT which the stdlib wraps as sys_stat). For `ls -l` we
+# want lstat semantics so a symlink shows as `l...` with its own
+# size rather than the target's. Bare number until stdlib exposes
+# a portable sys_lstat wrapper.
+var SYS_LSTAT_X86 = 6;
 
 # Stat a null-terminated path and classify the result:
 #   1                — path exists, is a directory
@@ -26,8 +60,8 @@ fn classify_path(cpath): i64 {
     var rc = sys_stat(cpath, &buf);
     if (rc < 0) { return rc; }
     var mode = load32(&buf + STAT_MODE);
-    var fmt = mode & 0xF000;
-    if (fmt == 0x4000) { return 1; }
+    var fmt = mode & S_IFMT;
+    if (fmt == S_IFDIR) { return 1; }
     return 0;
 }
 
@@ -52,4 +86,13 @@ fn check_dir_readable(cpath): i64 {
 # `.` and `..` are filtered by dir_list itself.
 fn list_dir(path: Str): i64 {
     return dir_list(path);
+}
+
+# lstat a path into a caller-provided 144-byte buffer (heap or
+# stack). Returns 0 on success, negative errno on failure. Used
+# by long.cyr's per-entry stat collection; lstat (not stat) so
+# symlinks render as `l...` with their own length rather than
+# their target's metadata.
+fn lstat_path(cpath, buf): i64 {
+    return syscall(SYS_LSTAT_X86, cpath, buf);
 }

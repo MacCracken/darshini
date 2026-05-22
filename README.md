@@ -45,10 +45,17 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-Pre-1.0. v0.2.0 — M1 shipped: directory walk + basic listing
-(`darshini` / `darshini <path>`, alphabetical, pipe-safe). No
-colors, icons, columns, git column or tree mode yet — those land
-M3–M7.
+Pre-1.0. v0.3.0 — M1 + M2 shipped:
+
+- M1: basic listing — `darshini` / `darshini <path>`, alphabetical
+  (case-insensitive), pipe-safe, error-discriminated.
+- M2: long format + human sizes — `darshini -l` /
+  `darshini -lh` / `darshini -l <file>`, aligned 4-column
+  `permissions size mtime name`, IEC 1024-based size buckets
+  under `-h`, mtime in UTC.
+
+No multi-column layout, colors, icons, git column or tree mode
+yet — those land M3–M7.
 
 ## Build
 

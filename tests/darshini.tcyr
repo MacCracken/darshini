@@ -1,4 +1,4 @@
-# darshini test suite — M1 + M2.
+# darshini test suite — M1 + M2 + M3.
 # Stdlib auto-included via cyrius.cyml.
 #
 # M1 coverage (carried forward from v0.2.0):
@@ -12,10 +12,17 @@
 #   * format_size_human — bucket boundaries (1023/1024,
 #     1MB-1/1MB, etc.) + sub-1K decimal pass-through
 #   * format_mtime — known epoch values → known UTC strings
+#
+# M3 coverage (new at v0.4.0):
+#   * pick_cols — synthetic vecs sized 1, 5, 100, 1000 against
+#     several term widths; degenerate widths (0, too-narrow);
+#     uniform vs jagged name lengths
+#   * _columns_total_width — exact byte width for known layouts
 
 include "src/render.cyr"
 include "src/walk.cyr"
 include "src/long.cyr"
+include "src/columns.cyr"
 
 fn make_str(c): i64 {
     return str_clone(str_from(c));
@@ -200,6 +207,105 @@ fn main(): i64 {
     # Leap-year boundary: 2000-02-29 00:00:00 UTC = 951782400
     format_mtime(951782400, mb);
     assert_eq(buf_eq_cstr(mb, 16, "2000-02-29 00:00"), 1, "leap day 2000 -> 2000-02-29 00:00");
+
+    # ============================================================
+    # M3 — multi-column auto-layout
+    # ============================================================
+
+    test_group("pick_cols");
+    # Degenerate inputs: empty vec / single entry / zero width.
+    var empty_v = vec_new();
+    assert_eq(pick_cols(empty_v, 80), 1, "empty vec -> 1 col");
+
+    var one_v = vec_new();
+    vec_push(one_v, make_str("solo"));
+    assert_eq(pick_cols(one_v, 80), 1, "1 entry -> 1 col");
+    assert_eq(pick_cols(one_v, 0), 1, "tw=0 -> 1 col");
+    assert_eq(pick_cols(one_v, 0 - 5), 1, "tw<0 -> 1 col");
+
+    # Five 5-char entries: "aaaaa".."eeeee". Per col needs 5+2=7 chars
+    # (sep). 5 cols => 5*5 + 4*2 = 33 chars. Fits in 40 → 5 cols.
+    var five = vec_new();
+    vec_push(five, make_str("aaaaa"));
+    vec_push(five, make_str("bbbbb"));
+    vec_push(five, make_str("ccccc"));
+    vec_push(five, make_str("ddddd"));
+    vec_push(five, make_str("eeeee"));
+    assert_eq(pick_cols(five, 40), 5, "5x5 uniform fits 5 cols at tw=40");
+    # 33 is the minimum for 5 cols; at 32, 5 cols don't fit and
+    # 4 cols would be a phantom layout (5 entries × 2 rows = only
+    # 3 effective cols). Falls back to 3.
+    assert_eq(pick_cols(five, 32), 3, "5x5 at tw=32 -> 3 cols (4-col phantom rejected)");
+    # tw=10 — only one 5-char col fits at a time (5 chars; 2-col
+    # would need 5+2+5=12 > 10).
+    assert_eq(pick_cols(five, 10), 1, "5x5 at tw=10 -> 1 col");
+    # tw=12 — 2 cols just fit (5+2+5=12).
+    assert_eq(pick_cols(five, 12), 2, "5x5 at tw=12 -> 2 cols");
+
+    # Jagged widths: one really long entry forces narrow layouts
+    # even when the others are short.
+    var jag = vec_new();
+    vec_push(jag, make_str("a"));
+    vec_push(jag, make_str("b"));
+    vec_push(jag, make_str("this-is-a-very-long-entry-name"));   # 30
+    vec_push(jag, make_str("c"));
+    vec_push(jag, make_str("d"));
+    # tw=40 — 3 cols, 2 rows: col0=[a,b]max=1, col1=[long,c]max=30,
+    # col2=[d]max=1. Total = 1+2+30+2+1 = 36 ≤ 40 → 3 cols.
+    # 4-col attempt is rejected (phantom — 5 entries / 2 rows = 3 eff).
+    assert_eq(pick_cols(jag, 40), 3, "jagged at tw=40 -> 3 cols");
+    # tw=30 — even 1 col with 30-char widest needs 30 chars; fits 1 col.
+    assert_eq(pick_cols(jag, 30), 1, "jagged at tw=30 -> 1 col (widest entry alone)");
+
+    test_group("_columns_total_width");
+    # five at 5 cols, 1 row: total = 5*5 + 4*2 = 33
+    assert_eq(_columns_total_width(five, 5, 5, 1), 33, "five@5x1 -> 33");
+    # five at 3 cols, 2 rows: col0={a,b}max=5, col1={c,d}max=5, col2={e}max=5.
+    # total = 5+2+5+2+5 = 19
+    assert_eq(_columns_total_width(five, 5, 3, 2), 19, "five@3x2 -> 19");
+    # five at 1 col, 5 rows: total = 5 (no separator on single col)
+    assert_eq(_columns_total_width(five, 5, 1, 5), 5, "five@1x5 -> 5");
+
+    # 1k synthetic vec of 8-char names ("name0000", "name0001", ...).
+    # Hand-computed for tw=80: 1 col=8, 2=18, 3=28, ..., 8=78, 9=88.
+    # → 8 cols fits, 9 doesn't.
+    var kilo = vec_new();
+    var ki = 0;
+    while (ki < 1000) {
+        var nb = alloc(9);
+        store8(nb, 110); store8(nb + 1, 97); store8(nb + 2, 109);   # 'nam'
+        store8(nb + 3, 101);                                          # 'e'
+        store8(nb + 4, 48 + ki / 1000);                               # always '0' here
+        store8(nb + 5, 48 + (ki / 100) % 10);
+        store8(nb + 6, 48 + (ki / 10) % 10);
+        store8(nb + 7, 48 + ki % 10);
+        store8(nb + 8, 0);
+        vec_push(kilo, str_clone(str_from(nb)));
+        ki = ki + 1;
+    }
+    assert_eq(pick_cols(kilo, 80), 8, "1k uniform 8-char at tw=80 -> 8 cols");
+    assert_eq(pick_cols(kilo, 88), 9, "1k uniform 8-char at tw=88 -> 9 cols");
+    assert_eq(pick_cols(kilo, 200), 20, "1k uniform 8-char at tw=200 -> 20 cols");
+    assert_eq(pick_cols(kilo, 7), 1, "1k uniform 8-char at tw=7 -> 1 col (name itself > tw)");
+
+    # 100-entry vec, also uniform 8-char. Same fit math holds —
+    # the # of entries shouldn't change col count for uniform widths.
+    var hundred = vec_new();
+    var hi = 0;
+    while (hi < 100) {
+        var nb2 = alloc(9);
+        store8(nb2, 110); store8(nb2 + 1, 97); store8(nb2 + 2, 109);
+        store8(nb2 + 3, 101);
+        store8(nb2 + 4, 48 + hi / 1000);
+        store8(nb2 + 5, 48 + (hi / 100) % 10);
+        store8(nb2 + 6, 48 + (hi / 10) % 10);
+        store8(nb2 + 7, 48 + hi % 10);
+        store8(nb2 + 8, 0);
+        vec_push(hundred, str_clone(str_from(nb2)));
+        hi = hi + 1;
+    }
+    assert_eq(pick_cols(hundred, 80), 8, "100 uniform 8-char at tw=80 -> 8 cols");
+    assert_eq(pick_cols(hundred, 40), 4, "100 uniform 8-char at tw=40 -> 4 cols");
 
     return assert_summary();
 }

@@ -98,6 +98,35 @@ jobs:
           test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
           echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }
 
+      - name: Smoke — pipe is single column
+        # M3 contract: stdout-not-a-TTY → one entry per line.
+        # `wc -l` on the listing should equal the entry count;
+        # `awk '{print NF}'` on each line should be 1 (one field).
+        # Catches regressions that would emit columns into a
+        # pipe (a CLAUDE.md hard rule violation).
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} > /tmp/pipe
+          lines=$(wc -l < /tmp/pipe)
+          test "$lines" -gt 5 || { echo "expected >5 entries in checkout listing, got $lines"; exit 1; }
+          awk 'NF != 1 { print "multi-field line:", $0; bad=1 } END { exit bad+0 }' /tmp/pipe \
+            || { echo "pipe output had multi-field lines"; cat /tmp/pipe; exit 1; }
+
+      - name: Smoke — -1 forces single column under TTY
+        # `script -qc CMD /dev/null` allocates a pty so the child
+        # sees a TTY on stdout. Without -1, the column layout would
+        # kick in; with -1, single column wins. Locks in the
+        # `-1` override semantics.
+        run: |
+          set -e
+          script -qec "./build/${{ github.event.repository.name }} -1" /dev/null > /tmp/single
+          # Drop the trailing CR `script` leaves on each line.
+          tr -d '\r' < /tmp/single > /tmp/single.clean
+          awk 'NF != 1 { bad=1 } END { exit bad+0 }' /tmp/single.clean \
+            || { echo "-1 produced multi-field lines under TTY"; cat /tmp/single.clean; exit 1; }
+          lines=$(wc -l < /tmp/single.clean)
+          test "$lines" -gt 5 || { echo "expected >5 entries under -1, got $lines"; exit 1; }
+
       - name: Smoke — long format -lh shape
         # M2 acceptance: `darshini -lh` produces aligned 4-column
         # rows (perms / size / mtime / name). Greps for a row

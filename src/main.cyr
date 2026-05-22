@@ -2,16 +2,20 @@
 #
 # M1: directory walk + basic listing (`darshini`, `darshini <path>`).
 # M2: long format (`-l`) + human-readable sizes (`-h`).
+# M3: multi-column auto-layout + `-1` force-single-column. Pipe-
+#     aware default — non-TTY stdout falls back to single column.
 #
-# Single-shot CLI: parse flags, stat the path, dispatch to long
-# or short listing, exit. lib/flags.cyr doesn't support bundled
-# short flags (`-lh`) so we keep a small parser local — getopt-
-# bundle semantics are part of the M1.x CLI contract.
+# Single-shot CLI: parse flags, stat the path, dispatch to long /
+# multi-column / single-column listing, exit. lib/flags.cyr
+# doesn't support bundled short flags (`-lh1`) so we keep a small
+# parser local — getopt-bundle semantics are part of the M1.x
+# CLI contract.
 #
 # Stdlib auto-included via cyrius.cyml [deps].stdlib.
 include "src/render.cyr"
 include "src/walk.cyr"
 include "src/long.cyr"
+include "src/columns.cyr"
 
 fn print_cstr_fd(fd, c): i64 {
     sys_write(fd, c, strlen(c));
@@ -32,23 +36,24 @@ fn emit_unknown_flag(arg): i64 {
     print_cstr_fd(STDERR_FD, "darshini: unknown flag: ");
     print_cstr_fd(STDERR_FD, arg);
     sys_write(STDERR_FD, "\n", 1);
-    print_cstr_fd(STDERR_FD, "usage: darshini [-l] [-h] [path]\n");
+    print_cstr_fd(STDERR_FD, "usage: darshini [-l] [-h] [-1] [path]\n");
     return 0;
 }
 
-# Parse argv into (long_flag, human_flag, path_cstr). Returns 0
-# on success, 1 on error (caller exits 1). Outputs land via the
-# pointer-out args so the caller can keep them on the stack.
+# Parse argv into (long_flag, human_flag, single_flag, path_cstr).
+# Returns 0 on success, 1 on error (caller exits 1). Outputs land
+# via the pointer-out args so the caller can keep them on the stack.
 #
-# Supports bundled short flags (`-lh` == `-l -h`). A bare `-`
+# Supports bundled short flags (`-lh1` == `-l -h -1`). A bare `-`
 # is treated as a positional (so `darshini -` lists the entry
 # literally named `-`, like ls). Multiple positional paths are
-# rejected for M2; multi-path support waits for the M3 / column
-# layout work.
-fn parse_cli(out_long, out_human, out_path): i64 {
+# rejected for M3; multi-path support is out-of-scope for v1.0
+# (per roadmap).
+fn parse_cli(out_long, out_human, out_single, out_path): i64 {
     var n = argc();
     var lflag = 0;
     var hflag = 0;
+    var sflag = 0;
     var path_cstr = ".";
     var path_seen = 0;
     var i = 1;
@@ -66,7 +71,8 @@ fn parse_cli(out_long, out_human, out_path): i64 {
                         var c = load8(arg + k);
                         if (c == 108) { lflag = 1; }            # 'l'
                         else { if (c == 104) { hflag = 1; }     # 'h'
-                        else { emit_unknown_flag(arg); failed = 1; } }
+                        else { if (c == 49)  { sflag = 1; }     # '1'
+                        else { emit_unknown_flag(arg); failed = 1; } } }
                     }
                     k = k + 1;
                 }
@@ -94,11 +100,12 @@ fn parse_cli(out_long, out_human, out_path): i64 {
     }
     store64(out_long, lflag);
     store64(out_human, hflag);
+    store64(out_single, sflag);
     store64(out_path, path_cstr);
     return failed;
 }
 
-fn run(path_cstr, want_long, want_human): i64 {
+fn run(path_cstr, want_long, want_human, want_single): i64 {
     var c = classify_path(path_cstr);
     if (c == 0 - ENOENT) {
         emit_error("darshini", path_cstr, "no such file or directory");
@@ -128,7 +135,16 @@ fn run(path_cstr, want_long, want_human): i64 {
         if (want_long == 1) {
             render_long(entries, dir_str, want_human);
         } else {
-            print_entries(entries);
+            # Pipe-aware multi-column: `-1` forces single-column;
+            # otherwise probe stdout's TTY width. term_width()
+            # returns 0 on a pipe / non-TTY → single column.
+            var tw = 0;
+            if (want_single == 0) { tw = term_width(); }
+            if (tw <= 0) {
+                print_entries(entries);
+            } else {
+                render_columns(entries, tw);
+            }
         }
         return 0;
     }
@@ -147,10 +163,11 @@ fn main(): i64 {
     args_init();
     var want_long = 0;
     var want_human = 0;
+    var want_single = 0;
     var path_cstr = 0;
-    var rc = parse_cli(&want_long, &want_human, &path_cstr);
+    var rc = parse_cli(&want_long, &want_human, &want_single, &path_cstr);
     if (rc != 0) { return 1; }
-    return run(path_cstr, want_long, want_human);
+    return run(path_cstr, want_long, want_human, want_single);
 }
 
 var r = main();

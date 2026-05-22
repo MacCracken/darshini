@@ -45,17 +45,19 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-Pre-1.0. v0.3.0 — M1 + M2 shipped:
+Pre-1.0. v0.4.0 — M1 + M2 + M3 shipped:
 
-- M1: basic listing — `darshini` / `darshini <path>`, alphabetical
-  (case-insensitive), pipe-safe, error-discriminated.
-- M2: long format + human sizes — `darshini -l` /
-  `darshini -lh` / `darshini -l <file>`, aligned 4-column
-  `permissions size mtime name`, IEC 1024-based size buckets
-  under `-h`, mtime in UTC.
+- M1: basic listing — `darshini` / `darshini <path>`,
+  case-insensitive alphabetical, error-discriminated.
+- M2: long format — `darshini -l` / `-lh` / `-l <file>`,
+  aligned 4-column `permissions size mtime name`, UTC.
+- M3: multi-column auto-layout — bare `darshini` on a TTY
+  packs entries into the widest fit (vertical-then-horizontal).
+  `darshini -1` forces single-column. `darshini | cat` (pipe)
+  is single-column automatically.
 
-No multi-column layout, colors, icons, git column or tree mode
-yet — those land M3–M7.
+No colors, icons, git column or tree mode yet — M4–M7. Linux
+x86_64 only through v1.0; other platforms post-v1.
 
 ## Build
 

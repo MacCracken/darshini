@@ -4,6 +4,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — M3: multi-column auto-layout + `-1`
+
+### Added
+- Multi-column auto-layout: bare `darshini` on a TTY now packs
+  entries into as many columns as fit, vertically-then-
+  horizontally (`ls`-default shape). 2-space separator,
+  per-column max width, partial trailing rows don't emit
+  trailing whitespace.
+- `-1` / `--single`: force single-column output even on a TTY.
+  Matches `ls -1` semantics. Bundles with `-l` / `-h` (e.g.
+  `-1l` is well-formed; `-l` wins).
+- Pipe-aware default: stdout-not-a-TTY → single column. Probed
+  via `ioctl(TIOCGWINSZ)`; failed ioctl → 0 → single column.
+  TTY-reports-0-cols → 80-col fallback per roadmap.
+- `src/columns.cyr` — `term_width()`, `pick_cols(entries, tw)`,
+  `render_columns(entries, tw)`. The picker rejects phantom
+  layouts where the trailing column would be entirely empty
+  (e.g. 5 entries × "4 cols × 2 rows" really only fills 3 cols).
+- Tests: 19 new assertions across `pick_cols` (uniform 5/100/1000-
+  entry vecs, jagged widths, degenerate inputs, narrow TTYs)
+  and `_columns_total_width` (exact byte width for known
+  layouts). Total now 93/93.
+
+### Notes
+- Vertical-then-horizontal is the contract per roadmap; column-
+  major fill (`ls -x`) is out of scope for v1.0.
+- `COLUMNS` env-var override (which `ls` honors) isn't wired —
+  defer; ioctl is the single source of truth right now.
+- M3 doesn't change `-l` behavior — long-format rows are always
+  one per line, columns kick in only on the default short-form
+  path.
+
 ## [0.3.0] — M2: `-l` long format + `-h` human-readable sizes
 
 ### Added

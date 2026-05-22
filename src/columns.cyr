@@ -1,0 +1,171 @@
+# darshini — multi-column auto-layout (the default-mode path).
+#
+# When `darshini` is run on a TTY without `-l` or `-1`, fit the
+# entries into the terminal width using the classic
+# `ls`-style vertical-then-horizontal layout: column 0 holds
+# entries[0..rows), column 1 holds entries[rows..2*rows), etc.
+# Two-space separator between columns; trailing partial rows
+# leave the unused trailing slots empty (no padding past the
+# last filled cell).
+#
+# Pipe-aware: on a pipe / non-TTY, `term_width()` returns 0 and
+# the caller (main.cyr) falls back to single-column emit via
+# print_entries — keeps `darshini | cat` script-safe.
+
+# TIOCGWINSZ ioctl request number on Linux. Same value on every
+# Linux arch (it's a tty-layer constant, not arch-specific like
+# the SNDRV_* ones in vani.cyr).
+var TIOCGWINSZ_LINUX = 0x5413;
+
+# struct winsize is 8 bytes: ws_row(u16) ws_col(u16) ws_xpixel(u16) ws_ypixel(u16).
+# var buf[N] is N **bytes** per the project's confirmed gotcha,
+# so `var ws[8]` is exactly one winsize.
+fn term_width(): i64 {
+    var ws[8];
+    var rc = syscall(SYS_IOCTL, STDOUT_FD, TIOCGWINSZ_LINUX, &ws);
+    if (rc < 0) { return 0; }
+    var cols = load16(&ws + 2);
+    if (cols == 0) { return 80; }
+    return cols;
+}
+
+# Compute the total horizontal width that would be consumed by
+# `cols` columns over `n` entries laid out vertically-then-
+# horizontally (`rows` rows). Includes 2-space separators between
+# adjacent columns; no trailing space after the last column.
+fn _columns_total_width(entries, n, cols, rows): i64 {
+    var sep = 2;
+    var total = 0;
+    var c = 0;
+    while (c < cols) {
+        var max_w = 0;
+        var r = 0;
+        while (r < rows) {
+            var idx = c * rows + r;
+            if (idx < n) {
+                var w = str_len(vec_get(entries, idx));
+                if (w > max_w) { max_w = w; }
+            }
+            r = r + 1;
+        }
+        total = total + max_w;
+        if (c < cols - 1) { total = total + sep; }
+        c = c + 1;
+    }
+    return total;
+}
+
+# Choose the largest column count that still fits in `term_width`
+# for `entries`'s names laid out vertically-then-horizontally.
+# Starts at min(n, term_width) and walks down — the first fit
+# wins. Returns at least 1 (caller dispatches to single-column
+# emit when this returns 1).
+fn pick_cols(entries, term_width): i64 {
+    var n = vec_len(entries);
+    if (n <= 1) { return 1; }
+    if (term_width <= 0) { return 1; }
+    var max_cols = n;
+    # Trivially-impossible upper bound: each column needs at
+    # least one char + the inter-column separator (2 chars). The
+    # last column doesn't need a trailing separator so the cap is
+    # (term_width + 2) / (1 + 2).
+    var cap = (term_width + 2) / 3;
+    if (cap < max_cols) { max_cols = cap; }
+    if (max_cols < 1) { max_cols = 1; }
+    var picked = 1;
+    var cols = max_cols;
+    var searching = 1;
+    while (searching == 1) {
+        if (cols <= 1) {
+            searching = 0;
+        } else {
+            var rows = (n + cols - 1) / cols;
+            # Reject layouts where the trailing column would be
+            # entirely empty: e.g. 5 entries in "4 cols × 2 rows"
+            # only fills 3 columns. The effective column count is
+            # ceil(n / rows); if that's less than what we're
+            # trying, this `cols` is a phantom layout — skip.
+            var effective = (n + rows - 1) / rows;
+            if (effective != cols) {
+                cols = cols - 1;
+            } else {
+                var total = _columns_total_width(entries, n, cols, rows);
+                if (total <= term_width) {
+                    picked = cols;
+                    searching = 0;
+                } else {
+                    cols = cols - 1;
+                }
+            }
+        }
+    }
+    return picked;
+}
+
+# Emit `entries` in a `cols`-column, `rows`-row grid, vertically-
+# then-horizontally (idx = c*rows + r). `col_widths[c]` gives the
+# per-column max name length. Partial trailing rows stop at the
+# last filled cell — no trailing spaces past the last name.
+fn _columns_emit(entries, n, cols, rows, col_widths): i64 {
+    var sep = 2;
+    var r = 0;
+    while (r < rows) {
+        # Find the last filled column in this row so we know where
+        # to stop emitting padding (avoids trailing whitespace).
+        var last_c = 0;
+        var cc = 0;
+        while (cc < cols) {
+            if (cc * rows + r < n) { last_c = cc; }
+            cc = cc + 1;
+        }
+        var c = 0;
+        while (c <= last_c) {
+            var idx = c * rows + r;
+            var name = vec_get(entries, idx);
+            var nlen = str_len(name);
+            sys_write(STDOUT_FD, str_data(name), nlen);
+            if (c < last_c) {
+                var w = load64(col_widths + c * 8);
+                var pad = w - nlen + sep;
+                var pi = 0;
+                while (pi < pad) {
+                    sys_write(STDOUT_FD, " ", 1);
+                    pi = pi + 1;
+                }
+            }
+            c = c + 1;
+        }
+        sys_write(STDOUT_FD, "\n", 1);
+        r = r + 1;
+    }
+    return 0;
+}
+
+# Top-level: pick the column count, compute per-column max
+# widths, emit. Falls back to single-column print_entries when
+# the picker chooses 1 column (typical on narrow TTYs / huge
+# names).
+fn render_columns(entries, term_width): i64 {
+    var n = vec_len(entries);
+    if (n == 0) { return 0; }
+    var cols = pick_cols(entries, term_width);
+    if (cols <= 1) { return print_entries(entries); }
+    var rows = (n + cols - 1) / cols;
+    var col_widths = alloc(cols * 8);
+    var c = 0;
+    while (c < cols) {
+        var max_w = 0;
+        var r = 0;
+        while (r < rows) {
+            var idx = c * rows + r;
+            if (idx < n) {
+                var w = str_len(vec_get(entries, idx));
+                if (w > max_w) { max_w = w; }
+            }
+            r = r + 1;
+        }
+        store64(col_widths + c * 8, max_w);
+        c = c + 1;
+    }
+    return _columns_emit(entries, n, cols, rows, col_widths);
+}

@@ -5,10 +5,9 @@
 
 ## Version
 
-**0.3.0** — M2 (`-l` long format + `-h` human-readable sizes)
-shipped 2026-05-22. M1 (basic listing) shipped earlier same day
-as v0.2.0. Scaffolded as **0.1.0** on 2026-05-19 via
-`cyrius init darshini`.
+**0.4.0** — M3 (multi-column auto-layout + `-1` force-single)
+shipped 2026-05-22, same day as M1 (v0.2.0) and M2 (v0.3.0).
+Scaffolded as **0.1.0** on 2026-05-19 via `cyrius init darshini`.
 
 ## Toolchain
 
@@ -29,11 +28,11 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
   `format_size_human`, `format_mtime`
 - `src/long.cyr` — long-format orchestrator (two-pass:
   collect-stat-then-emit-aligned)
+- `src/columns.cyr` — `term_width` (ioctl TIOCGWINSZ),
+  `pick_cols`, `render_columns` (vertical-then-horizontal)
 
-M3+ onward fills:
+M4+ onward fills:
 
-- `src/render.cyr` grows multi-column auto-layout + TTY width
-  probe at M3
 - `src/color.cyr` — darshana ANSI routing (M4)
 - `src/icons.cyr` — icon-mapping loader (M5)
 - `src/tree.cyr` — recursive box-drawn rendering (M6)
@@ -46,7 +45,7 @@ M3+ onward fills:
 |---------|-----------|--------|
 | Basic listing | M1 | **shipped** (v0.2.0) |
 | `-l` long format + `-h` human sizes | M2 | **shipped** (v0.3.0) |
-| Multi-column auto-layout, `-1` | M3 | pending |
+| Multi-column auto-layout, `-1` | M3 | **shipped** (v0.4.0) |
 | Color via darshana | M4 | pending |
 | Icons via CYML mapping | M5 | pending |
 | `-T` / `--tree` | M6 | pending |
@@ -55,9 +54,10 @@ M3+ onward fills:
 
 ## Tests
 
-- `tests/darshini.tcyr` — 74 assertions across M1's pure-function
-  surface + the fs probes against the project tree + M2 column
-  formatters (perms / size / mtime)
+- `tests/darshini.tcyr` — 93 assertions across M1 (lower_byte,
+  str_lt_ci, sort_entries, classify_path, check_dir_readable),
+  M2 (format_perms, format_size_decimal, format_size_human,
+  format_mtime), and M3 (pick_cols, _columns_total_width)
 - `tests/darshini.bcyr` — benchmark stub
 - `tests/darshini.fcyr` — fuzz stub
 
@@ -79,12 +79,13 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next ship is M3 (multi-column
-auto-layout + `-1` force-single-column), targeting v0.4.0.
-TTY-width detection via `ioctl(TIOCGWINSZ)` with a 80-col
-fallback. Pipe-aware single-column under non-TTY stdout becomes
-explicit at this milestone (until M3 it's incidental — print
-order is one per line by default).
+See [`roadmap.md`](roadmap.md). Next ship is M4 (color via
+darshana), targeting v0.5.0. Wires up the first `[deps.darshana]`
+external dependency; per-entry color by file type (dir,
+executable, symlink, broken symlink, regular file); TTY auto-
+detect (no color on pipe — already implemented for column
+layout, the same gate applies); `--no-color` flag to force-off.
+First ADR (`docs/adr/0001-color-scheme.md`) lands here.
 
 ## Known gotchas
 
@@ -99,8 +100,13 @@ order is one per line by default).
   picks locale-free + stable over matching `ls -l`'s local-time
   default; users comparing the two side-by-side will see their
   UTC-offset as a discrepancy. Documented in the M2 CHANGELOG.
-- **lstat is Linux x86_64 only.** `walk.cyr`'s `lstat_path` uses
-  bare syscall 6; aarch64 needs the at-family detour through
-  `newfstatat`. Cross-compile to aarch64 will need the same
-  arch-dispatch pattern that the stdlib's syscalls peers already
-  use — follow-up before any non-x86 release.
+- **Linux x86_64 only through v1.0.** Per roadmap "Out of scope":
+  non-x86 / non-Linux is **post-v1**. Specific x86_64 dependencies
+  to revisit when platform work opens: (a) `walk.cyr`'s
+  `lstat_path` uses bare syscall 6 — aarch64 needs an at-family
+  detour through `newfstatat`; (b) `columns.cyr`'s
+  `TIOCGWINSZ_LINUX = 0x5413` is Linux-only (BSDs use a
+  different request number); (c) `walk.cyr` reads `st_mode` at
+  offset 24 per the x86_64 stat layout. All three already use
+  the `Stat` enum or local constants, so the arch-dispatch
+  pattern is clear when the time comes.

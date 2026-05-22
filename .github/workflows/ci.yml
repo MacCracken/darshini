@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Reusable-workflow entry. Lets release.yml (and future
+  # downstream callers) use this whole pipeline as a gate via
+  # `uses: ./.github/workflows/ci.yml`. Without this trigger the
+  # `uses:` from release.yml fails at workflow-resolution time.
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -34,6 +39,21 @@ jobs:
       - name: Resolve dependencies
         run: cyrius deps
 
+      - name: Lint
+        # cyrius lint is file-at-a-time — loop over every src/*.cyr.
+        # Catches trailing whitespace, tabs, long lines, global-init
+        # forward refs, and CLAUDE.md-mandated style hits before
+        # they reach review.
+        run: |
+          set -e
+          for f in src/*.cyr; do cyrius lint "$f"; done
+
+      - name: Vet includes
+        # Audits the include graph from the entry point. Fails on
+        # untrusted or missing deps. Cheap, catches typos in
+        # `include "src/foo.cyr"` paths.
+        run: cyrius vet src/main.cyr
+
       - name: Build
         run: |
           mkdir -p build
@@ -46,3 +66,34 @@ jobs:
         # stub didn't exist (Issue 1) and also wouldn't ever exercise
         # tests/${proj}.tcyr.
         run: cyrius test
+
+      - name: Smoke — listing of the checkout
+        # M1 acceptance check: built binary actually lists the
+        # working tree and surfaces the expected scaffold files in
+        # alphabetical (case-insensitive) order. Catches the class
+        # of regressions where build + test pass but the binary
+        # segfaults, emits garbage (e.g. the 0xed bug from M1's
+        # var-buf-sizing gotcha), or skips entries.
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} > /tmp/listing
+          for expected in cyrius.cyml VERSION README.md CHANGELOG.md src tests; do
+            if ! grep -qx "$expected" /tmp/listing; then
+              echo "missing '$expected' in listing:"
+              cat /tmp/listing
+              exit 1
+            fi
+          done
+
+      - name: Smoke — error paths
+        # Nonexistent path → exit 1 with stderr message. Locks in
+        # the M1 contract that error paths surface non-zero exit so
+        # shell pipelines using darshini don't silently swallow
+        # missing-path bugs.
+        run: |
+          set +e
+          out=$(./build/${{ github.event.repository.name }} /this/path/does/not/exist 2>&1)
+          rc=$?
+          set -e
+          test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
+          echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }

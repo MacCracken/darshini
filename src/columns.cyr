@@ -33,7 +33,10 @@ fn term_width(): i64 {
 # `cols` columns over `n` entries laid out vertically-then-
 # horizontally (`rows` rows). Includes 2-space separators between
 # adjacent columns; no trailing space after the last column.
-fn _columns_total_width(entries, n, cols, rows): i64 {
+# `icon_width` (M5): fixed display-cell prefix per entry when
+# icons are enabled (`icon_display_width()` returns 2). Pass 0
+# to ignore.
+fn _columns_total_width(entries, n, cols, rows, icon_width): i64 {
     var sep = 2;
     var total = 0;
     var c = 0;
@@ -52,7 +55,7 @@ fn _columns_total_width(entries, n, cols, rows): i64 {
         if (c < cols - 1) { total = total + sep; }
         c = c + 1;
     }
-    return total;
+    return total + cols * icon_width;
 }
 
 # Choose the largest column count that still fits in `term_width`
@@ -60,16 +63,20 @@ fn _columns_total_width(entries, n, cols, rows): i64 {
 # Starts at min(n, term_width) and walks down — the first fit
 # wins. Returns at least 1 (caller dispatches to single-column
 # emit when this returns 1).
-fn pick_cols(entries, term_width): i64 {
+# `icon_width` (M5): per-entry display-cell prefix when icons
+# enabled (typically 2). Pass 0 when icons are off.
+fn pick_cols(entries, term_width, icon_width): i64 {
     var n = vec_len(entries);
     if (n <= 1) { return 1; }
     if (term_width <= 0) { return 1; }
+    var sep = 2;
     var max_cols = n;
     # Trivially-impossible upper bound: each column needs at
-    # least one char + the inter-column separator (2 chars). The
-    # last column doesn't need a trailing separator so the cap is
-    # (term_width + 2) / (1 + 2).
-    var cap = (term_width + 2) / 3;
+    # least one char + the inter-column separator (2 chars) +
+    # any per-entry icon prefix. The last column doesn't need a
+    # trailing separator so the cap is
+    # (term_width + sep) / (1 + icon_width + sep).
+    var cap = (term_width + sep) / (1 + icon_width + sep);
     if (cap < max_cols) { max_cols = cap; }
     if (max_cols < 1) { max_cols = 1; }
     var picked = 1;
@@ -80,16 +87,13 @@ fn pick_cols(entries, term_width): i64 {
             searching = 0;
         } else {
             var rows = (n + cols - 1) / cols;
-            # Reject layouts where the trailing column would be
-            # entirely empty: e.g. 5 entries in "4 cols × 2 rows"
-            # only fills 3 columns. The effective column count is
-            # ceil(n / rows); if that's less than what we're
-            # trying, this `cols` is a phantom layout — skip.
+            # Reject phantom layouts (trailing-column-empty); see
+            # the v0.4.0 ship notes.
             var effective = (n + rows - 1) / rows;
             if (effective != cols) {
                 cols = cols - 1;
             } else {
-                var total = _columns_total_width(entries, n, cols, rows);
+                var total = _columns_total_width(entries, n, cols, rows, icon_width);
                 if (total <= term_width) {
                     picked = cols;
                     searching = 0;
@@ -104,18 +108,18 @@ fn pick_cols(entries, term_width): i64 {
 
 # Emit `entries` in a `cols`-column, `rows`-row grid, vertically-
 # then-horizontally (idx = c*rows + r). `col_widths[c]` gives the
-# per-column max name length. Partial trailing rows stop at the
-# last filled cell — no trailing spaces past the last name.
+# per-column max NAME length (no icon offset). Partial trailing
+# rows stop at the last filled cell.
 #
-# `colors` (M4): if non-zero, a parallel vec<i64> of SGR codes
-# per ADR 0001. Padding math uses `str_len` (visible-width) so
-# escapes don't disturb alignment.
-fn _columns_emit(entries, n, cols, rows, col_widths, colors): i64 {
+# `colors` (M4): parallel vec<i64> SGR codes (or 0).
+# `icons` (M5): parallel vec<i64> UTF-8 glyph cstrs (or 0).
+# Padding math uses `str_len(name)` (visible name width) +
+# `icon_width` (uniform per cell) so escapes + multi-byte
+# glyphs don't disturb alignment.
+fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, icon_width): i64 {
     var sep = 2;
     var r = 0;
     while (r < rows) {
-        # Find the last filled column in this row so we know where
-        # to stop emitting padding (avoids trailing whitespace).
         var last_c = 0;
         var cc = 0;
         while (cc < cols) {
@@ -129,7 +133,9 @@ fn _columns_emit(entries, n, cols, rows, col_widths, colors): i64 {
             var nlen = str_len(name);
             var col_code = 0;
             if (colors != 0) { col_code = vec_get(colors, idx); }
-            emit_colored(name, col_code);
+            var ic = 0;
+            if (icons != 0) { ic = vec_get(icons, idx); }
+            emit_decorated(name, col_code, ic, icon_width);
             if (c < last_c) {
                 var w = load64(col_widths + c * 8);
                 var pad = w - nlen + sep;
@@ -147,17 +153,20 @@ fn _columns_emit(entries, n, cols, rows, col_widths, colors): i64 {
     return 0;
 }
 
-# Top-level: pick the column count, compute per-column max
-# widths, emit. Falls back to single-column print_entries when
-# the picker chooses 1 column (typical on narrow TTYs / huge
-# names).
+# Top-level: pick the column count, compute per-column max NAME
+# widths (icon width is uniform per cell — handled separately in
+# the picker + emit), emit. Falls back to single-column
+# print_entries when the picker chooses 1 column.
 #
-# `colors` (M4): see _columns_emit. Pass 0 for plain output.
-fn render_columns(entries, term_width, colors): i64 {
+# `colors` (M4) / `icons` (M5): parallel vecs (or 0). When icons
+# is non-zero, each cell gets a 2-cell prefix budget.
+fn render_columns(entries, term_width, colors, icons): i64 {
     var n = vec_len(entries);
     if (n == 0) { return 0; }
-    var cols = pick_cols(entries, term_width);
-    if (cols <= 1) { return print_entries(entries, colors); }
+    var icon_w = 0;
+    if (icons != 0) { icon_w = icon_display_width(); }
+    var cols = pick_cols(entries, term_width, icon_w);
+    if (cols <= 1) { return print_entries(entries, colors, icons); }
     var rows = (n + cols - 1) / cols;
     var col_widths = alloc(cols * 8);
     var c = 0;
@@ -175,5 +184,5 @@ fn render_columns(entries, term_width, colors): i64 {
         store64(col_widths + c * 8, max_w);
         c = c + 1;
     }
-    return _columns_emit(entries, n, cols, rows, col_widths, colors);
+    return _columns_emit(entries, n, cols, rows, col_widths, colors, icons, icon_w);
 }

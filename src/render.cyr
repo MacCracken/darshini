@@ -85,20 +85,24 @@ fn sort_entries(entries): i64 {
 
 # Emit one Str per line to stdout. Equivalent to a ls(1) -1 column.
 # Writes data + LF explicitly via sys_write rather than threading
-# through str_println — keeps the byte sequence audit-clear (each
-# entry's bytes then exactly one 0x0A, nothing else).
+# through str_println — keeps the byte sequence audit-clear.
 #
 # `colors` (M4): if non-zero, a parallel vec<i64> of SGR codes
-# per ADR 0001 (0 = no color, else darshana TTY_FG_* code). When
-# 0 is passed, plain output — the old M1 behavior.
-fn print_entries(entries, colors): i64 {
+# per ADR 0001. When 0, plain (M1 behavior).
+# `icons` (M5): if non-zero, a parallel vec<i64> of UTF-8 glyph
+# cstrs per ADR 0002. When 0, no icon prefix.
+fn print_entries(entries, colors, icons): i64 {
     var i = 0;
     var n = vec_len(entries);
+    var icon_pad = 0;
+    if (icons != 0) { icon_pad = icon_display_width(); }
     while (i < n) {
         var s = vec_get(entries, i);
         var c = 0;
         if (colors != 0) { c = vec_get(colors, i); }
-        emit_colored(s, c);
+        var ic = 0;
+        if (icons != 0) { ic = vec_get(icons, i); }
+        emit_decorated(s, c, ic, icon_pad);
         sys_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }

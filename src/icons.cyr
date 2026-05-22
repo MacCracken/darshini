@@ -1,0 +1,229 @@
+# darshini — per-entry icons (M5).
+#
+# Compile-baked lookup mirroring icons/default.cyml. The CYML
+# file is the human-readable source of truth; this module is
+# what the binary actually consults at runtime.
+#
+# Public surface:
+#   icon_for_entry(name_str, mode) → cstr glyph bytes (UTF-8) or 0
+#     when no icon applies. 0 only fires when the entry is a
+#     regular file with no matching filename / prefix / extension
+#     — the generic file glyph at the tail of the chain catches
+#     everything else.
+#   icon_display_width()           → fixed 2 (glyph + space).
+#                                    Pinned by ADR 0002.
+#
+# Lookup precedence (per ADR 0002):
+#   1. exact filename (`Makefile`, `LICENSE`, ...)
+#   2. filename prefix (`README*`, `CHANGELOG*`, ...)
+#   3. file-type override (dir, symlink, fifo, ...)
+#   4. extension match
+#   5. generic file glyph
+#
+# Display-width: every icon is 1 cell of glyph + 1 cell of
+# trailing space = 2 cells. Byte length varies (3–4 UTF-8 bytes
+# per glyph). The render paths add `icon_display_width()` to
+# each entry's effective width when icons are enabled.
+
+# Fixed display width per icon (glyph + trailing space) per
+# ADR 0002. The render paths add this to each entry's effective
+# width for column-fit math. UTF-8 byte length varies; this is
+# *display* cells, not bytes.
+fn icon_display_width(): i64 {
+    return 2;
+}
+
+# Pure-Str basename → cstr lowercase-extension extraction. Returns
+# 0 if no `.` is present, else a heap-alloc'd lowercased cstr of
+# the bytes after the last `.`. (Filename-only — caller passes the
+# basename, not the full path.)
+fn _icons_ext_of(name): i64 {
+    var nlen = str_len(name);
+    var nd = str_data(name);
+    var dot = 0 - 1;
+    var i = 0;
+    while (i < nlen) {
+        if (load8(nd + i) == 46) { dot = i; }
+        i = i + 1;
+    }
+    if (dot < 0) { return 0; }
+    if (dot == nlen - 1) { return 0; }
+    var extlen = nlen - dot - 1;
+    var buf = alloc(extlen + 1);
+    var j = 0;
+    while (j < extlen) {
+        var b = load8(nd + dot + 1 + j);
+        if (b >= 65) { if (b <= 90) { b = b + 32; } }
+        store8(buf + j, b);
+        j = j + 1;
+    }
+    store8(buf + extlen, 0);
+    return buf;
+}
+
+# Str starts-with cstr (case-sensitive).
+fn _icons_starts_with(name, prefix_cstr): i64 {
+    var plen = strlen(prefix_cstr);
+    var nlen = str_len(name);
+    if (plen > nlen) { return 0; }
+    var nd = str_data(name);
+    var i = 0;
+    while (i < plen) {
+        if (load8(nd + i) != load8(prefix_cstr + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Str == cstr (case-sensitive, byte-for-byte).
+fn _icons_eq_cstr(name, cstr): i64 {
+    var clen = strlen(cstr);
+    if (str_len(name) != clen) { return 0; }
+    var nd = str_data(name);
+    var i = 0;
+    while (i < clen) {
+        if (load8(nd + i) != load8(cstr + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Match a cstr-ext against a literal. Returns 1 on byte equality.
+fn _icons_ext_eq(ext_cstr, lit): i64 {
+    if (ext_cstr == 0) { return 0; }
+    var llen = strlen(lit);
+    if (strlen(ext_cstr) != llen) { return 0; }
+    return memeq(ext_cstr, lit, llen);
+}
+
+# Lookup chain — see ADR 0002 priority table. Returns a UTF-8
+# cstr (the glyph bytes; not null-terminated-strict — emit by
+# strlen). Returns 0 only if no rule matches AND mode 0 is
+# passed (i.e. caller wants a "what would the bytes be" probe
+# without a fallback). Real call sites always pass a real mode
+# and fall through to the generic file glyph at the tail.
+fn icon_for_entry(name, mode): i64 {
+    # 1. Exact filename matches.
+    if (_icons_eq_cstr(name, "Makefile") == 1)        { return ""; }
+    if (_icons_eq_cstr(name, "Dockerfile") == 1)      { return ""; }
+    if (_icons_eq_cstr(name, "LICENSE") == 1)         { return ""; }
+    if (_icons_eq_cstr(name, "VERSION") == 1)         { return ""; }
+    if (_icons_eq_cstr(name, ".gitignore") == 1)      { return ""; }
+    if (_icons_eq_cstr(name, ".gitattributes") == 1)  { return ""; }
+    if (_icons_eq_cstr(name, ".gitkeep") == 1)        { return ""; }
+
+    # 2. Filename prefix matches.
+    if (_icons_starts_with(name, "README") == 1)          { return ""; }
+    if (_icons_starts_with(name, "CHANGELOG") == 1)       { return ""; }
+    if (_icons_starts_with(name, "CONTRIBUTING") == 1)    { return ""; }
+    if (_icons_starts_with(name, "CODE_OF_CONDUCT") == 1) { return ""; }
+    if (_icons_starts_with(name, "SECURITY") == 1)        { return ""; }
+
+    # 3. File-type overrides. Directories / symlinks / etc. trump
+    #    the extension lookup so a directory named "foo.md" gets
+    #    the folder glyph, not the markdown glyph.
+    var fmt = mode & S_IFMT;
+    if (fmt == S_IFDIR)  { return ""; }   # folder
+    if (fmt == S_IFLNK)  { return ""; }   # link
+    if (fmt == S_IFIFO)  { return ""; }   # sign-out (fifo)
+    if (fmt == S_IFSOCK) { return ""; }   # share-alt (socket)
+    if (fmt == S_IFBLK)  { return ""; }   # server (block dev)
+    if (fmt == S_IFCHR)  { return ""; }   # server (char dev)
+
+    # 4. Extension lookup.
+    var ext = _icons_ext_of(name);
+    # Cyrius ecosystem
+    if (_icons_ext_eq(ext, "cyr") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "tcyr") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "bcyr") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "fcyr") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "scyr") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "smcyr") == 1) { return ""; }
+    if (_icons_ext_eq(ext, "cyml") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "cyx") == 1)   { return ""; }
+    # Config formats
+    if (_icons_ext_eq(ext, "toml") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "yml") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "yaml") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "json") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "ini") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "conf") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "env") == 1)   { return ""; }
+    # Documentation
+    if (_icons_ext_eq(ext, "md") == 1)       { return ""; }
+    if (_icons_ext_eq(ext, "markdown") == 1) { return ""; }
+    if (_icons_ext_eq(ext, "rst") == 1)      { return ""; }
+    if (_icons_ext_eq(ext, "txt") == 1)      { return ""; }
+    if (_icons_ext_eq(ext, "adoc") == 1)     { return ""; }
+    # Web
+    if (_icons_ext_eq(ext, "html") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "htm") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "css") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "scss") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "js") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "mjs") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "ts") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "tsx") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "jsx") == 1)   { return ""; }
+    # Systems
+    if (_icons_ext_eq(ext, "c") == 1)     { return ""; }
+    if (_icons_ext_eq(ext, "h") == 1)     { return ""; }
+    if (_icons_ext_eq(ext, "cpp") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "hpp") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "rs") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "go") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "zig") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "asm") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "s") == 1)     { return ""; }
+    # Scripting
+    if (_icons_ext_eq(ext, "py") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "sh") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "bash") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "fish") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "zsh") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "lua") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "rb") == 1)    { return ""; }
+    # Archives
+    if (_icons_ext_eq(ext, "tar") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "gz") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "zip") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "xz") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "bz2") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "7z") == 1)    { return ""; }
+    # Images
+    if (_icons_ext_eq(ext, "png") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "jpg") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "jpeg") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "gif") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "svg") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "webp") == 1)  { return ""; }
+    # Audio + video
+    if (_icons_ext_eq(ext, "mp3") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "wav") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "flac") == 1)  { return ""; }
+    if (_icons_ext_eq(ext, "mp4") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "mkv") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "webm") == 1)  { return ""; }
+    # Data
+    if (_icons_ext_eq(ext, "csv") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "xlsx") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "sql") == 1)    { return ""; }
+    if (_icons_ext_eq(ext, "db") == 1)     { return ""; }
+    if (_icons_ext_eq(ext, "sqlite") == 1) { return ""; }
+    # Logs + lock
+    if (_icons_ext_eq(ext, "log") == 1)   { return ""; }
+    if (_icons_ext_eq(ext, "lock") == 1)  { return ""; }
+
+    # 5. Generic file glyph fallback.
+    return "";
+}
+
+# Emit `icon` (UTF-8 bytes, terminated by NUL) followed by a
+# single space to stdout. Caller responsible for the SGR wrap
+# (caller usually wraps the whole `icon + space + name` in the
+# color escape pair so the icon takes the name's color).
+fn emit_icon(icon): i64 {
+    sys_write(STDOUT_FD, icon, strlen(icon));
+    sys_write(STDOUT_FD, " ", 1);
+    return 0;
+}

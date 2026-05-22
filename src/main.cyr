@@ -13,9 +13,12 @@
 #
 # Stdlib auto-included via cyrius.cyml [deps].stdlib.
 # Include order matters — walk.cyr defines the ModeBit enum used
-# by color.cyr's color_for_mode, color.cyr defines emit_colored
-# used by render.cyr / columns.cyr / long.cyr.
+# by color.cyr's color_for_mode + icons.cyr's file-type dispatch,
+# icons.cyr defines icon_for_entry used by color.cyr's
+# compute_decor, color.cyr defines emit_decorated used by the
+# three emit paths (render.cyr / columns.cyr / long.cyr).
 include "src/walk.cyr"
+include "src/icons.cyr"
 include "src/color.cyr"
 include "src/render.cyr"
 include "src/columns.cyr"
@@ -40,7 +43,7 @@ fn emit_unknown_flag(arg): i64 {
     print_cstr_fd(STDERR_FD, "darshini: unknown flag: ");
     print_cstr_fd(STDERR_FD, arg);
     sys_write(STDERR_FD, "\n", 1);
-    print_cstr_fd(STDERR_FD, "usage: darshini [-l] [-h] [-1] [--no-color] [path]\n");
+    print_cstr_fd(STDERR_FD, "usage: darshini [-l] [-h] [-1] [--no-color] [--no-icons] [path]\n");
     return 0;
 }
 
@@ -61,22 +64,22 @@ fn _arg_eq(arg, lit): i64 {
 }
 
 # Parse argv into (long_flag, human_flag, single_flag, no_color_flag,
-# path_cstr). Returns 0 on success, 1 on error (caller exits 1).
+# no_icons_flag, path_cstr). Returns 0 on success, 1 on error.
 # Outputs land via the pointer-out args so the caller can keep them
 # on the stack.
 #
 # Supports bundled short flags (`-lh1` == `-l -h -1`). A bare `-`
-# is treated as a positional (so `darshini -` lists the entry
-# literally named `-`, like ls). Multiple positional paths are
-# rejected for M3+; multi-path support is out-of-scope for v1.0
-# (per roadmap). `--no-color` is the one long-form flag at M4 —
-# more long flags arrive at M6/M7/M8 (`--tree`, `--git`, `--mime`).
-fn parse_cli(out_long, out_human, out_single, out_no_color, out_path): i64 {
+# is treated as a positional. Multiple positional paths are
+# rejected; multi-path support is out-of-scope for v1.0. Long-form
+# flags at v0.6.0: `--no-color` (M4), `--no-icons` (M5). More
+# long flags arrive at M6 / M7 / M8 (`--tree`, `--git`, `--mime`).
+fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons, out_path): i64 {
     var n = argc();
     var lflag = 0;
     var hflag = 0;
     var sflag = 0;
     var ncflag = 0;
+    var niflag = 0;
     var path_cstr = ".";
     var path_seen = 0;
     var i = 1;
@@ -89,7 +92,8 @@ fn parse_cli(out_long, out_human, out_single, out_no_color, out_path): i64 {
             if (first == 45) { if (second == 45) {
                 # Long flag (`--foo`).
                 if (_arg_eq(arg, "--no-color") == 1) { ncflag = 1; }
-                else { emit_unknown_flag(arg); failed = 1; }
+                else { if (_arg_eq(arg, "--no-icons") == 1) { niflag = 1; }
+                else { emit_unknown_flag(arg); failed = 1; } }
             } }
             if (first == 45) { if (second != 45) { if (second != 0) {
                 # Short-flag bundle (everything after '-').
@@ -114,7 +118,6 @@ fn parse_cli(out_long, out_human, out_single, out_no_color, out_path): i64 {
                     path_seen = 1;
                 }
             } else { if (second == 0) {
-                # Bare "-" — treat as positional.
                 if (path_seen == 1) {
                     print_cstr_fd(STDERR_FD, "darshini: multiple paths not supported\n");
                     failed = 1;
@@ -130,11 +133,12 @@ fn parse_cli(out_long, out_human, out_single, out_no_color, out_path): i64 {
     store64(out_human, hflag);
     store64(out_single, sflag);
     store64(out_no_color, ncflag);
+    store64(out_no_icons, niflag);
     store64(out_path, path_cstr);
     return failed;
 }
 
-fn run(path_cstr, want_long, want_human, want_single, want_no_color): i64 {
+fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_icons): i64 {
     var c = classify_path(path_cstr);
     if (c == 0 - ENOENT) {
         emit_error("darshini", path_cstr, "no such file or directory");
@@ -148,12 +152,16 @@ fn run(path_cstr, want_long, want_human, want_single, want_no_color): i64 {
         emit_error("darshini", path_cstr, "cannot stat");
         return 1;
     }
-    # TTY probe once — drives both the column-layout decision AND
-    # the color-on-by-default decision (per ADR 0001).
+    # TTY probe once — drives column layout (M3), color (M4),
+    # and icons (M5). All three are TTY-default-on / pipe-off /
+    # explicit-flag-overrides-to-off.
     var tw = term_width();
     var want_color = 0;
+    var want_icons = 0;
     if (tw > 0) { want_color = 1; }
+    if (tw > 0) { want_icons = 1; }
     if (want_no_color == 1) { want_color = 0; }
+    if (want_no_icons == 1) { want_icons = 0; }
     if (c == 1) {
         var rd = check_dir_readable(path_cstr);
         if (rd == 0 - EACCES) {
@@ -168,27 +176,28 @@ fn run(path_cstr, want_long, want_human, want_single, want_no_color): i64 {
         var entries = list_dir(dir_str);
         sort_entries(entries);
         var colors = 0;
-        if (want_color == 1) { colors = compute_colors(entries, dir_str); }
+        var icons = 0;
+        var any_decor = want_color + want_icons;
+        if (any_decor > 0) {
+            var decor = compute_decor(entries, dir_str, want_color, want_icons);
+            colors = load64(decor);
+            icons = load64(decor + 8);
+        }
         if (want_long == 1) {
-            render_long(entries, dir_str, want_human, colors);
+            render_long(entries, dir_str, want_human, colors, icons);
         } else {
-            # Pipe-aware multi-column: `-1` forces single-column;
-            # otherwise the cached `tw` from the TTY probe drives
-            # layout (tw==0 → pipe → single column).
             var tw_eff = tw;
             if (want_single == 1) { tw_eff = 0; }
             if (tw_eff <= 0) {
-                print_entries(entries, colors);
+                print_entries(entries, colors, icons);
             } else {
-                render_columns(entries, tw_eff, colors);
+                render_columns(entries, tw_eff, colors, icons);
             }
         }
         return 0;
     }
-    # Non-directory path: long row under `-l`, bare echo otherwise
-    # (echo matches `ls FILE` semantics).
     if (want_long == 1) {
-        return render_long_one(path_cstr, want_human, want_color);
+        return render_long_one(path_cstr, want_human, want_color, want_icons);
     }
     print_cstr_fd(STDOUT_FD, path_cstr);
     sys_write(STDOUT_FD, "\n", 1);
@@ -202,10 +211,11 @@ fn main(): i64 {
     var want_human = 0;
     var want_single = 0;
     var want_no_color = 0;
+    var want_no_icons = 0;
     var path_cstr = 0;
-    var rc = parse_cli(&want_long, &want_human, &want_single, &want_no_color, &path_cstr);
+    var rc = parse_cli(&want_long, &want_human, &want_single, &want_no_color, &want_no_icons, &path_cstr);
     if (rc != 0) { return 1; }
-    return run(path_cstr, want_long, want_human, want_single, want_no_color);
+    return run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_icons);
 }
 
 var r = main();

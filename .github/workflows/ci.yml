@@ -98,6 +98,41 @@ jobs:
           test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
           echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }
 
+      - name: Smoke — pipe emits no icon glyphs
+        # M5 contract: pipe → no Nerd Font PUA bytes. Same
+        # principle as the color escape suppression — script
+        # consumers see plain bytes only. Nerd Font glyphs are
+        # in the U+E000–U+F8FF Private Use Area; their UTF-8
+        # encodings start with `\xee` or `\xef` so an `od`
+        # byte-scan catches a leak (PCRE in text mode misreads
+        # the multi-byte sequence as a single char).
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} > /tmp/no_icons
+          if od -An -tx1 /tmp/no_icons | grep -q -E ' (ee|ef) '; then
+            echo "pipe output contained Nerd Font PUA bytes:"
+            cat -v /tmp/no_icons
+            exit 1
+          fi
+
+      - name: Smoke — TTY emits icons, --no-icons suppresses
+        # M5 contract: TTY default shows icons; `--no-icons`
+        # suppresses them under TTY. Tests both directions.
+        run: |
+          set -e
+          script -qec "./build/${{ github.event.repository.name }}" /dev/null > /tmp/tty_icons
+          od -An -tx1 /tmp/tty_icons | grep -q -E ' (ee|ef) ' || {
+            echo "TTY-attached output had no Nerd Font PUA bytes (icons not firing):"
+            cat -v /tmp/tty_icons
+            exit 1
+          }
+          script -qec "./build/${{ github.event.repository.name }} --no-icons" /dev/null > /tmp/tty_no_icons
+          if od -An -tx1 /tmp/tty_no_icons | grep -q -E ' (ee|ef) '; then
+            echo "--no-icons failed to suppress Nerd Font PUA bytes:"
+            cat -v /tmp/tty_no_icons
+            exit 1
+          fi
+
       - name: Smoke — pipe emits no color escapes
         # M4 contract: pipe → no SGR escapes (not just no column
         # layout, no color either). A regression that leaks `\x1b[`

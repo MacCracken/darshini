@@ -5,9 +5,9 @@
 
 ## Version
 
-**0.5.0** — M4 (color via darshana) shipped 2026-05-22. Same day
-as M1 (v0.2.0), M2 (v0.3.0), M3 (v0.4.0). Scaffolded as **0.1.0**
-on 2026-05-19 via `cyrius init darshini`.
+**0.6.0** — M5 (icons via CYML mapping) shipped 2026-05-22.
+Same day as M1 (v0.2.0), M2 (v0.3.0), M3 (v0.4.0), M4 (v0.5.0).
+Scaffolded as **0.1.0** on 2026-05-19 via `cyrius init darshini`.
 
 ## Toolchain
 
@@ -30,12 +30,14 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
   collect-stat-then-emit-aligned)
 - `src/columns.cyr` — `term_width` (ioctl TIOCGWINSZ),
   `pick_cols`, `render_columns` (vertical-then-horizontal)
-- `src/color.cyr` — `color_for_mode` picker, `compute_colors`
-  fs-side parallel-vec builder, `emit_colored` write wrap
+- `src/color.cyr` — `color_for_mode` picker, `compute_decor`
+  fs-side parallel-vec builder (colors + icons in one lstat
+  pass), `emit_decorated` write wrap
+- `src/icons.cyr` — compile-baked icon picker (`icon_for_entry`,
+  `icon_display_width`) mirroring `icons/default.cyml`
 
-M5+ onward fills:
+M6+ onward fills:
 
-- `src/icons.cyr` — icon-mapping loader (M5)
 - `src/tree.cyr` — recursive box-drawn rendering (M6)
 - `src/git.cyr` — `.git/`-direct status column (M7)
 - `src/mime.cyr` — magic-bytes mime detector (M8)
@@ -48,18 +50,19 @@ M5+ onward fills:
 | `-l` long format + `-h` human sizes | M2 | **shipped** (v0.3.0) |
 | Multi-column auto-layout, `-1` | M3 | **shipped** (v0.4.0) |
 | Color via darshana | M4 | **shipped** (v0.5.0) |
-| Icons via CYML mapping | M5 | pending |
+| Icons via CYML mapping | M5 | **shipped** (v0.6.0) |
 | `-T` / `--tree` | M6 | pending |
 | `--git` status column | M7 | pending |
 | `--mime` recognition | M8 | pending |
 
 ## Tests
 
-- `tests/darshini.tcyr` — 107 assertions across M1 (lower_byte,
+- `tests/darshini.tcyr` — 132 assertions across M1 (lower_byte,
   str_lt_ci, sort_entries, classify_path, check_dir_readable),
   M2 (format_perms, format_size_decimal, format_size_human,
-  format_mtime), M3 (pick_cols, _columns_total_width), and
-  M4 (color_for_mode)
+  format_mtime), M3 (pick_cols, _columns_total_width), M4
+  (color_for_mode), and M5 (icon_display_width, icon_for_entry,
+  pick_cols + icon_width)
 - `tests/darshini.bcyr` — benchmark stub
 - `tests/darshini.fcyr` — fuzz stub
 
@@ -83,14 +86,12 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next ship is M5 (icons via CYML
-mapping), targeting v0.6.0. New `icons/default.cyml` ships a
-curated mapping of `<ext>` → `<glyph>` + ANSI color, with
-special-case entries for well-known filenames
-(`Makefile`, `Dockerfile`, `README*`, etc.). `--no-icons` flag
-to suppress. Second ADR (`docs/adr/0002-icon-format.md`)
-documents the schema + rationale. Tests: every shipped icon
-renders for its trigger.
+See [`roadmap.md`](roadmap.md). Next ship is M6 (`-T` /
+`--tree` recursive display), targeting v0.7.0. Box-drawing
+characters for the connectors; `--level N` to cap depth;
+reuses M2's row format per entry. Tests: nested dirs,
+symlink-to-dir (don't recurse by default; explicit flag to
+follow).
 
 ## Known gotchas
 

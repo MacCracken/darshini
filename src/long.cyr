@@ -46,8 +46,8 @@ fn _emit_spaces(n): i64 {
 
 # Render the long-format listing for the entries inside `dir_str`.
 # `want_human` controls size formatting (decimal vs IEC X.YK/M/G/T).
-# `colors` (M4): if non-zero, a parallel vec<i64> of SGR codes
-# per ADR 0001 used to colorize the name column.
+# `colors` (M4) / `icons` (M5): parallel vecs (or 0) for color/
+# icon decoration of the name column.
 # Both passes over the entries: pass 1 collects per-row state +
 # tracks the max size-string width; pass 2 emits aligned rows.
 #
@@ -55,7 +55,7 @@ fn _emit_spaces(n): i64 {
 # `l...` with their own length rather than the target's. M2
 # scope: no symlink-target rendering yet — the `-> target` tail
 # lands when the symlink-display ADR opens for M6 / M7 territory.
-fn render_long(entries, dir_str, want_human, colors): i64 {
+fn render_long(entries, dir_str, want_human, colors, icons): i64 {
     var n = vec_len(entries);
     var rows = vec_new();
     var max_size_w = 0;
@@ -127,11 +127,16 @@ fn render_long(entries, dir_str, want_human, colors): i64 {
         }
         sys_write(STDOUT_FD, mtime_buf, 16);
         sys_write(STDOUT_FD, " ", 1);
-        # name (colorized per ADR 0001 when colors vec was supplied)
+        # name — colorized per ADR 0001 + icon-prefixed per ADR 0002
+        # when the corresponding vecs were supplied.
         var name = vec_get(entries, i);
         var col_code = 0;
         if (colors != 0) { col_code = vec_get(colors, i); }
-        emit_colored(name, col_code);
+        var ic = 0;
+        if (icons != 0) { ic = vec_get(icons, i); }
+        var icon_pad = 0;
+        if (icons != 0) { icon_pad = icon_display_width(); }
+        emit_decorated(name, col_code, ic, icon_pad);
         sys_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }
@@ -142,14 +147,12 @@ fn render_long(entries, dir_str, want_human, colors): i64 {
 # Reached when `-l` is paired with a path that isn't a directory
 # (regular file, symlink, fifo, etc.) — matches `ls -l <file>`.
 # Uses lstat so a symlink renders as itself rather than its
-# target's stat. The path bytes are emitted verbatim (no
-# basename trimming) for parity with ls.
+# target's stat.
 #
-# `want_color` (M4): when 1, the name column is colorized per
-# ADR 0001. For symlinks we do the extra `sys_stat` to detect
-# broken targets inline (compute_colors does the same for
-# directory listings).
-fn render_long_one(path_cstr, want_human, want_color): i64 {
+# `want_color` (M4) / `want_icons` (M5): toggle decoration.
+# Symlinks pay the extra `sys_stat` for broken-target color
+# detection only when want_color is on.
+fn render_long_one(path_cstr, want_human, want_color, want_icons): i64 {
     var stat_buf = alloc(144);
     var rc = lstat_path(path_cstr, stat_buf);
     if (rc < 0) { return 1; }
@@ -181,7 +184,25 @@ fn render_long_one(path_cstr, want_human, want_color): i64 {
             col_code = color_for_mode(mode);
         }
     }
+    var ic = 0;
+    if (want_icons == 1) {
+        # Single-path mode — pass the path bytes as a Str for
+        # the lookup. icon_for_entry's prefix/exact matches will
+        # see the full path (probably not the basename), which is
+        # acceptable for the single-file case — the lookup
+        # chain's extension match still fires correctly.
+        var path_str = str_from(path_cstr);
+        ic = icon_for_entry(path_str, mode);
+    }
+    var icon_pad = 0;
+    if (want_icons == 1) { icon_pad = icon_display_width(); }
     if (col_code != 0) { tty_sgr(col_code); }
+    if (ic != 0) {
+        sys_write(STDOUT_FD, ic, strlen(ic));
+        sys_write(STDOUT_FD, " ", 1);
+    } else { if (icon_pad > 0) {
+        sys_write(STDOUT_FD, "  ", 2);
+    } }
     sys_write(STDOUT_FD, path_cstr, strlen(path_cstr));
     if (col_code != 0) { tty_sgr_reset(); }
     sys_write(STDOUT_FD, "\n", 1);

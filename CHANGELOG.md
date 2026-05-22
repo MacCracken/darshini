@@ -4,6 +4,64 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] — M5: icons via CYML mapping
+
+### Added
+- Per-entry icons on TTY output. Lookup precedence per
+  ADR 0002: exact filename → filename prefix → file-type
+  override → extension match → generic file glyph. Every
+  entry gets a glyph (no "blank" cells).
+- `--no-icons`: long-form flag to force-off even on a TTY.
+  Bundles fine with the rest of the v0.6.0 flag set.
+- Pipe-aware default: stdout-not-a-TTY → no icons (no bytes
+  emitted, no column-budget impact). Same gate as M3 columns
+  and M4 color.
+- `icons/default.cyml` — human-readable source of truth for
+  the icon mapping. Nerd Font v3+ glyphs across Devicons,
+  Material, Font Awesome, Octicons. 80+ extensions, 7 exact
+  filenames, 5 filename prefixes.
+- `src/icons.cyr` — compile-baked lookup chain mirroring
+  `icons/default.cyml`. `icon_for_entry(name, mode)` returns
+  the glyph cstr (or 0 on stat-failed entries).
+  `icon_display_width()` returns the fixed 2-cell budget per
+  ADR 0002.
+- `docs/adr/0002-icon-format.md` — second ADR. Locks the
+  schema, the lookup precedence, the display-width
+  assumption, and the compile-baked-vs-runtime-CYML decision.
+- `src/color.cyr` — `compute_decor(entries, dir_str,
+  want_color, want_icons)` replaces `compute_colors`. Single
+  lstat pass over the entry list now produces both the colors
+  vec and the icons vec (down from 2N lstats to N when both
+  decorations are on).
+- `emit_decorated(name, color, icon, icon_pad)` — extended
+  emit primitive; covers the bare-name, name-with-color,
+  name-with-icon, and name-with-both shapes. Old
+  `emit_colored` kept as a thin wrapper.
+- Column-fit math: `pick_cols(entries, tw, icon_width)` and
+  `_columns_total_width(..., icon_width)` take a fixed
+  per-cell offset when icons are enabled. Padding diff
+  unchanged (icon_width is uniform across the column).
+- Tests: 25 new assertions across `icon_display_width`,
+  `icon_for_entry` (each lookup precedence rule), and
+  `pick_cols + icon_width` interactions. Total now 132/132.
+
+### Notes
+- Icon glyphs require a Nerd Font v3+ patched font on the
+  user's terminal. Terminals without one render replacement
+  characters; the documented fallback is `--no-icons`. No
+  auto-detection — terminal-query for font availability isn't
+  reliable across emulators.
+- `icons/default.cyml` is the spec but is NOT parsed at
+  runtime. The mapping is compile-baked into `src/icons.cyr`
+  for startup speed (rationale in ADR 0002). When adding an
+  icon, edit BOTH files. Runtime CYML loading is a v1.1
+  candidate.
+- Per-icon color overrides (LS_COLORS-style) deferred to v1.1.
+  Each icon takes the name's mode color per ADR 0001.
+- File-type icons (folder, link, fifo, ...) are hard-coded in
+  `src/icons.cyr` rather than in the CYML — could lift to a
+  `[type_overrides]` table when runtime-CYML lands.
+
 ## [0.5.0] — M4: color via darshana
 
 ### Added

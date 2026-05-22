@@ -1,0 +1,133 @@
+# darshini icon mapping — v1.0 default set.
+#
+# Schema + lookup precedence + display-width contract:
+# see docs/adr/0002-icon-format.md. Codepoint references below
+# use Nerd Font v3+ patched-font conventions.
+#
+# This file is the human-readable source of truth. At v0.6.0
+# the mapping is compile-baked into src/icons.cyr; this CYML is
+# documentation + spec. When adding an icon, edit BOTH this file
+# AND src/icons.cyr.
+
+[filenames]
+# Exact-match, case-sensitive, whole-basename.
+Makefile = ""      # devicon makefile (low-level tool gear)
+Dockerfile = ""    # material docker whale
+LICENSE = ""       # font-awesome book
+VERSION = ""       # book — same shape; freezes the contract version
+.gitignore = ""    # font-awesome git logo
+.gitattributes = ""
+.gitkeep = ""
+
+[filename_prefixes]
+# Case-sensitive prefix. README* covers README, README.md, README.rst.
+README = ""        # material book-open-page-variant
+CHANGELOG = ""     # font-awesome history (clock-history shape)
+CONTRIBUTING = ""  # font-awesome share (community-pointer shape)
+CODE_OF_CONDUCT = ""
+SECURITY = ""      # material shield-lock
+
+[extensions]
+# Lowercased extension after the last `.`.
+
+# Cyrius ecosystem ↓
+cyr = ""           # codicons file-code — generic code file (no Cyrius-specific glyph in NF v3)
+tcyr = ""          # tests/*.tcyr — same shape; identifiable by suffix
+bcyr = ""          # benches/*.bcyr
+fcyr = ""          # fuzz/*.fcyr
+scyr = ""          # soak/*.scyr
+smcyr = ""         # smoke/*.smcyr
+cyml = ""          # devicon yaml — CYML is yaml-shaped
+cyx = ""           # cyrius-x bytecode
+
+# Common config formats ↓
+toml = ""          # devicon toml (gear-shape)
+yml = ""           # devicon yaml
+yaml = ""
+json = ""          # devicon json
+ini = ""           # font-awesome cog
+conf = ""
+env = ""           # material file-key
+
+# Documentation + text ↓
+md = ""            # material language-markdown
+markdown = ""
+rst = ""           # close enough
+txt = ""           # font-awesome file-alt
+adoc = ""
+
+# Web ↓
+html = ""          # devicon html5
+htm = ""
+css = ""           # devicon css3
+scss = ""          # devicon sass
+js = ""            # devicon javascript
+mjs = ""
+ts = ""            # devicon typescript
+tsx = ""           # devicon react (jsx/tsx convention)
+jsx = ""
+
+# Systems / lower-level ↓
+c = ""             # devicon c
+h = ""
+cpp = ""           # devicon c++
+hpp = ""
+rs = ""            # devicon rust
+go = ""            # devicon go
+zig = ""           # generic — no zig-specific glyph in baseline NF
+asm = ""
+s = ""             # ASM (.s)
+
+# Scripting ↓
+py = ""            # devicon python
+sh = ""            # material terminal
+bash = ""
+fish = ""
+zsh = ""
+lua = ""           # devicon lua
+rb = ""            # devicon ruby
+
+# Archives ↓
+tar = ""           # material zip-box
+gz = ""
+zip = ""
+xz = ""
+bz2 = ""
+7z = ""
+
+# Images ↓
+png = ""           # font-awesome file-image
+jpg = ""
+jpeg = ""
+gif = ""
+svg = ""
+webp = ""
+
+# Audio + video ↓
+mp3 = ""           # font-awesome file-audio
+wav = ""
+flac = ""
+mp4 = ""           # font-awesome file-video
+mkv = ""
+webm = ""
+
+# Data ↓
+csv = ""           # font-awesome file-excel
+xlsx = ""
+sql = ""           # font-awesome database
+db = ""
+sqlite = ""
+
+# Logs ↓
+log = ""           # font-awesome history
+
+# Lock / state ↓
+lock = ""          # font-awesome lock
+
+# === Reserved tables (documented to prevent future-conflict) ===
+# [regex]            — globbing is out of scope for v1.0
+# [icon_colors]      — per-icon color overrides; v1.1 candidate
+# [type_overrides]   — file-type glyphs (folder, link, ...);
+#                      hard-coded in src/icons.cyr for v1.0,
+#                      can be lifted into a [type_overrides]
+#                      table at runtime-CYML time

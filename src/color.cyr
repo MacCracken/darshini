@@ -34,19 +34,26 @@ fn color_for_mode(mode): i64 {
     return 0;
 }
 
-# Build a parallel vec<i64> of SGR codes for `entries` (Strs of
-# basenames, dir_str is the parent). Entries whose lstat fails
-# get color 0 (rendered uncolored). Symlinks pay an extra
-# `sys_stat` to detect broken targets — broken symlinks render
-# RED, live symlinks CYAN per ADR 0001.
+# Build per-entry "decoration" vecs for the listing of `entries`
+# (basenames inside `dir_str`):
+#   - colors vec: parallel vec<sgr_code> per ADR 0001 (or 0)
+#   - icons vec : parallel vec<cstr glyph bytes> per ADR 0002
+#                 (or 0 if stat failed)
+# Either vec is omitted if its want_ flag is 0; the returned
+# 16-byte struct stores 0 for the omitted slot.
 #
-# Caller responsibility: only invoke when want_color is true and
-# only pass the result to render fns that accept a non-zero
-# `colors` arg. Don't call this for the no-color path (it's the
-# expensive one).
-fn compute_colors(entries, dir_str): i64 {
+# Single lstat per entry — saves a pass vs computing color and
+# icon separately. Symlinks pay one extra `sys_stat` for broken-
+# target detection (only when want_color is on; the icon stays
+# the link glyph either way).
+#
+# Returns a 16-byte heap struct: {colors@0, icons@8}.
+fn compute_decor(entries, dir_str, want_color, want_icons): i64 {
+    var colors = 0;
+    var icons = 0;
+    if (want_color == 1) { colors = vec_new(); }
+    if (want_icons == 1) { icons = vec_new(); }
     var n = vec_len(entries);
-    var colors = vec_new();
     var i = 0;
     while (i < n) {
         var name = vec_get(entries, i);
@@ -54,34 +61,62 @@ fn compute_colors(entries, dir_str): i64 {
         var stat_buf = alloc(144);
         var rc = lstat_path(str_data(full), stat_buf);
         var c = 0;
+        var ic = 0;
         if (rc >= 0) {
             var mode = load32(stat_buf + STAT_MODE);
             var fmt = mode & S_IFMT;
-            if (fmt == S_IFLNK) {
-                # Follow to detect broken-symlink. sys_stat (not
-                # lstat) walks the symlink chain; ENOENT / ELOOP
-                # mean the target is unreachable.
-                var probe[144];
-                var rc2 = sys_stat(str_data(full), &probe);
-                if (rc2 < 0) { c = TTY_FG_RED; }
-                else { c = TTY_FG_CYAN; }
-            } else {
-                c = color_for_mode(mode);
+            if (want_color == 1) {
+                if (fmt == S_IFLNK) {
+                    # Follow to detect broken-symlink. sys_stat
+                    # (not lstat) walks the symlink chain; ENOENT
+                    # / ELOOP mean the target is unreachable.
+                    var probe[144];
+                    var rc2 = sys_stat(str_data(full), &probe);
+                    if (rc2 < 0) { c = TTY_FG_RED; }
+                    else { c = TTY_FG_CYAN; }
+                } else {
+                    c = color_for_mode(mode);
+                }
             }
+            if (want_icons == 1) { ic = icon_for_entry(name, mode); }
         }
-        vec_push(colors, c);
+        if (want_color == 1) { vec_push(colors, c); }
+        if (want_icons == 1) { vec_push(icons, ic); }
         i = i + 1;
     }
-    return colors;
+    var r = alloc(16);
+    store64(r, colors);
+    store64(r + 8, icons);
+    return r;
 }
 
-# Write `name` bytes to stdout, optionally wrapped in the SGR
-# pair `\x1b[<color>m ... \x1b[0m`. `color == 0` means write
-# plain — the caller doesn't need to branch. Three syscalls in
-# the colored path (set, payload, reset); one in the plain path.
-fn emit_colored(name, color): i64 {
+# Write `name` bytes to stdout, optionally prefixed by `icon`
+# (cstr glyph + space; ADR 0002 fixes the display-width budget
+# at 2 cells) and optionally wrapped in the SGR pair
+# `\x1b[<color>m ... \x1b[0m`. The SGR wrap envelopes icon +
+# space + name so the icon takes the name's color.
+#
+# `color == 0` skips the SGR; `icon == 0` skips the icon prefix
+# (and emits 2 spaces of padding when caller is in icon-mode but
+# this specific entry has no glyph — keeps column alignment).
+# `icon_width_pad` is 0 when icons are disabled globally; 2 when
+# icons are enabled but `icon` is 0 (preserves column alignment
+# for stat-failed entries).
+fn emit_decorated(name, color, icon, icon_width_pad): i64 {
     if (color != 0) { tty_sgr(color); }
+    if (icon != 0) {
+        sys_write(STDOUT_FD, icon, strlen(icon));
+        sys_write(STDOUT_FD, " ", 1);
+    } else { if (icon_width_pad > 0) {
+        sys_write(STDOUT_FD, "  ", 2);
+    } }
     sys_write(STDOUT_FD, str_data(name), str_len(name));
     if (color != 0) { tty_sgr_reset(); }
     return 0;
+}
+
+# Back-compat for callers that still want the no-icon path.
+# `colors`-only emit kept thin on top of emit_decorated.
+fn emit_colored(name, color): i64 {
+    return emit_decorated(name, color, 0, 0);
 }

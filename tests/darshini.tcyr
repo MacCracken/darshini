@@ -1,4 +1,4 @@
-# darshini test suite — M1 + M2 + M3 + M4.
+# darshini test suite — M1 + M2 + M3 + M4 + M5.
 # Stdlib auto-included via cyrius.cyml.
 #
 # M1 coverage (carried forward from v0.2.0):
@@ -21,8 +21,15 @@
 #
 # M4 coverage (new at v0.5.0):
 #   * color_for_mode — every file type → its ADR-0001 SGR code
+#
+# M5 coverage (new at v0.6.0):
+#   * icon_for_entry — each lookup-precedence rule
+#     (filename / prefix / type / extension / fallback)
+#   * pick_cols with icon_width > 0 — uniform shift in effective
+#     per-cell width
 
 include "src/walk.cyr"
+include "src/icons.cyr"
 include "src/color.cyr"
 include "src/render.cyr"
 include "src/columns.cyr"
@@ -219,13 +226,13 @@ fn main(): i64 {
     test_group("pick_cols");
     # Degenerate inputs: empty vec / single entry / zero width.
     var empty_v = vec_new();
-    assert_eq(pick_cols(empty_v, 80), 1, "empty vec -> 1 col");
+    assert_eq(pick_cols(empty_v, 80, 0), 1, "empty vec -> 1 col");
 
     var one_v = vec_new();
     vec_push(one_v, make_str("solo"));
-    assert_eq(pick_cols(one_v, 80), 1, "1 entry -> 1 col");
-    assert_eq(pick_cols(one_v, 0), 1, "tw=0 -> 1 col");
-    assert_eq(pick_cols(one_v, 0 - 5), 1, "tw<0 -> 1 col");
+    assert_eq(pick_cols(one_v, 80, 0), 1, "1 entry -> 1 col");
+    assert_eq(pick_cols(one_v, 0, 0), 1, "tw=0 -> 1 col");
+    assert_eq(pick_cols(one_v, 0 - 5, 0), 1, "tw<0 -> 1 col");
 
     # Five 5-char entries: "aaaaa".."eeeee". Per col needs 5+2=7 chars
     # (sep). 5 cols => 5*5 + 4*2 = 33 chars. Fits in 40 → 5 cols.
@@ -235,16 +242,16 @@ fn main(): i64 {
     vec_push(five, make_str("ccccc"));
     vec_push(five, make_str("ddddd"));
     vec_push(five, make_str("eeeee"));
-    assert_eq(pick_cols(five, 40), 5, "5x5 uniform fits 5 cols at tw=40");
+    assert_eq(pick_cols(five, 40, 0), 5, "5x5 uniform fits 5 cols at tw=40");
     # 33 is the minimum for 5 cols; at 32, 5 cols don't fit and
     # 4 cols would be a phantom layout (5 entries × 2 rows = only
     # 3 effective cols). Falls back to 3.
-    assert_eq(pick_cols(five, 32), 3, "5x5 at tw=32 -> 3 cols (4-col phantom rejected)");
+    assert_eq(pick_cols(five, 32, 0), 3, "5x5 at tw=32 -> 3 cols (4-col phantom rejected)");
     # tw=10 — only one 5-char col fits at a time (5 chars; 2-col
     # would need 5+2+5=12 > 10).
-    assert_eq(pick_cols(five, 10), 1, "5x5 at tw=10 -> 1 col");
+    assert_eq(pick_cols(five, 10, 0), 1, "5x5 at tw=10 -> 1 col");
     # tw=12 — 2 cols just fit (5+2+5=12).
-    assert_eq(pick_cols(five, 12), 2, "5x5 at tw=12 -> 2 cols");
+    assert_eq(pick_cols(five, 12, 0), 2, "5x5 at tw=12 -> 2 cols");
 
     # Jagged widths: one really long entry forces narrow layouts
     # even when the others are short.
@@ -257,18 +264,18 @@ fn main(): i64 {
     # tw=40 — 3 cols, 2 rows: col0=[a,b]max=1, col1=[long,c]max=30,
     # col2=[d]max=1. Total = 1+2+30+2+1 = 36 ≤ 40 → 3 cols.
     # 4-col attempt is rejected (phantom — 5 entries / 2 rows = 3 eff).
-    assert_eq(pick_cols(jag, 40), 3, "jagged at tw=40 -> 3 cols");
+    assert_eq(pick_cols(jag, 40, 0), 3, "jagged at tw=40 -> 3 cols");
     # tw=30 — even 1 col with 30-char widest needs 30 chars; fits 1 col.
-    assert_eq(pick_cols(jag, 30), 1, "jagged at tw=30 -> 1 col (widest entry alone)");
+    assert_eq(pick_cols(jag, 30, 0), 1, "jagged at tw=30 -> 1 col (widest entry alone)");
 
     test_group("_columns_total_width");
     # five at 5 cols, 1 row: total = 5*5 + 4*2 = 33
-    assert_eq(_columns_total_width(five, 5, 5, 1), 33, "five@5x1 -> 33");
+    assert_eq(_columns_total_width(five, 5, 5, 1, 0), 33, "five@5x1 -> 33");
     # five at 3 cols, 2 rows: col0={a,b}max=5, col1={c,d}max=5, col2={e}max=5.
     # total = 5+2+5+2+5 = 19
-    assert_eq(_columns_total_width(five, 5, 3, 2), 19, "five@3x2 -> 19");
+    assert_eq(_columns_total_width(five, 5, 3, 2, 0), 19, "five@3x2 -> 19");
     # five at 1 col, 5 rows: total = 5 (no separator on single col)
-    assert_eq(_columns_total_width(five, 5, 1, 5), 5, "five@1x5 -> 5");
+    assert_eq(_columns_total_width(five, 5, 1, 5, 0), 5, "five@1x5 -> 5");
 
     # 1k synthetic vec of 8-char names ("name0000", "name0001", ...).
     # Hand-computed for tw=80: 1 col=8, 2=18, 3=28, ..., 8=78, 9=88.
@@ -287,10 +294,10 @@ fn main(): i64 {
         vec_push(kilo, str_clone(str_from(nb)));
         ki = ki + 1;
     }
-    assert_eq(pick_cols(kilo, 80), 8, "1k uniform 8-char at tw=80 -> 8 cols");
-    assert_eq(pick_cols(kilo, 88), 9, "1k uniform 8-char at tw=88 -> 9 cols");
-    assert_eq(pick_cols(kilo, 200), 20, "1k uniform 8-char at tw=200 -> 20 cols");
-    assert_eq(pick_cols(kilo, 7), 1, "1k uniform 8-char at tw=7 -> 1 col (name itself > tw)");
+    assert_eq(pick_cols(kilo, 80, 0), 8, "1k uniform 8-char at tw=80 -> 8 cols");
+    assert_eq(pick_cols(kilo, 88, 0), 9, "1k uniform 8-char at tw=88 -> 9 cols");
+    assert_eq(pick_cols(kilo, 200, 0), 20, "1k uniform 8-char at tw=200 -> 20 cols");
+    assert_eq(pick_cols(kilo, 7, 0), 1, "1k uniform 8-char at tw=7 -> 1 col (name itself > tw)");
 
     # 100-entry vec, also uniform 8-char. Same fit math holds —
     # the # of entries shouldn't change col count for uniform widths.
@@ -308,8 +315,8 @@ fn main(): i64 {
         vec_push(hundred, str_clone(str_from(nb2)));
         hi = hi + 1;
     }
-    assert_eq(pick_cols(hundred, 80), 8, "100 uniform 8-char at tw=80 -> 8 cols");
-    assert_eq(pick_cols(hundred, 40), 4, "100 uniform 8-char at tw=40 -> 4 cols");
+    assert_eq(pick_cols(hundred, 80, 0), 8, "100 uniform 8-char at tw=80 -> 8 cols");
+    assert_eq(pick_cols(hundred, 40, 0), 4, "100 uniform 8-char at tw=40 -> 4 cols");
 
     # ============================================================
     # M4 — color picker (mode bits -> ADR-0001 SGR code)
@@ -341,6 +348,98 @@ fn main(): i64 {
     # (setuid without x is unusual; we don't promote color on it,
     # we only render the 'S' in the perm string).
     assert_eq(color_for_mode(0x89A4), 0, "regular setuid no-x -> 0 (no color)");
+
+    # ============================================================
+    # M5 — icon picker (lookup precedence per ADR 0002)
+    # ============================================================
+
+    test_group("icon_display_width");
+    assert_eq(icon_display_width(), 2, "fixed 2 cells per icon");
+
+    test_group("icon_for_entry");
+    # The picker returns cstr pointers — we don't assert exact
+    # glyph bytes (would couple tests to the codepoints), but we
+    # do assert which RULE fired by checking that two siblings
+    # with the same rule produce equal cstrs, and that a non-
+    # match-vs-match flips the pointer.
+
+    # Mode literals reused below.
+    var mode_dir  = 0x41ED;        # 0o040755 directory
+    var mode_reg  = 0x81A4;        # 0o100644 regular file
+    var mode_lnk  = 0xA1FF;        # 0o120777 symlink
+    var mode_fifo = 0x11A4;        # 0o010644 fifo
+
+    # Rule 1: exact-filename match — Makefile lookup beats the
+    # generic-regular-file fallback.
+    var icon_make = icon_for_entry(make_str("Makefile"), mode_reg);
+    var icon_dock = icon_for_entry(make_str("Dockerfile"), mode_reg);
+    var icon_lic  = icon_for_entry(make_str("LICENSE"), mode_reg);
+    var icon_ver  = icon_for_entry(make_str("VERSION"), mode_reg);
+    assert_neq(icon_make, 0, "Makefile resolves to a glyph");
+    assert_neq(icon_dock, 0, "Dockerfile resolves to a glyph");
+    assert_neq(icon_lic,  0, "LICENSE resolves to a glyph");
+    assert_neq(icon_ver,  0, "VERSION resolves to a glyph");
+    # Sibling filenames hit different glyphs (Makefile != Dockerfile).
+    assert_eq(streq(icon_make, icon_dock), 0, "Makefile glyph != Dockerfile glyph");
+
+    # Rule 2: filename prefix.
+    var icon_readme_md = icon_for_entry(make_str("README.md"), mode_reg);
+    var icon_readme    = icon_for_entry(make_str("README"), mode_reg);
+    assert_eq(streq(icon_readme, icon_readme_md), 1, "README & README.md → same prefix-rule glyph");
+    var icon_chlog = icon_for_entry(make_str("CHANGELOG.md"), mode_reg);
+    assert_eq(streq(icon_readme, icon_chlog), 0, "README != CHANGELOG glyph");
+
+    # Rule 3: file-type override. A directory named "foo.md"
+    # gets the folder glyph (not the markdown glyph). LICENSE
+    # gets its filename glyph even though it's a regular file
+    # (rule 1 fires before rule 3 — but no exact match for
+    # `Makefile`-typed directory; let's pick a different one to
+    # be precise).
+    var icon_dir_named_md = icon_for_entry(make_str("foo.md"), mode_dir);
+    var icon_reg_md       = icon_for_entry(make_str("foo.md"), mode_reg);
+    assert_eq(streq(icon_dir_named_md, icon_reg_md), 0, "dir 'foo.md' != reg 'foo.md' (type beats ext)");
+    var icon_dir_other = icon_for_entry(make_str("alpha"), mode_dir);
+    assert_eq(streq(icon_dir_named_md, icon_dir_other), 1, "all dirs share folder glyph");
+    # Symlink type override.
+    var icon_lnk = icon_for_entry(make_str("ptr"), mode_lnk);
+    assert_neq(icon_lnk, 0, "symlink gets link glyph");
+    assert_eq(streq(icon_lnk, icon_dir_other), 0, "symlink glyph != dir glyph");
+    var icon_fifo = icon_for_entry(make_str("pipe"), mode_fifo);
+    assert_neq(icon_fifo, 0, "fifo gets fifo glyph");
+
+    # Rule 4: extension. .cyr vs .md vs .py — each picks its own.
+    var icon_cyr = icon_for_entry(make_str("main.cyr"), mode_reg);
+    var icon_md  = icon_for_entry(make_str("README2.md"), mode_reg);  # avoids the README prefix rule
+    var icon_py  = icon_for_entry(make_str("script.py"), mode_reg);
+    assert_neq(icon_cyr, 0, ".cyr resolves");
+    assert_eq(streq(icon_cyr, icon_md), 0, ".cyr glyph != .md glyph");
+    assert_eq(streq(icon_md,  icon_py), 0, ".md glyph != .py glyph");
+    # Case-insensitive ext: MAIN.CYR matches .cyr.
+    var icon_cyr_upper = icon_for_entry(make_str("MAIN.CYR"), mode_reg);
+    assert_eq(streq(icon_cyr, icon_cyr_upper), 1, "ext lookup is case-insensitive");
+
+    # Rule 5: generic file fallback. No matching rule → generic
+    # glyph (non-zero). Two unmatched-ext entries get the same
+    # generic glyph.
+    var icon_unk1 = icon_for_entry(make_str("foo.xyzzy"), mode_reg);
+    var icon_unk2 = icon_for_entry(make_str("bar.qqq"), mode_reg);
+    assert_neq(icon_unk1, 0, "unknown ext gets generic glyph");
+    assert_eq(streq(icon_unk1, icon_unk2), 1, "two unknown exts share generic glyph");
+    # An extension-less name with no special handling also → generic.
+    var icon_noext = icon_for_entry(make_str("randomfile"), mode_reg);
+    assert_eq(streq(icon_noext, icon_unk1), 1, "no-ext also generic");
+
+    # M5 column-math interaction: icon_width shifts pick_cols
+    # uniformly. 5x5 uniform at tw=40 fits 5 cols without icons
+    # (33 chars); with icon_width=2 each cell needs +2, total
+    # = 5*5 + 4*2 + 5*2 = 43 > 40, so falls to 3 cols.
+    test_group("pick_cols + icon_width");
+    assert_eq(pick_cols(five, 40, 0), 5, "5x5 tw=40 no-icons -> 5 cols");
+    assert_eq(pick_cols(five, 40, 2), 3, "5x5 tw=40 icon_width=2 -> 3 cols");
+    assert_eq(pick_cols(five, 60, 2), 5, "5x5 tw=60 icon_width=2 -> still 5 cols");
+    # _columns_total_width with icon_width=2 adds cols*2.
+    assert_eq(_columns_total_width(five, 5, 5, 1, 2), 43, "five@5x1 icon_width=2 -> 33 + 10 = 43");
+    assert_eq(_columns_total_width(five, 5, 3, 2, 2), 25, "five@3x2 icon_width=2 -> 19 + 6 = 25");
 
     return assert_summary();
 }

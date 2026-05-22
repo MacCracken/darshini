@@ -45,7 +45,7 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-Pre-1.0. v0.5.0 — M1 + M2 + M3 + M4 shipped:
+Pre-1.0. v0.6.0 — M1 + M2 + M3 + M4 + M5 shipped:
 
 - M1: basic listing — `darshini` / `darshini <path>`,
   case-insensitive alphabetical, error-discriminated.
@@ -59,9 +59,14 @@ Pre-1.0. v0.5.0 — M1 + M2 + M3 + M4 shipped:
   cyan (broken red), fifos yellow, etc. (palette frozen in
   [ADR 0001](docs/adr/0001-color-scheme.md)). `--no-color`
   forces plain. Pipe → no escapes, automatically.
+- M5: per-entry icons — Nerd Font glyphs per file type / name /
+  extension. Schema in
+  [ADR 0002](docs/adr/0002-icon-format.md);
+  human-readable mapping in `icons/default.cyml`.
+  `--no-icons` for terminals without Nerd Fonts.
 
-No icons, git column or tree mode yet — M5–M7. Linux x86_64
-only through v1.0; other platforms post-v1.
+No git column or tree mode yet — M6–M7. Linux x86_64 only
+through v1.0; other platforms post-v1.
 
 ## Build
 

@@ -45,39 +45,47 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-Pre-1.0. v0.8.0 — M1 + M2 + M3 + M4 + M5 + M6 + M7 shipped:
+**v1.0.0 stable.** Flag surface frozen
+([ADR 0001](docs/adr/0001-color-scheme.md) /
+[0002](docs/adr/0002-icon-format.md) /
+[0003](docs/adr/0003-mime-detection.md) /
+[0004](docs/adr/0004-tree-mode.md));
+pre-v1 [audit cleared](docs/audit/2026-05-23-audit.md)
+2026-05-23. Linux x86_64 only through 1.x; other platforms
+post-v1.
 
-- M1: basic listing — `darshini` / `darshini <path>`,
+Feature surface:
+
+- **Basic listing** — `darshini` / `darshini <path>`,
   case-insensitive alphabetical, error-discriminated.
-- M2: long format — `darshini -l` / `-lh` / `-l <file>`,
-  aligned 4-column `permissions size mtime name`, UTC.
-- M3: multi-column auto-layout — bare `darshini` on a TTY
-  packs entries into the widest fit (vertical-then-horizontal).
-  `darshini -1` forces single-column. `darshini | cat` (pipe)
-  is single-column automatically.
-- M4: per-entry color — dirs blue, executables green, symlinks
-  cyan (broken red), fifos yellow, etc. (palette frozen in
-  [ADR 0001](docs/adr/0001-color-scheme.md)). `--no-color`
-  forces plain. Pipe → no escapes, automatically.
-- M5: per-entry icons — Nerd Font glyphs per file type / name /
-  extension. Schema in
-  [ADR 0002](docs/adr/0002-icon-format.md);
-  human-readable mapping in `icons/default.cyml`.
-  `--no-icons` for terminals without Nerd Fonts.
-- M6: tree mode — `darshini -T` / `-T --level N` / `-lT`.
-  Standard box-drawing connectors. Composes with the long
-  format + color + icons. Doesn't follow symlinks-to-dirs.
-- M7: `--git` status column — `.`/`M`/`?`/`!` per entry,
-  read directly from `.git/index` v2 + `.gitignore` (no
-  `git` subprocess). Silent skip outside a repo.
-- M8: `--mime` type column — `text/markdown`,
-  `application/x-cyrius`, `application/x-executable`, etc.
-  Schema in [ADR 0003](docs/adr/0003-mime-detection.md);
-  human-readable mapping in `mime/default.cyml`. Shown
-  only under `-l`.
+- **Long format** (`-l` / `-lh` / `-l <file>`) — aligned
+  4-column `permissions size mtime name`, UTC.
+- **Multi-column auto-layout** — bare `darshini` on a TTY
+  packs entries into the widest fit
+  (vertical-then-horizontal); `-1` forces single-column;
+  pipe is single-column automatically.
+- **Per-entry color** — dirs blue, executables green,
+  symlinks cyan (broken red), fifos yellow, etc.
+  `--no-color` forces plain.
+- **Per-entry icons** — Nerd Font glyphs per file type /
+  name / extension; human-readable mapping in
+  `icons/default.cyml`. `--no-icons` for terminals
+  without a Nerd Font.
+- **Tree mode** (`-T` / `-T --level N` / `-lT`) —
+  standard box-drawing connectors; composes with long +
+  color + icons; doesn't follow symlinks-to-dirs.
+- **`--git` status column** — `.`/`M`/`?`/`!` per entry,
+  read directly from `.git/index` v2 + `.gitignore`
+  (no `git` subprocess). Silent skip outside a repo.
+- **`--mime` type column** — `text/markdown`,
+  `application/x-cyrius`, `application/x-executable`,
+  etc; human-readable mapping in `mime/default.cyml`.
+  Shown only under `-l`.
 
-Pre-v1 hardening (M9) + freeze (M10) still ahead. Linux
-x86_64 only through v1.0; other platforms post-v1.
+v1.1+ candidates: `-F` / `-d` flags (full eza retirement),
+mtime localization, merge-sort upgrade for sort_entries
+worst-case, hashmap upgrade for git tracked-set lookup.
+See [state.md → Next](docs/development/state.md).
 
 ## Build
 

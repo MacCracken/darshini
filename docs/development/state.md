@@ -5,10 +5,12 @@
 
 ## Version
 
-**0.9.1** — M9 (pre-v1 audit + bench baseline + ADR
-back-fill) shipped 2026-05-23. M1–M8 (v0.2.0 → v0.9.0)
-shipped earlier 2026-05-22/23. Scaffolded as **0.1.0** on
-2026-05-19 via `cyrius init darshini`.
+**1.0.0** — M10 (v1.0 freeze) shipped 2026-05-23. CLI flag
+surface frozen per ADR 0001 / 0002 / 0003 / 0004. M9
+(v0.9.1) shipped the audit + bench baseline + ADR 0004
+back-fill earlier same day. M1–M8 (v0.2.0 → v0.9.0)
+shipped 2026-05-22/23. Scaffolded as **0.1.0** on 2026-05-19
+via `cyrius init darshini`.
 
 ## Toolchain
 
@@ -64,7 +66,7 @@ M9+ onward fills:
 | `--git` status column | M7 | **shipped** (v0.8.0) |
 | `--mime` recognition | M8 | **shipped** (v0.9.0) |
 | Pre-v1 audit + bench baseline | M9 | **shipped** (v0.9.1) |
-| v1.0.0 freeze | M10 | pending |
+| v1.0.0 freeze | M10 | **shipped** (v1.0.0) |
 
 ## Tests
 
@@ -99,20 +101,27 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-M10 — v1.0.0 freeze. No behavior changes; only:
-- VERSION → 1.0.0.
-- CHANGELOG `[1.0.0]` with a `Breaking` note declaring
-  the flag surface frozen per
-  [ADR 0001](../adr/0001-color-scheme.md) /
-  [ADR 0002](../adr/0002-icon-format.md) /
-  [ADR 0003](../adr/0003-mime-detection.md) /
-  [ADR 0004](../adr/0004-tree-mode.md).
-- README status block → "v1.0.0 stable".
-- Git tag + release via the existing CI gate
-  (`workflow_call` wired).
+v1.x maintenance + v1.1 enhancement backlog. From the
+[2026-05-23 audit](../audit/2026-05-23-audit.md) Step 5
+findings and the M10 release notes:
 
-See the [2026-05-23 audit](../audit/2026-05-23-audit.md)
-"Verdict" section for the freeze checklist.
+- **`sort_entries` merge-sort upgrade** — eliminates the
+  O(N²) worst case (36 ms@1k reversed per the bench
+  baseline). Worth doing when a user hits the case.
+- **`git_status_for` hashmap** — linear-scan goes quadratic
+  for repos > ~5k tracked files.
+- **`-F` (classify) + `-d` (list-dir-as-self)** flags —
+  surfaced by the maintainer's dotfile migration (would
+  retire the remaining `eza` aliases `lfiles`, `llfiles`,
+  `ldir`, `lldir`).
+- **mtime localization** — keep UTC default; add an
+  opt-in flag for local time per the M2 notes.
+- **Platform support** — aarch64 Linux, then macOS / BSD /
+  Windows. The arch-specific sites are already documented
+  in this file's "Known gotchas" section.
+
+Non-roadmap items remain non-breaking additions per the M10
+freeze contract.
 
 ## Known gotchas
 

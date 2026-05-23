@@ -4,6 +4,60 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.0] — M10: v1.0 freeze
+
+### Breaking
+
+The **CLI flag surface is now frozen**. Future releases under
+the 1.x line will not change the meaning, removal, or
+default-on-or-off behavior of any of:
+
+- `-l` / `-h` / `-1` / `-T` / `--tree` / `--level N`
+- `--git` / `--mime` / `--no-color` / `--no-icons`
+
+Frozen behaviors per ADR:
+- Color palette + per-file-type assignment —
+  [ADR 0001](docs/adr/0001-color-scheme.md)
+- Icon glyph schema + lookup precedence —
+  [ADR 0002](docs/adr/0002-icon-format.md)
+- Mime detection precedence + magic-byte set —
+  [ADR 0003](docs/adr/0003-mime-detection.md)
+- Tree-mode connector charset + composition rules —
+  [ADR 0004](docs/adr/0004-tree-mode.md)
+
+Frozen defaults:
+- Pipe-aware: stdout-not-a-TTY suppresses columns / color /
+  icons / mime automatically.
+- Case-insensitive alphabetical sort, locale-free.
+- mtime in UTC under `-l` (post-v1 will add localization
+  without breaking the UTC default).
+- Symlink-to-dir not followed under `-T`.
+
+Adding new flags is non-breaking. Changing the meaning of any
+existing flag is a breaking change requiring a 2.x bump.
+
+### Added
+
+- v1.0.0 release notes (this entry) — declares the freeze.
+
+### Notes
+
+- No source changes vs v0.9.1. The freeze IS the contract
+  change per Keep-a-Changelog rationale.
+- Platforms — Linux x86_64 only through 1.x. Other platforms
+  remain post-v1 (separate version line, not blocked on this
+  freeze).
+- Three minor findings from the [2026-05-23 audit](docs/audit/2026-05-23-audit.md)
+  remain on the v1.1+ enhancement backlog
+  (`sort_entries` merge-sort upgrade, git tracked-set hashmap,
+  per-listing alloc-arena reset). None block v1.0.
+- v1.1 candidates surfaced from the maintainer's dotfile
+  migration: `-F` (classify) and `-d` (list-dir-as-self) to
+  retire the remaining `eza` aliases (`lfiles`, `llfiles`,
+  `ldir`, `lldir`).
+- v1.1 candidate from M2 notes: mtime localization without
+  losing the UTC default.
+
 ## [0.9.1] — M9: pre-v1 audit sweep
 
 ### Added

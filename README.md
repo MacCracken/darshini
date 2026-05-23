@@ -45,15 +45,17 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-**v1.1.0 stable.** v1.0 contract frozen
+**v1.1.1 stable.** v1.0 contract frozen
 ([ADR 0001](docs/adr/0001-color-scheme.md) /
 [0002](docs/adr/0002-icon-format.md) /
 [0003](docs/adr/0003-mime-detection.md) /
 [0004](docs/adr/0004-tree-mode.md));
 pre-v1 [audit cleared](docs/audit/2026-05-23-audit.md)
 2026-05-23. v1.1 adds `--help` / `--version` / `-F` / `-d`
-plus merge-sort + git-hashmap upgrades (all non-breaking
-under the M10 freeze). Linux x86_64 only through 1.x.
+plus merge-sort + git-hashmap upgrades; v1.1.1 adds
+multi-path argv (`darshini dir1 dir2 dir3`). All v1.1.x
+additions non-breaking under the M10 freeze. Linux x86_64
+only through 1.x.
 
 Feature surface:
 
@@ -87,11 +89,15 @@ Feature surface:
   `=` socket.
 - **`-d` list-dir-as-self** — emit the path as a single
   entry instead of listing its contents.
+- **Multi-path** — `darshini dir1 dir2 dir3`. Errors first,
+  then non-dirs (one section, no header), then dirs (each
+  with `path:` header + blank between). Composes with all
+  format flags.
 - **`--help` / `--version`** — standard meta flags.
 
-v1.2+ candidates: mtime localization, multi-path argv,
-post-v1 platforms (aarch64 Linux then macOS / BSD /
-Windows). See [state.md → Next](docs/development/state.md).
+v1.2+ candidates: mtime localization, post-v1 platforms
+(aarch64 Linux then macOS / BSD / Windows). See
+[state.md → Next](docs/development/state.md).
 
 ## Build
 

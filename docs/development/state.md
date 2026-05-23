@@ -5,13 +5,12 @@
 
 ## Version
 
-**1.1.0** — v1.1 backlog burndown shipped 2026-05-23.
-Adds `--help` / `--version` / `-F` / `-d`; upgrades
-`sort_entries` to merge-sort (56× worst-case faster) +
-`_git_find_tracked` to hashmap. Non-breaking under the
-M10 freeze. v1.0.0 froze the contract earlier same day;
+**1.1.1** — multi-path argv shipped 2026-05-23. Same day as
+v1.1.0 (`--help` / `--version` / `-F` / `-d` + merge-sort +
+git hashmap). v1.0.0 froze the contract earlier same day;
 M1–M9 shipped 2026-05-22/23. Scaffolded as **0.1.0** on
-2026-05-19 via `cyrius init darshini`.
+2026-05-19 via `cyrius init darshini`. Non-breaking under
+the M10 freeze.
 
 ## Toolchain
 
@@ -69,6 +68,7 @@ M9+ onward fills:
 | Pre-v1 audit + bench baseline | M9 | **shipped** (v0.9.1) |
 | v1.0.0 freeze | M10 | **shipped** (v1.0.0) |
 | v1.1: `--help` / `--version` / `-F` / `-d` + merge-sort + git hashmap | v1.1 | **shipped** (v1.1.0) |
+| v1.1.1: multi-path argv (full eza alias retirement) | v1.1.1 | **shipped** (v1.1.1) |
 
 ## Tests
 
@@ -103,13 +103,10 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-v1.2 backlog (per user direction post-v1.1):
+v1.2 backlog (per user direction post-v1.1.1):
 
 - **mtime localization** — keep UTC default; add an opt-in
   flag for local time per the M2 notes.
-- **Multi-path argv** — `darshini dir1 dir2 ...`. Would
-  retire the maintainer's last two eza aliases
-  (`ldir` / `lldir` which use shell-glob `*/`).
 - **Platform support** — aarch64 Linux first, then macOS /
   BSD / Windows. Arch-specific sites enumerated below in
   "Known gotchas".

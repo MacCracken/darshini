@@ -54,7 +54,7 @@ fn emit_unknown_flag(arg): i64 {
 # in lockstep with VERSION on every release. Pure cstr —
 # `--version` writes this then a newline.
 fn _darshini_version_str(): i64 {
-    return "darshini 1.1.0";
+    return "darshini 1.1.1";
 }
 
 fn emit_help(): i64 {
@@ -123,18 +123,17 @@ fn _parse_pos_int(cstr): i64 {
     return v;
 }
 
-# Parse argv into (long, human, single, no_color, no_icons, tree,
-# level, path_cstr). Returns 0 on success, 1 on error. Outputs
-# land via pointer-out args so the caller can keep them on the stack.
+# Parse argv. Flag outputs land via the pointer-out args; the
+# `out_paths` arg is a caller-allocated `vec<cstr>` that we
+# push positional args onto. Returns 0 on success, 1 on error,
+# 2 on success-but-already-handled (--help / --version).
 #
 # Supports bundled short flags (`-lh1T`). A bare `-` is treated
-# as positional. Multiple positional paths are rejected. Long-form
-# flags through v0.7.0: `--no-color`, `--no-icons`, `--tree`,
-# `--level N` (value in the NEXT argv slot — same shape as
-# `tree --level N` / `eza --level N`). M7 / M8 add `--git` and
-# `--mime`.
+# as positional. v1.1.1 added multi-path: any number of
+# positional args are accepted; main loops over them. Empty
+# positional vec → main uses "." as the single default.
 fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons,
-             out_tree, out_level, out_git, out_mime, out_classify, out_dir, out_path): i64 {
+             out_tree, out_level, out_git, out_mime, out_classify, out_dir, out_paths): i64 {
     var n = argc();
     var lflag = 0;
     var hflag = 0;
@@ -147,8 +146,6 @@ fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons,
     var mflag = 0;
     var fflag = 0;
     var dflag = 0;
-    var path_cstr = ".";
-    var path_seen = 0;
     var i = 1;
     var failed = 0;
     while (i < n) {
@@ -198,21 +195,12 @@ fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons,
                 }
             } } }
             if (first != 45) {
-                if (path_seen == 1) {
-                    print_cstr_fd(STDERR_FD, "darshini: multiple paths not supported\n");
-                    failed = 1;
-                } else {
-                    path_cstr = arg;
-                    path_seen = 1;
-                }
+                vec_push(out_paths, arg);
             } else { if (second == 0) {
-                if (path_seen == 1) {
-                    print_cstr_fd(STDERR_FD, "darshini: multiple paths not supported\n");
-                    failed = 1;
-                } else {
-                    path_cstr = arg;
-                    path_seen = 1;
-                }
+                # Bare `-` is positional (matches ls; the
+                # user can literally `darshini -` to list
+                # an entry literally named `-`).
+                vec_push(out_paths, arg);
             } }
         }
         i = i + 1;
@@ -228,7 +216,6 @@ fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons,
     store64(out_mime, mflag);
     store64(out_classify, fflag);
     store64(out_dir, dflag);
-    store64(out_path, path_cstr);
     return failed;
 }
 
@@ -333,6 +320,106 @@ fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_ico
     return 0;
 }
 
+# v1.1.1 multi-path orchestrator. Per-path dispatch follows
+# ls(1) ordering: errors → non-dirs (one section, no header) →
+# dirs (each with `<path>:` header when more than one path is
+# present, blank line between sections). `-d` short-circuits
+# the file/dir split (each path is rendered as a single entry,
+# no headers, no blanks). `-T` mode emits each tree with a
+# blank line between (tree's root line already names the path).
+fn run_all(paths, want_long, want_human, want_single, want_no_color, want_no_icons,
+           want_tree, level, want_git, want_mime, want_classify, want_dir): i64 {
+    var n = vec_len(paths);
+    if (n == 0) { vec_push(paths, "."); n = 1; }
+    var any_failed = 0;
+
+    # -d: each path is one entry; no headers, no blanks.
+    if (want_dir == 1) {
+        var i = 0;
+        while (i < n) {
+            var rc = run(vec_get(paths, i), want_long, want_human, want_single, want_no_color,
+                         want_no_icons, want_tree, level, want_git, want_mime, want_classify, 1);
+            if (rc != 0) { any_failed = 1; }
+            i = i + 1;
+        }
+        return any_failed;
+    }
+
+    # -T: each tree gets a blank line between (tree's root line
+    # already names the path so no extra header needed).
+    if (want_tree == 1) {
+        var i = 0;
+        while (i < n) {
+            if (i > 0) { sys_write(STDOUT_FD, "\n", 1); }
+            var rc = run(vec_get(paths, i), want_long, want_human, want_single, want_no_color,
+                         want_no_icons, want_tree, level, want_git, want_mime, want_classify, 0);
+            if (rc != 0) { any_failed = 1; }
+            i = i + 1;
+        }
+        return any_failed;
+    }
+
+    # Normal mode: pre-classify so we know who's a dir vs not.
+    var classes = vec_new();
+    var i = 0;
+    while (i < n) {
+        vec_push(classes, classify_path(vec_get(paths, i)));
+        i = i + 1;
+    }
+    var dir_count = 0;
+    i = 0;
+    while (i < n) {
+        if (vec_get(classes, i) == 1) { dir_count = dir_count + 1; }
+        i = i + 1;
+    }
+    # Headers needed when: >1 dir, or any dirs alongside any non-dirs.
+    var need_dir_headers = 0;
+    if (dir_count > 1) { need_dir_headers = 1; }
+    if (dir_count >= 1) { if (n > dir_count) { need_dir_headers = 1; } }
+
+    # Pass 1: errors + non-dirs (argv order, no headers).
+    var pass1_emitted = 0;
+    i = 0;
+    while (i < n) {
+        var p = vec_get(paths, i);
+        var c = vec_get(classes, i);
+        if (c < 0) {
+            run(p, want_long, want_human, want_single, want_no_color, want_no_icons,
+                want_tree, level, want_git, want_mime, want_classify, 0);
+            any_failed = 1;
+            pass1_emitted = 1;
+        } else { if (c == 0) {
+            var rc = run(p, want_long, want_human, want_single, want_no_color, want_no_icons,
+                         want_tree, level, want_git, want_mime, want_classify, 0);
+            if (rc != 0) { any_failed = 1; }
+            pass1_emitted = 1;
+        } }
+        i = i + 1;
+    }
+
+    # Pass 2: dirs with optional header + blank between.
+    var first_dir = 1;
+    i = 0;
+    while (i < n) {
+        var p = vec_get(paths, i);
+        var c = vec_get(classes, i);
+        if (c == 1) {
+            if (first_dir == 0) { sys_write(STDOUT_FD, "\n", 1); }
+            else { if (pass1_emitted == 1) { sys_write(STDOUT_FD, "\n", 1); } }
+            first_dir = 0;
+            if (need_dir_headers == 1) {
+                print_cstr_fd(STDOUT_FD, p);
+                sys_write(STDOUT_FD, ":\n", 2);
+            }
+            var rc = run(p, want_long, want_human, want_single, want_no_color, want_no_icons,
+                         want_tree, level, want_git, want_mime, want_classify, 0);
+            if (rc != 0) { any_failed = 1; }
+        }
+        i = i + 1;
+    }
+    return any_failed;
+}
+
 fn main(): i64 {
     alloc_init();
     args_init();
@@ -347,15 +434,15 @@ fn main(): i64 {
     var want_mime = 0;
     var want_classify = 0;
     var want_dir = 0;
-    var path_cstr = 0;
+    var paths = vec_new();
     var rc = parse_cli(&want_long, &want_human, &want_single, &want_no_color, &want_no_icons,
-                       &want_tree, &level, &want_git, &want_mime, &want_classify, &want_dir, &path_cstr);
+                       &want_tree, &level, &want_git, &want_mime, &want_classify, &want_dir, paths);
     # rc=2 means parse_cli already handled --help / --version
     # and we should exit 0 without running a listing.
     if (rc == 2) { return 0; }
     if (rc != 0) { return 1; }
-    return run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_icons,
-               want_tree, level, want_git, want_mime, want_classify, want_dir);
+    return run_all(paths, want_long, want_human, want_single, want_no_color, want_no_icons,
+                   want_tree, level, want_git, want_mime, want_classify, want_dir);
 }
 
 var r = main();

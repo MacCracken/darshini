@@ -98,13 +98,36 @@ jobs:
           test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
           echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }
 
+      - name: Smoke — multi-path: dirs get headers + blanks between
+        # v1.1.1 contract. Two-dir invocation produces a
+        # `src:` header, blank line, then `tests:` header.
+        # Single-path invocation MUST NOT emit any header
+        # (byte-identical to v1.1.0 for back-compat).
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} src tests > /tmp/multi
+          grep -q "^src:$" /tmp/multi \
+            || { echo "no 'src:' header in multi-path output:"; cat /tmp/multi; exit 1; }
+          grep -q "^tests:$" /tmp/multi \
+            || { echo "no 'tests:' header in multi-path output:"; cat /tmp/multi; exit 1; }
+          ./build/${{ github.event.repository.name }} src > /tmp/single
+          if grep -q "^src:$" /tmp/single; then
+            echo "single-path leaked a header (regression vs v1.1.0):"
+            cat /tmp/single
+            exit 1
+          fi
+          # `-d` multi-path: no headers, one line per path.
+          out=$(./build/${{ github.event.repository.name }} -d src tests | tr '\n' ' ')
+          test "$out" = "src tests " \
+            || { echo "-d multi-path mismatch: '$out'"; exit 1; }
+
       - name: Smoke — --help / --version exit 0 with expected output
         # v1.1 contract: both meta flags exit 0 + print to stdout.
         # --version output is exactly "darshini X.Y.Z\n".
         run: |
           set -e
           out=$(./build/${{ github.event.repository.name }} --version)
-          test "$out" = "darshini 1.1.0" || { echo "--version mismatch: $out"; exit 1; }
+          test "$out" = "darshini 1.1.1" || { echo "--version mismatch: $out"; exit 1; }
           ./build/${{ github.event.repository.name }} --help > /tmp/help
           grep -q "^usage: darshini" /tmp/help \
             || { echo "--help missing usage line:"; cat /tmp/help; exit 1; }

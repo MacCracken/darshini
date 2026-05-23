@@ -4,6 +4,60 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.1] — v1.1.1: multi-path argv
+
+### Added
+
+- **Multi-path argv** — `darshini path1 path2 path3 ...`. Per
+  path classification + ls(1)-style ordering:
+  1. Errors are emitted to stderr (process continues + exits 1).
+  2. Non-directory paths render together in argv order, no
+     header.
+  3. Directory paths each get a `<path>:` header (when more
+     than one path is in play) and a blank line between
+     sections.
+- `-d` short-circuits the file/dir split: each path renders as
+  a single entry, no headers, no blanks. With `-F` adds the
+  trailing `/`. Retires the maintainer's `ldir` / `lldir`
+  shell-glob aliases — `darshini -d */` and
+  `darshini -ld */` now both work.
+- `-T` per-path tree with a blank line between trees (the
+  tree's root line already names the path, so no extra header).
+- Single-path invocations are byte-identical to v1.1.0 — no
+  header, no behavior shift.
+
+### Changed
+
+- `parse_cli` now populates a caller-allocated `vec<cstr>` of
+  positional args instead of writing a single `out_path`. Empty
+  vec → `run_all` defaults to `"."`.
+- Exit code propagation: partial-failure (one path errors, others
+  succeed) returns 1. Matches `ls` behavior.
+
+### Dotfile retirement complete
+
+The maintainer's `~/.config/zsh/.aliases.zsh` migration: all
+six original eza aliases now run through darshini.
+
+- `ll = darshini -l --git`
+- `l = darshini`
+- `lfiles = darshini -F`
+- `llfiles = darshini -lF --git`
+- `ldir = darshini -d */` (was `eza -d */`)
+- `lldir = darshini -ld */` (was `eza -ld */`)
+
+### Notes
+
+- Multi-path support was originally slated for v1.2 alongside
+  mtime localization + platform work; pulled forward this
+  release to close the dotfile-migration story.
+- Tests stayed at 233/233 (unit tests don't touch the
+  per-path orchestrator; multi-path covered by new CI smoke).
+- v1.2 backlog now: mtime localization + post-v1 platforms
+  (aarch64 Linux → macOS / BSD / Windows). Other items
+  remain on the v1.2+ perf-candidates list per
+  [docs/benchmarks.md](docs/benchmarks.md).
+
 ## [1.1.0] — v1.1: backlog burndown
 
 Pure additions + internal upgrades, all non-breaking under the

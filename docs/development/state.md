@@ -5,9 +5,10 @@
 
 ## Version
 
-**0.9.0** — M8 (`--mime` column) shipped 2026-05-23.
-M1–M7 (v0.2.0 → v0.8.0) shipped earlier 2026-05-22/23.
-Scaffolded as **0.1.0** on 2026-05-19 via `cyrius init darshini`.
+**0.9.1** — M9 (pre-v1 audit + bench baseline + ADR
+back-fill) shipped 2026-05-23. M1–M8 (v0.2.0 → v0.9.0)
+shipped earlier 2026-05-22/23. Scaffolded as **0.1.0** on
+2026-05-19 via `cyrius init darshini`.
 
 ## Toolchain
 
@@ -62,6 +63,8 @@ M9+ onward fills:
 | `-T` / `--tree` | M6 | **shipped** (v0.7.0) |
 | `--git` status column | M7 | **shipped** (v0.8.0) |
 | `--mime` recognition | M8 | **shipped** (v0.9.0) |
+| Pre-v1 audit + bench baseline | M9 | **shipped** (v0.9.1) |
+| v1.0.0 freeze | M10 | pending |
 
 ## Tests
 
@@ -96,15 +99,20 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next ship is M9 (P(-1)
-hardening + dogfooding + audit doc), targeting v0.9.x.
-Per CLAUDE.md P(-1) process: `cyrius build` / `lint` /
-test pass, bench baseline in `docs/benchmarks.md`,
-internal review (directory-walk bounds, stat error
-handling, output buffer sizing), external research on
-what to deliberately NOT port from eza, security audit
-filed in `docs/audit/YYYY-MM-DD-audit.md`. Then M10
-(v1.0.0 freeze).
+M10 — v1.0.0 freeze. No behavior changes; only:
+- VERSION → 1.0.0.
+- CHANGELOG `[1.0.0]` with a `Breaking` note declaring
+  the flag surface frozen per
+  [ADR 0001](../adr/0001-color-scheme.md) /
+  [ADR 0002](../adr/0002-icon-format.md) /
+  [ADR 0003](../adr/0003-mime-detection.md) /
+  [ADR 0004](../adr/0004-tree-mode.md).
+- README status block → "v1.0.0 stable".
+- Git tag + release via the existing CI gate
+  (`workflow_call` wired).
+
+See the [2026-05-23 audit](../audit/2026-05-23-audit.md)
+"Verdict" section for the freeze checklist.
 
 ## Known gotchas
 

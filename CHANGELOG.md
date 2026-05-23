@@ -4,6 +4,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.1] — M9: pre-v1 audit sweep
+
+### Added
+- [`docs/audit/2026-05-23-audit.md`](docs/audit/2026-05-23-audit.md)
+  — full P(-1) hardening pass: cleanliness sweep, internal
+  code review (var-buf sizing, syscall error paths, path
+  traversal, external-format parser robustness, allocation
+  patterns, integer overflow), external research (eza
+  feature catalog with deliberate-omission decisions),
+  documentation audit. 0 critical / 0 major / 3 minor
+  findings — all accepted as v1.1+ enhancements.
+- [`docs/benchmarks.md`](docs/benchmarks.md) — bench
+  baseline captured at v0.9.0. Typical-listing total
+  ~120 µs algorithmic + ~300-500 µs stat I/O. Worst-case
+  1k-reverse `sort_entries` 36 ms (flagged as v1.1
+  optimization candidate).
+- `tests/darshini.bcyr` — real benchmark suite replacing
+  the M0 noop stub. 10 benches across `sort_entries`
+  (best/worst), `pick_cols`, `color_for_mode`,
+  `icon_for_entry`, `mime_for_entry`. Reproducible via
+  `cyrius bench tests/darshini.bcyr`.
+- [`docs/adr/0004-tree-mode.md`](docs/adr/0004-tree-mode.md)
+  — back-filled per CLAUDE.md P(-1) "tree-mode ADR"
+  requirement. Documents the connector charset, recursion
+  contract, composition rules with `-l` / `--git` /
+  `--mime`, and the alternatives-considered list.
+
+### Notes
+- No source changes — audit was read-only review + docs.
+- v0.9.1 is the pre-freeze checkpoint. v1.0.0 is the
+  contract-freeze tag with no behavior changes.
+
 ## [0.9.0] — M8: `--mime` type column
 
 ### Added

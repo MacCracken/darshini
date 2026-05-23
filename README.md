@@ -45,7 +45,7 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-**v1.1.1 stable.** v1.0 contract frozen
+**v1.1.2 stable.** v1.0 contract frozen
 ([ADR 0001](docs/adr/0001-color-scheme.md) /
 [0002](docs/adr/0002-icon-format.md) /
 [0003](docs/adr/0003-mime-detection.md) /
@@ -53,7 +53,9 @@ Second member of the terminal-aesthetics set:
 pre-v1 [audit cleared](docs/audit/2026-05-23-audit.md)
 2026-05-23. v1.1 adds `--help` / `--version` / `-F` / `-d`
 plus merge-sort + git-hashmap upgrades; v1.1.1 adds
-multi-path argv (`darshini dir1 dir2 dir3`). All v1.1.x
+multi-path argv; v1.1.2 ships the hot-path optimizations
+from the [bench baseline](docs/benchmarks.md) (hybrid sort
++ pick_cols early-out + path_join buf reuse). All v1.1.x
 additions non-breaking under the M10 freeze. Linux x86_64
 only through 1.x.
 
@@ -102,11 +104,66 @@ v1.2+ candidates: mtime localization, post-v1 platforms
 ## Build
 
 ```sh
-cyrius deps                                # resolve stdlib
-cyrius build src/main.cyr build/darshini   # compile
-./build/darshini                            # prints scaffold version line
-cyrius test                                 # run tests/*.tcyr
+cyrius deps                                  # resolve stdlib + darshana
+cyrius build src/main.cyr build/darshini     # compile
+./build/darshini                              # list the current directory
+cyrius test                                   # run tests/*.tcyr (233 assertions)
+cyrius bench tests/darshini.bcyr              # run perf benches
 ```
+
+Requires the [Cyrius](https://github.com/MacCracken/cyrius)
+toolchain on PATH; the version is pinned in `cyrius.cyml`.
+
+## Install
+
+```sh
+cp build/darshini ~/.local/bin/                       # or wherever your PATH points
+darshini --version                                     # → "darshini 1.1.2"
+```
+
+Suggested zsh aliases (the maintainer's
+`~/.config/zsh/.aliases.zsh`):
+
+```zsh
+alias ll='darshini -l --git'
+alias l='darshini'
+alias lfiles='darshini -F'
+alias llfiles='darshini -lF --git'
+alias ldir='darshini -d */'
+alias lldir='darshini -ld */'
+```
+
+## Usage
+
+```sh
+darshini                       # multi-column, colored, icons (on TTY)
+darshini -l                    # long format
+darshini -lh                   # + human-readable sizes
+darshini -lhT --level 2        # + tree view, depth 2
+darshini -l --git              # + git status column (silent outside a repo)
+darshini -l --git --mime       # + mime types
+darshini src tests docs        # multi-path, each dir gets a header
+darshini -d */                 # list each subdirectory as itself
+darshini --no-color --no-icons # plain output
+darshini | cat                 # pipe-aware: one entry per line, plain bytes
+darshini --help                # full flag reference
+```
+
+## Documentation
+
+- [`docs/adr/`](docs/adr/) — frozen design decisions (color
+  scheme, icon format, mime detection, tree mode)
+- [`docs/audit/2026-05-23-audit.md`](docs/audit/2026-05-23-audit.md)
+  — pre-v1 security + code review
+- [`docs/benchmarks.md`](docs/benchmarks.md) — perf baseline +
+  v1.1.x optimization history
+- [`docs/development/state.md`](docs/development/state.md) —
+  live state (version, dep graph, known gotchas)
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) —
+  milestone sequencing (v1.0 complete; 1.x section tracks
+  ongoing)
+- [`docs/guides/getting-started.md`](docs/guides/getting-started.md) —
+  contributor walkthrough
 
 ## License
 

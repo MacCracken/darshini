@@ -5,12 +5,13 @@
 
 ## Version
 
-**1.1.1** — multi-path argv shipped 2026-05-23. Same day as
-v1.1.0 (`--help` / `--version` / `-F` / `-d` + merge-sort +
-git hashmap). v1.0.0 froze the contract earlier same day;
-M1–M9 shipped 2026-05-22/23. Scaffolded as **0.1.0** on
-2026-05-19 via `cyrius init darshini`. Non-breaking under
-the M10 freeze.
+**1.1.2** — hot-path optimizations shipped 2026-05-23
+(hybrid sort + pick_cols early-out + path_join buf reuse).
+Same day as v1.1.0 (`--help` / `--version` / `-F` / `-d`
++ merge-sort + git hashmap) and v1.1.1 (multi-path argv).
+v1.0.0 froze the contract earlier same day; M1–M9 shipped
+2026-05-22/23. Scaffolded as **0.1.0** on 2026-05-19 via
+`cyrius init darshini`. Non-breaking under the M10 freeze.
 
 ## Toolchain
 
@@ -69,6 +70,7 @@ M9+ onward fills:
 | v1.0.0 freeze | M10 | **shipped** (v1.0.0) |
 | v1.1: `--help` / `--version` / `-F` / `-d` + merge-sort + git hashmap | v1.1 | **shipped** (v1.1.0) |
 | v1.1.1: multi-path argv (full eza alias retirement) | v1.1.1 | **shipped** (v1.1.1) |
+| v1.1.2: hybrid sort + pick_cols early-out + path_join buf reuse | v1.1.2 | **shipped** (v1.1.2) |
 
 ## Tests
 
@@ -111,14 +113,9 @@ v1.2 backlog (per user direction post-v1.1.1):
   BSD / Windows. Arch-specific sites enumerated below in
   "Known gotchas".
 
-Smaller v1.2+ candidates from
-[`docs/benchmarks.md`](../benchmarks.md) "v1.2 hot-path
-optimization candidates":
-
-- Hybrid sort (insertion-sort cutoff under merge) — restore
-  best-case perf at small N.
-- `pick_cols` early-out for the widest-entry-doesn't-fit case.
-- `path_join` per-listing stack buffer reuse.
+Hot-path optimization candidates from
+[`docs/benchmarks.md`](../benchmarks.md) all shipped in
+v1.1.2. No remaining performance backlog.
 
 Non-roadmap items remain non-breaking additions per the M10
 freeze contract.

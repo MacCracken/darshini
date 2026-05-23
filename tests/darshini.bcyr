@@ -137,6 +137,36 @@ fn main(): i64 {
     bench_batch_stop(b7, 10000);
     bench_report(b7);
 
+    # v1.1.2 widest-aware early-out: when no multi-col layout
+    # fits, we should short-circuit. Bench against the
+    # degenerate case (1k 8-char names at narrow tw=10).
+    var b7b = bench_new("pick_cols 1k@10 widest-doesnt-fit (early-out)");
+    bench_batch_start(b7b);
+    i = 0;
+    while (i < 100000) { pick_cols(sorted_1000, 10, 0); i = i + 1; }
+    bench_batch_stop(b7b, 100000);
+    bench_report(b7b);
+
+    # v1.1.2 path-join: lib/fs.cyr's str-builder-based
+    # `path_join` vs the local cstr-buf `_path_join_into`.
+    # The latter is what compute_decor uses internally now.
+    var dir_str = str_from("/home/macro/Repos/darshini");
+    var name_str = str_from("main.cyr");
+    var b_pj1 = bench_new("path_join (str_builder)");
+    bench_batch_start(b_pj1);
+    i = 0;
+    while (i < 100000) { path_join(dir_str, name_str); i = i + 1; }
+    bench_batch_stop(b_pj1, 100000);
+    bench_report(b_pj1);
+
+    var path_buf = alloc(4096);
+    var b_pj2 = bench_new("_path_join_into (buf reuse)");
+    bench_batch_start(b_pj2);
+    i = 0;
+    while (i < 100000) { _path_join_into(path_buf, dir_str, name_str); i = i + 1; }
+    bench_batch_stop(b_pj2, 100000);
+    bench_report(b_pj2);
+
     # === per-entry decoration picks ===
     var name_md = str_from("README.md");
     var name_cyr = str_from("main.cyr");

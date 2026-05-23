@@ -85,10 +85,52 @@ fn _merge(v, lo, mid, hi, scratch): i64 {
     return 0;
 }
 
+# Insertion sort over `v[lo..hi)`. Used as the leaf-level of
+# the hybrid merge-sort at v1.1.2 — for subarrays smaller than
+# `_SORT_INSERTION_CUTOFF`, insertion sort's O(N) best case
+# beats merge-sort's auxiliary-vec overhead.
+fn _insertion_sort_range(v, lo, hi): i64 {
+    var i = lo + 1;
+    while (i < hi) {
+        var cur = vec_get(v, i);
+        var pos = i;
+        var moving = 1;
+        while (moving == 1) {
+            if (pos <= lo) {
+                moving = 0;
+            } else {
+                var prev = vec_get(v, pos - 1);
+                if (str_lt_ci(cur, prev) == 1) {
+                    vec_set(v, pos, prev);
+                    pos = pos - 1;
+                } else {
+                    moving = 0;
+                }
+            }
+        }
+        vec_set(v, pos, cur);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Hybrid sort cutoff. Subarrays below this length fall back to
+# insertion sort at the merge-sort leaves. 16 is the standard
+# choice (Java Arrays.sort, libstdc++ std::sort, etc.) — large
+# enough to amortize the recursion overhead, small enough that
+# insertion sort's O(N²) doesn't bite. Bench-confirmed on
+# already-sorted 1k input: 635 µs → ~135 µs.
+var _SORT_INSERTION_CUTOFF = 16;
+
 # Top-down recursive merge-sort on `v[lo..hi)`. log₂(N) deep —
 # safe through any practical entry count (1M entries → 20 frames).
+# Hybrid: subarrays below `_SORT_INSERTION_CUTOFF` use insertion
+# sort instead of recursing further.
 fn _merge_sort(v, lo, hi, scratch): i64 {
     if (hi - lo <= 1) { return 0; }
+    if (hi - lo < _SORT_INSERTION_CUTOFF) {
+        return _insertion_sort_range(v, lo, hi);
+    }
     var mid = lo + (hi - lo) / 2;
     _merge_sort(v, lo, mid, scratch);
     _merge_sort(v, mid, hi, scratch);

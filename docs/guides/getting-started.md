@@ -3,56 +3,123 @@
 ## Build
 
 ```sh
-cyrius deps                              # resolve stdlib (+ darshana from M4)
-cyrius build src/main.cyr build/darshini # compile
-./build/darshini                          # prints scaffold version line
-cyrius test                               # run tests/*.tcyr
+cyrius deps                                  # resolve stdlib + darshana
+cyrius build src/main.cyr build/darshini     # compile
+./build/darshini                              # list the current directory
+cyrius test                                   # run tests/*.tcyr
+cyrius bench tests/darshini.bcyr              # run perf benches
 ```
 
-## Layout
+Note `cyrius bench` won't auto-discover `tests/*.bcyr` — pass
+the explicit path.
 
-- `src/main.cyr` — entry point (currently scaffold; M1+ fills CLI dispatch)
-- `tests/darshini.{tcyr,bcyr,fcyr}` — tests / benchmarks / fuzz
+## Install for daily use
 
-Once M1+ ships:
+```sh
+cp build/darshini ~/.local/bin/
+darshini --version       # confirm
+```
 
-- `src/walk.cyr` — directory walking + stat
-- `src/render.cyr` — line / column / tree formatting
-- `src/color.cyr` — darshana ANSI routing
-- `src/icons.cyr` — icon-mapping loader
-- `src/tree.cyr` — recursive tree rendering
-- `src/git.cyr` — `.git/`-direct status column
-- `src/mime.cyr` — magic-bytes mime detector
-- `icons/<name>.cyml` — icon mappings shipped in-tree
+See the README for the recommended zsh alias set
+(`ll`, `l`, `lfiles`, `llfiles`, `ldir`, `lldir`).
 
-## Adding a feature
+## Source layout (v1.x)
 
-1. Identify the milestone (`docs/development/roadmap.md`) the feature
-   belongs to. If it's outside the roadmap, propose an ADR first.
-2. Edit / add the appropriate `src/<name>.cyr` module.
-3. Add tests in `tests/darshini.tcyr` covering happy path + edge
-   cases (empty dir, permission denied, symlink loop, broken UTF-8
-   names — as relevant).
-4. If the feature touches color or cursor positioning, route
-   through `darshana`. **No raw ANSI escape codes in darshini.**
-5. CHANGELOG entry. Mark `Breaking` if you alter default-output
-   bytes or exit codes.
+| Module            | Owns |
+|-------------------|------|
+| `src/main.cyr`    | Entry, argv parsing, multi-path dispatch (`run_all`), per-path orchestration (`run`) |
+| `src/walk.cyr`    | `classify_path`, `check_dir_readable`, `list_dir`, `lstat_path`, `ModeBit` enum, `-F` classify indicator |
+| `src/render.cyr`  | Pure formatters: `lower_byte`, `str_lt_ci`, hybrid merge-sort `sort_entries`, `print_entries`, `format_perms`/`size_*`/`mtime` |
+| `src/columns.cyr` | TTY width probe, column-fit picker, `_columns_emit` (vertical-then-horizontal) |
+| `src/long.cyr`    | Long-format orchestrator (two-pass for size + mime alignment), `render_long_one` for `-l <file>` |
+| `src/tree.cyr`    | Recursive box-drawn rendering + depth-stack bookkeeping |
+| `src/color.cyr`   | Color picker, `compute_decor` (single lstat pass → colors / icons / git / mime / classify vecs), `_path_join_into`, `emit_decorated` |
+| `src/icons.cyr`   | Compile-baked icon lookup chain mirroring `icons/default.cyml` |
+| `src/mime.cyr`    | Inode → filename → ext → exec → magic precedence chain mirroring `mime/default.cyml` |
+| `src/git.cyr`     | `.git/index` v2 parser, minimal `.gitignore` matcher, hashmap-backed `git_status_for` |
+
+Include order in `main.cyr` matters for clean LSP:
+`walk → icons → mime → git → color → render → columns → long → tree`.
+
+## Adding a feature (v1.x non-breaking additions)
+
+The v1.0 contract is **frozen** per ADR
+[0001](../adr/0001-color-scheme.md) /
+[0002](../adr/0002-icon-format.md) /
+[0003](../adr/0003-mime-detection.md) /
+[0004](../adr/0004-tree-mode.md).
+v1.x additions must be **non-breaking**: new flags are fine;
+changing the meaning, default state, or output bytes of any
+existing flag is a 2.x change.
+
+1. Identify the change kind:
+   - New flag → v1.minor (e.g. `--my-feature`)
+   - Internal perf or fix → v1.patch
+   - Breaking → v2.0 (rare; needs separate ADR + roadmap)
+2. Edit the appropriate `src/<module>.cyr`. If you change a
+   public fn signature, walk every caller AND every test that
+   calls it — Cyrius leaves unfilled arg slots as register
+   garbage, so under-passing silently corrupts state.
+3. Update `--version` string in `src/main.cyr`'s
+   `_darshini_version_str()` in lockstep with `VERSION`. CI
+   smoke pins the exact string.
+4. Update tests in `tests/darshini.tcyr` for any pure helper
+   you added. Filesystem effects are covered by CI smokes
+   (see `.github/workflows/ci.yml`).
+5. If the feature touches color or cursor positioning, route
+   through darshana's `tty_sgr` / `tty_sgr_reset`. **No raw
+   ANSI in darshini source.** Per CLAUDE.md hard rule.
+6. CHANGELOG entry. Add a `Breaking` section only if you're
+   doing a 2.x change.
 
 ## Adding an icon
 
-(Available at M5+.)
-
-1. Edit `icons/default.cyml`.
-2. Add a test case rendering a file with the trigger extension or
-   filename in `tests/darshini.tcyr`.
+1. Edit `icons/default.cyml` (the spec).
+2. Edit `src/icons.cyr` to mirror (compile-baked at v1.x).
 3. CHANGELOG entry under `Added`.
+
+The two files must stay in sync — this is human-enforced at PR
+review. A CI gate that parses the CYML and verifies coverage
+is a v2 candidate. See [ADR 0002](../adr/0002-icon-format.md).
+
+## Adding a mime type
+
+Same dance as icons: `mime/default.cyml` (spec) +
+`src/mime.cyr` (compile-baked). See
+[ADR 0003](../adr/0003-mime-detection.md).
 
 ## Pipe-awareness
 
-darshini is pipe-aware by default. On a TTY, it produces multi-column,
-colored output with icons. On a pipe (`darshini | cat`,
-`darshini | grep ...`), it produces one entry per line, no color,
-no icons — same as minimal `ls`. **Never surprise a script consumer.**
+darshini is pipe-aware by default. On a TTY: multi-column,
+colored, icons. On a pipe (`darshini | cat`,
+`darshini | grep ...`): one entry per line, no color, no
+icons — same as minimal `ls`. **Never surprise a script
+consumer.** This is a CLAUDE.md hard rule.
 
-See [`../adr/template.md`](../adr/template.md) when a non-trivial
-design choice deserves an ADR.
+## Adding an ADR
+
+If your change introduces a non-obvious design choice, add an
+ADR per [`../adr/template.md`](../adr/template.md). Numbered
+chronologically; never renumber. Current ADRs:
+
+- [0001 color scheme](../adr/0001-color-scheme.md)
+- [0002 icon format](../adr/0002-icon-format.md)
+- [0003 mime detection](../adr/0003-mime-detection.md)
+- [0004 tree mode](../adr/0004-tree-mode.md)
+
+## Running the audit
+
+The pre-v1.0 audit lives at
+[`../audit/2026-05-23-audit.md`](../audit/2026-05-23-audit.md).
+For your own audit pass:
+
+```sh
+cyrius build src/main.cyr build/darshini     # cleanliness check
+cyrius test                                   # full assertion sweep
+for f in src/*.cyr; do cyrius lint "$f"; done # style + bugs
+cyrius vet src/main.cyr                       # dep audit
+cyrius bench tests/darshini.bcyr              # perf snapshot
+```
+
+Compare bench numbers against `docs/benchmarks.md` to spot
+regressions.

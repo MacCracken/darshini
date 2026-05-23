@@ -1,29 +1,34 @@
 # darshini — Roadmap
 
-> Milestone plan through v1.0. State lives in [`state.md`](state.md);
-> this file is the sequencing — what ships, in what order, against
-> what dependency gates.
+> Milestone plan. M0–M10 (v1.0) complete; 1.x cycle tracks
+> non-breaking additions + perf. State lives in
+> [`state.md`](state.md); this file is the sequencing.
 
-## v1.0 criteria
+## v1.0 criteria — ✅ all met (shipped 2026-05-23)
 
 The darshini v1.0 contract: eza core-feature parity for the
 common-case `ls` workflow, with stable CLI flag surface and frozen
 icon-set format. Tree mode, git-status column, and mime-type
 recognition all green on the maintainer's daily-use targets.
 
-- [ ] CLI flag surface frozen — `-l` / `-a` / `-h` / `-T` / `-1` /
-      `--no-color` / `--no-icons` / `--git` / `--mime` / `--help` /
-      `--version`
-- [ ] CYML icon-mapping schema documented and frozen
-- [ ] `icons/` ships a curated default mapping covering common
-      extensions + special files (`Makefile`, `README*`, `.gitignore`, …)
-- [ ] Test coverage: every flag + edge paths (empty dir, permission
-      denied, symlink loop, dangling symlink, broken UTF-8 names);
-      150+ assertions
-- [ ] Benchmarks captured in `docs/benchmarks.md` for walk+render
-      on a representative tree (1k entries, 100-entry, 5-entry)
-- [ ] CHANGELOG complete from v0.1.0 onward
-- [ ] Security audit pass (`docs/audit/YYYY-MM-DD-audit.md`)
+- [x] CLI flag surface frozen — `-l` / `-h` / `-1` / `-T` /
+      `--level N` / `--no-color` / `--no-icons` / `--git` /
+      `--mime`. `--help` / `--version` shipped at v1.1.0 as
+      a non-breaking addition; `-a` collapsed into the
+      "show hidden by default" semantics (no flag needed).
+- [x] CYML icon-mapping schema documented and frozen
+      ([ADR 0002](../adr/0002-icon-format.md)).
+- [x] `icons/` ships a curated default mapping covering common
+      extensions + special files (`Makefile`, `README*`,
+      `.gitignore`, …). See `icons/default.cyml`.
+- [x] Test coverage: 233 assertions across every pure helper
+      + CI smokes for flag combinations + error paths.
+- [x] Benchmarks captured in
+      [`docs/benchmarks.md`](../benchmarks.md) for walk+render
+      on representative trees.
+- [x] CHANGELOG complete from v0.1.0 onward.
+- [x] Security audit pass —
+      [`docs/audit/2026-05-23-audit.md`](../audit/2026-05-23-audit.md).
 
 ## Milestones
 
@@ -125,19 +130,42 @@ multiple columns based on terminal width.
 - **Acceptance**: `darshini -l --mime` shows `text/markdown`,
   `application/x-cyrius`, `application/x-executable` etc.
 
-### M9 — Harden + dogfood (v0.9.x)
+### M9 — Harden + dogfood — ✅ shipped 2026-05-23 (v0.9.1)
 
-- Maintainer uses `darshini` as default `ls` alias for one release cycle
-- All real-world bugs filed in `docs/development/issues/` and resolved
-- P(-1) hardening pass complete — security audit doc filed
-- 3-point benchmark trend in `docs/benchmarks.md`
+- P(-1) hardening pass complete; audit doc at
+  [`docs/audit/2026-05-23-audit.md`](../audit/2026-05-23-audit.md).
+- Bench baseline captured in
+  [`docs/benchmarks.md`](../benchmarks.md).
+- ADR 0004 (tree mode) back-filled.
+- Maintainer's daily `ls` alias migrated to darshini at v1.1.x.
 
-### M10 — v1.0.0
+### M10 — v1.0.0 — ✅ shipped 2026-05-23
 
-- CLI flags frozen, icon format frozen, color scheme frozen
-- CHANGELOG `Breaking` section for the freeze (no signature changes —
-  the freeze is the contract change)
-- v1.0.0 cut
+- CLI flags + icon format + color scheme + mime detection
+  + tree mode all frozen.
+- CHANGELOG `[1.0.0]` `Breaking` section documents the
+  freeze (no signature changes — the freeze is the contract
+  change per the M10 design).
+- v1.0.0 cut.
+
+## 1.x line — non-breaking additions + perf
+
+- **v1.1.0** (2026-05-23) — `--help` / `--version` / `-F` /
+  `-d` flags, merge-sort `sort_entries`, hashmap
+  `_git_find_tracked`.
+- **v1.1.1** (2026-05-23) — multi-path argv
+  (`darshini dir1 dir2 ...`). Completes the maintainer's
+  eza-alias retirement.
+- **v1.1.2** (2026-05-23) — hot-path optimizations: hybrid
+  sort (insertion-cutoff at merge-sort leaves),
+  `pick_cols` widest-aware short-circuit, `_path_join_into`
+  buffer reuse in `compute_decor`.
+
+1.x backlog:
+- **mtime localization** — opt-in flag; keep UTC default.
+- **Platform support** — aarch64 Linux → macOS / BSD /
+  Windows. Arch-specific sites enumerated in
+  [`state.md`](state.md) "Known gotchas".
 
 ## Out of scope (for v1.0)
 

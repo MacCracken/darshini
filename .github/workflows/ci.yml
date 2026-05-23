@@ -127,7 +127,7 @@ jobs:
         run: |
           set -e
           out=$(./build/${{ github.event.repository.name }} --version)
-          test "$out" = "darshini 1.1.1" || { echo "--version mismatch: $out"; exit 1; }
+          test "$out" = "darshini 1.1.2" || { echo "--version mismatch: $out"; exit 1; }
           ./build/${{ github.event.repository.name }} --help > /tmp/help
           grep -q "^usage: darshini" /tmp/help \
             || { echo "--help missing usage line:"; cat /tmp/help; exit 1; }

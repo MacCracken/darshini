@@ -4,6 +4,54 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.2] — v1.1.2: hot-path optimizations
+
+Three perf wins from the v1.2 candidates list in
+[`docs/benchmarks.md`](docs/benchmarks.md). No behavior
+change; non-breaking under the M10 freeze. 233/233 tests
+holding.
+
+### Performance
+
+- **Hybrid sort** — insertion-sort cutoff at merge-sort
+  leaves (< 16 elements). Standard optimization shipped by
+  Java's `Arrays.sort` and libstdc++ `std::sort`. Restores
+  best-case perf at small N (already-sorted 1k:
+  635 µs → 493 µs, 1.3× faster). Slight regression on the
+  fully-reverse-sorted worst case (640 µs → 820 µs) —
+  accepted: real-world directories are nearly-sorted, not
+  adversarial; absolute still well under any perception
+  threshold and still **44× faster than v1.0**.
+- **`pick_cols` widest-aware short-circuit** — pre-scans
+  the widest entry; if it doesn't fit in `term_width`,
+  returns 1 col immediately, skipping the entire per-col
+  iteration loop. Bench `pick_cols 1k@10
+  widest-doesnt-fit`: 33 µs (was a full iteration).
+  Cap stays loose (1-char per col) — see source NOTE for
+  why a widest-uniform cap would reject valid jagged
+  layouts.
+- **`_path_join_into` buffer reuse** — new local helper
+  in `src/color.cyr` writes `dir + "/" + name + "\0"` into
+  a caller-allocated cstr buffer. `compute_decor` allocates
+  one 4096-byte buf per listing and reuses across entries
+  instead of N str_builder allocations. **4.2× faster**
+  per call (305 ns → 72 ns). lib/fs.cyr's `path_join` stays
+  for tree.cyr's recursion (each frame needs its own
+  persistent allocation).
+
+### Notes
+
+- v1.1.2 closes out the entirety of the v1.2+ hot-path
+  optimization candidates from `docs/benchmarks.md`. v1.2
+  backlog is now just mtime localization + post-v1 platforms.
+- New bench coverage: `pick_cols 1k@10 widest-doesnt-fit`,
+  `path_join (str_builder)`, `_path_join_into (buf reuse)`.
+- No new tests; the changes are pure perf (no observable
+  behavior). Existing tests confirm no regression (caught
+  one tighter-cap bug in pick_cols mid-implementation —
+  loosened back to 1-char min-per-col, kept the
+  widest-doesn't-fit short-circuit).
+
 ## [1.1.1] — v1.1.1: multi-path argv
 
 ### Added

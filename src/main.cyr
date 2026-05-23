@@ -54,7 +54,7 @@ fn emit_unknown_flag(arg): i64 {
 # in lockstep with VERSION on every release. Pure cstr —
 # `--version` writes this then a newline.
 fn _darshini_version_str(): i64 {
-    return "darshini 1.1.1";
+    return "darshini 1.1.2";
 }
 
 fn emit_help(): i64 {

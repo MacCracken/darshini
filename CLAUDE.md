@@ -39,7 +39,7 @@ Project was scaffolded with `cyrius init darshini`. **Do not manually create pro
 ```sh
 cyrius deps                              # resolve stdlib + darshana
 cyrius build src/main.cyr build/darshini # compile
-./build/darshini                          # prints scaffold version line
+./build/darshini                          # list cwd (v1.x; was scaffold version line pre-M1)
 cyrius test                               # run tests/*.tcyr
 ```
 

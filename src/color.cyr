@@ -51,6 +51,32 @@ fn color_for_mode(mode): i64 {
 # either way; git status uses lstat-only data).
 #
 # Returns a 24-byte heap struct: {colors@0, icons@8, gitchrs@16}.
+# v1.1.2 path-join into a caller-allocated cstr buffer.
+# Writes `dir + "/" + name + "\0"` into buf and returns buf.
+# Saves an allocation per call vs lib/fs.cyr's `path_join`
+# (which builds via str_builder). Caller is responsible for
+# sizing buf large enough — `PATH_BUF_SIZE` (4096) covers
+# the Linux PATH_MAX. The buffer is OK to reuse across loop
+# iterations because no consumer stashes the cstr past its
+# iteration.
+var PATH_BUF_SIZE = 4096;
+fn _path_join_into(buf, dir_str, name_str): i64 {
+    var dlen = str_len(dir_str);
+    var dd = str_data(dir_str);
+    memcpy(buf, dd, dlen);
+    var pos = dlen;
+    if (dlen > 0) {
+        if (load8(dd + dlen - 1) != 47) {
+            store8(buf + pos, 47);
+            pos = pos + 1;
+        }
+    }
+    var nlen = str_len(name_str);
+    memcpy(buf + pos, str_data(name_str), nlen);
+    store8(buf + pos + nlen, 0);
+    return buf;
+}
+
 fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, want_classify): i64 {
     var colors = 0;
     var icons = 0;
@@ -65,12 +91,15 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, w
     if (want_mime == 1)     { mimes = vec_new(); }
     if (want_classify == 1) { classifies = vec_new(); }
     var n = vec_len(entries);
+    # v1.1.2: one path buffer per listing instead of one per
+    # entry. Save N heap allocs per compute_decor call.
+    var path_buf = alloc(PATH_BUF_SIZE);
     var i = 0;
     while (i < n) {
         var name = vec_get(entries, i);
-        var full = path_join(dir_str, name);
+        _path_join_into(path_buf, dir_str, name);
         var stat_buf = alloc(144);
-        var rc = lstat_path(str_data(full), stat_buf);
+        var rc = lstat_path(path_buf, stat_buf);
         var c = 0;
         var ic = 0;
         var gc = 32;
@@ -82,7 +111,7 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, w
             if (want_color == 1) {
                 if (fmt == S_IFLNK) {
                     var probe[144];
-                    var rc2 = sys_stat(str_data(full), &probe);
+                    var rc2 = sys_stat(path_buf, &probe);
                     if (rc2 < 0) { c = TTY_FG_RED; }
                     else { c = TTY_FG_CYAN; }
                 } else {
@@ -98,7 +127,7 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, w
                 gc = git_status_for(git_ctx, name, is_dir, mtime, size);
             }
             if (want_mime == 1) {
-                mm = mime_for_entry(str_data(full), name, mode);
+                mm = mime_for_entry(path_buf, name, mode);
             }
             if (want_classify == 1) {
                 cl = classify_indicator(mode);

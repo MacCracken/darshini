@@ -70,12 +70,28 @@ fn pick_cols(entries, term_width, icon_width): i64 {
     if (n <= 1) { return 1; }
     if (term_width <= 0) { return 1; }
     var sep = 2;
+    # v1.1.2 widest-aware short-circuit: if the widest entry
+    # alone doesn't fit, no multi-column layout fits. The
+    # outer caller falls back to single-column emit (the long
+    # name will wrap at the terminal). Skips the entire
+    # per-col iteration loop in this degenerate case.
+    # NOTE: we deliberately DON'T use widest as a per-col
+    # cap — jagged layouts (one wide entry + many narrow) can
+    # legitimately fit more cols than a widest-uniform cap
+    # would estimate (test: 1+1+30+1+1 entries at tw=40 fit
+    # in 3 cols even though widest=30 would suggest 1).
+    var widest = 0;
+    var wi = 0;
+    while (wi < n) {
+        var w = str_len(vec_get(entries, wi));
+        if (w > widest) { widest = w; }
+        wi = wi + 1;
+    }
+    if (widest + icon_width >= term_width) { return 1; }
     var max_cols = n;
-    # Trivially-impossible upper bound: each column needs at
-    # least one char + the inter-column separator (2 chars) +
-    # any per-entry icon prefix. The last column doesn't need a
-    # trailing separator so the cap is
-    # (term_width + sep) / (1 + icon_width + sep).
+    # Trivially-impossible upper bound: each col needs at least
+    # 1 char + icon_width + sep. The last col doesn't carry a
+    # trailing sep. Loose intentionally — see NOTE above.
     var cap = (term_width + sep) / (1 + icon_width + sep);
     if (cap < max_cols) { max_cols = cap; }
     if (max_cols < 1) { max_cols = 1; }

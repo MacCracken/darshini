@@ -99,14 +99,46 @@ improvement at typical scales.
 
 ### v1.2 hot-path optimization candidates
 
-- Hybrid sort: switch to insertion sort for subarrays below ~16
-  elements. Removes the merge-sort overhead at small N
-  (restores the 100-entry best-case regression). Classic
-  optimization; ~10 lines.
-- `pick_cols` is O(N × cols-tried). For very wide TTYs with
-  many entries, the recompute per cols-tried is wasteful — could
-  short-circuit by checking the WIDEST entry's width against
-  per-cell budget.
-- `path_join` allocates per call; per-listing reuse a single
-  stack buffer would save N allocations under `-l` / `--git` /
-  `--mime` decoration.
+- ~~Hybrid sort~~ — **shipped in v1.1.2.** Insertion-sort cutoff
+  at the merge-sort leaves (< 16 elements). Restored best-case
+  perf at small N; slight regression on the
+  fully-reverse-sorted worst case (acceptable: real-world
+  directories are nearly-sorted, not adversarial).
+- ~~`pick_cols` early-out~~ — **shipped in v1.1.2.** Widest-aware
+  short-circuit returns 1 col immediately when the widest entry
+  doesn't fit. Skips the full per-col iteration loop.
+- ~~`path_join` buffer reuse~~ — **shipped in v1.1.2.** Local
+  `_path_join_into` helper writes into a per-listing stack
+  buffer. `compute_decor` uses it; lib/fs.cyr's `path_join`
+  stays for cases where caller-owned allocation is needed
+  (tree.cyr's recursion).
+
+## v1.1.2 refresh — 2026-05-23
+
+| Path                                            | v1.1.0   | v1.1.1   | v1.1.2   | Δ vs 1.0 |
+|-------------------------------------------------|----------|----------|----------|----------|
+| `sort_entries` best=5                           | 1 µs     | 1 µs     | 726 ns   | 1.4× slower than v1.0's 578 ns, but better than v1.1.0 |
+| `sort_entries` best=100                         | 44 µs    | 44 µs    | 30 µs    | 2.7× slower than v1.0's 11 µs (insertion was unbeatable here) |
+| `sort_entries` best=1000                        | 635 µs   | 635 µs   | 493 µs   | 4.4× slower than v1.0's 112 µs |
+| `sort_entries` worst=100                        | 48 µs    | 48 µs    | 70 µs    | **5.6× faster than v1.0's 394 µs** |
+| `sort_entries` worst=1000                       | 640 µs   | 640 µs   | 820 µs   | **44× faster than v1.0's 36.2 ms** |
+| `pick_cols` 1k@80 no-decor                      | 177 µs   | 177 µs   | 182 µs   | flat |
+| `pick_cols` 1k@200 icons+git                    | 133 µs   | 133 µs   | 139 µs   | flat |
+| `pick_cols` 1k@10 widest-doesnt-fit (early-out) | n/a      | n/a      | 33 µs    | new bench; was full iteration before |
+| `path_join` (str_builder)                       | n/a      | n/a      | 305 ns   | reference: the v1.0 path |
+| `_path_join_into` (buf reuse)                   | n/a      | n/a      | 72 ns    | **4.2× faster** — used by compute_decor |
+| `color_for_mode` (dir)                          | 3 ns     | 3 ns     | 3 ns     | flat |
+| `icon_for_entry` `.cyr`                         | 380 ns   | 380 ns   | 368 ns   | flat (within noise) |
+| `mime_for_entry` `.md`                          | 623 ns   | 623 ns   | 614 ns   | flat |
+
+**Verdict on the sort trade**: v1.1.2 best-case (already-
+sorted, which is what real-world directories overwhelmingly
+look like) recovered most of the v1.1.0 regression while
+keeping the v1.0→v1.1 worst-case win largely intact (still
+44× faster than v1.0). Worst-case absolute is ~820 µs — well
+under any perception threshold.
+
+**Verdict on `_path_join_into`**: 4.2× per-call cost reduction.
+At a 1000-entry listing under `-l --git --mime`, that saves
+~233 µs of pure path-join work (1000 × 233 ns) — meaningful
+but secondary to the larger lstat + per-entry decoration costs.

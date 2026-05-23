@@ -108,15 +108,11 @@ fn pick_cols(entries, term_width, icon_width): i64 {
 
 # Emit `entries` in a `cols`-column, `rows`-row grid, vertically-
 # then-horizontally (idx = c*rows + r). `col_widths[c]` gives the
-# per-column max NAME length (no icon offset). Partial trailing
-# rows stop at the last filled cell.
-#
-# `colors` (M4): parallel vec<i64> SGR codes (or 0).
-# `icons` (M5): parallel vec<i64> UTF-8 glyph cstrs (or 0).
-# Padding math uses `str_len(name)` (visible name width) +
-# `icon_width` (uniform per cell) so escapes + multi-byte
-# glyphs don't disturb alignment.
-fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, icon_width): i64 {
+# per-column max NAME length. Padding math uses `str_len(name)`
+# (visible name width) + `icon_width` + `git_width` (both
+# uniform per cell) so escapes + multi-byte glyphs don't
+# disturb alignment.
+fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, icon_width, git_width): i64 {
     var sep = 2;
     var r = 0;
     while (r < rows) {
@@ -132,10 +128,12 @@ fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, icon_width):
             var name = vec_get(entries, idx);
             var nlen = str_len(name);
             var col_code = 0;
-            if (colors != 0) { col_code = vec_get(colors, idx); }
+            if (colors != 0)  { col_code = vec_get(colors, idx); }
             var ic = 0;
-            if (icons != 0) { ic = vec_get(icons, idx); }
-            emit_decorated(name, col_code, ic, icon_width);
+            if (icons != 0)   { ic = vec_get(icons, idx); }
+            var gc = 0;
+            if (gitchrs != 0) { gc = vec_get(gitchrs, idx); }
+            emit_decorated(name, col_code, ic, icon_width, gc, git_width);
             if (c < last_c) {
                 var w = load64(col_widths + c * 8);
                 var pad = w - nlen + sep;
@@ -154,19 +152,19 @@ fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, icon_width):
 }
 
 # Top-level: pick the column count, compute per-column max NAME
-# widths (icon width is uniform per cell — handled separately in
-# the picker + emit), emit. Falls back to single-column
-# print_entries when the picker chooses 1 column.
-#
-# `colors` (M4) / `icons` (M5): parallel vecs (or 0). When icons
-# is non-zero, each cell gets a 2-cell prefix budget.
-fn render_columns(entries, term_width, colors, icons): i64 {
+# widths, emit. Falls back to single-column print_entries when
+# the picker chooses 1 column. Per-cell prefix budget is
+# icon_width + git_width (both 0 when disabled).
+fn render_columns(entries, term_width, colors, icons, gitchrs): i64 {
     var n = vec_len(entries);
     if (n == 0) { return 0; }
     var icon_w = 0;
-    if (icons != 0) { icon_w = icon_display_width(); }
-    var cols = pick_cols(entries, term_width, icon_w);
-    if (cols <= 1) { return print_entries(entries, colors, icons); }
+    if (icons != 0)   { icon_w = icon_display_width(); }
+    var git_w = 0;
+    if (gitchrs != 0) { git_w = git_display_width(); }
+    var prefix_w = icon_w + git_w;
+    var cols = pick_cols(entries, term_width, prefix_w);
+    if (cols <= 1) { return print_entries(entries, colors, icons, gitchrs); }
     var rows = (n + cols - 1) / cols;
     var col_widths = alloc(cols * 8);
     var c = 0;
@@ -184,5 +182,5 @@ fn render_columns(entries, term_width, colors, icons): i64 {
         store64(col_widths + c * 8, max_w);
         c = c + 1;
     }
-    return _columns_emit(entries, n, cols, rows, col_widths, colors, icons, icon_w);
+    return _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, icon_w, git_w);
 }

@@ -45,7 +45,7 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-Pre-1.0. v0.7.0 — M1 + M2 + M3 + M4 + M5 + M6 shipped:
+Pre-1.0. v0.8.0 — M1 + M2 + M3 + M4 + M5 + M6 + M7 shipped:
 
 - M1: basic listing — `darshini` / `darshini <path>`,
   case-insensitive alphabetical, error-discriminated.
@@ -67,9 +67,17 @@ Pre-1.0. v0.7.0 — M1 + M2 + M3 + M4 + M5 + M6 shipped:
 - M6: tree mode — `darshini -T` / `-T --level N` / `-lT`.
   Standard box-drawing connectors. Composes with the long
   format + color + icons. Doesn't follow symlinks-to-dirs.
+- M7: `--git` status column — `.`/`M`/`?`/`!` per entry,
+  read directly from `.git/index` v2 + `.gitignore` (no
+  `git` subprocess). Silent skip outside a repo.
+- M8: `--mime` type column — `text/markdown`,
+  `application/x-cyrius`, `application/x-executable`, etc.
+  Schema in [ADR 0003](docs/adr/0003-mime-detection.md);
+  human-readable mapping in `mime/default.cyml`. Shown
+  only under `-l`.
 
-No git column yet — M7. Linux x86_64 only through v1.0;
-other platforms post-v1.
+Pre-v1 hardening (M9) + freeze (M10) still ahead. Linux
+x86_64 only through v1.0; other platforms post-v1.
 
 ## Build
 

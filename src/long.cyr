@@ -46,8 +46,9 @@ fn _emit_spaces(n): i64 {
 
 # Render the long-format listing for the entries inside `dir_str`.
 # `want_human` controls size formatting (decimal vs IEC X.YK/M/G/T).
-# `colors` (M4) / `icons` (M5): parallel vecs (or 0) for color/
-# icon decoration of the name column.
+# `colors` (M4) / `icons` (M5) / `gitchrs` (M7): parallel vecs
+# (or 0) for color, icon, and git-status decoration of the name
+# column.
 # Both passes over the entries: pass 1 collects per-row state +
 # tracks the max size-string width; pass 2 emits aligned rows.
 #
@@ -55,10 +56,24 @@ fn _emit_spaces(n): i64 {
 # `l...` with their own length rather than the target's. M2
 # scope: no symlink-target rendering yet — the `-> target` tail
 # lands when the symlink-display ADR opens for M6 / M7 territory.
-fn render_long(entries, dir_str, want_human, colors, icons): i64 {
+fn render_long(entries, dir_str, want_human, colors, icons, gitchrs, mimes): i64 {
     var n = vec_len(entries);
     var rows = vec_new();
     var max_size_w = 0;
+    # Pre-compute max mime width for left-aligned padding when
+    # the column is present. cheap O(N) scan.
+    var max_mime_w = 0;
+    if (mimes != 0) {
+        var mi = 0;
+        while (mi < n) {
+            var m = vec_get(mimes, mi);
+            if (m != 0) {
+                var ml = strlen(m);
+                if (ml > max_mime_w) { max_mime_w = ml; }
+            }
+            mi = mi + 1;
+        }
+    }
     var i = 0;
     while (i < n) {
         var name = vec_get(entries, i);
@@ -127,16 +142,35 @@ fn render_long(entries, dir_str, want_human, colors, icons): i64 {
         }
         sys_write(STDOUT_FD, mtime_buf, 16);
         sys_write(STDOUT_FD, " ", 1);
-        # name — colorized per ADR 0001 + icon-prefixed per ADR 0002
-        # when the corresponding vecs were supplied.
+        # M8 mime column — left-aligned to max width across listing.
+        if (mimes != 0) {
+            var m = vec_get(mimes, i);
+            var ml = 0;
+            if (m != 0) {
+                ml = strlen(m);
+                sys_write(STDOUT_FD, m, ml);
+            }
+            var mpad = max_mime_w - ml;
+            var mp = 0;
+            while (mp < mpad) {
+                sys_write(STDOUT_FD, " ", 1);
+                mp = mp + 1;
+            }
+            sys_write(STDOUT_FD, " ", 1);
+        }
+        # name + ADR 0001 color + ADR 0002 icon + M7 git status
         var name = vec_get(entries, i);
         var col_code = 0;
-        if (colors != 0) { col_code = vec_get(colors, i); }
+        if (colors != 0)  { col_code = vec_get(colors, i); }
         var ic = 0;
-        if (icons != 0) { ic = vec_get(icons, i); }
+        if (icons != 0)   { ic = vec_get(icons, i); }
+        var gc = 0;
+        if (gitchrs != 0) { gc = vec_get(gitchrs, i); }
         var icon_pad = 0;
-        if (icons != 0) { icon_pad = icon_display_width(); }
-        emit_decorated(name, col_code, ic, icon_pad);
+        if (icons != 0)   { icon_pad = icon_display_width(); }
+        var git_pad = 0;
+        if (gitchrs != 0) { git_pad = git_display_width(); }
+        emit_decorated(name, col_code, ic, icon_pad, gc, git_pad);
         sys_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }
@@ -152,7 +186,7 @@ fn render_long(entries, dir_str, want_human, colors, icons): i64 {
 # `want_color` (M4) / `want_icons` (M5): toggle decoration.
 # Symlinks pay the extra `sys_stat` for broken-target color
 # detection only when want_color is on.
-fn render_long_one(path_cstr, want_human, want_color, want_icons): i64 {
+fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx): i64 {
     var stat_buf = alloc(144);
     var rc = lstat_path(path_cstr, stat_buf);
     if (rc < 0) { return 1; }
@@ -184,27 +218,24 @@ fn render_long_one(path_cstr, want_human, want_color, want_icons): i64 {
             col_code = color_for_mode(mode);
         }
     }
+    var path_str = str_from(path_cstr);
     var ic = 0;
     if (want_icons == 1) {
-        # Single-path mode — pass the path bytes as a Str for
-        # the lookup. icon_for_entry's prefix/exact matches will
-        # see the full path (probably not the basename), which is
-        # acceptable for the single-file case — the lookup
-        # chain's extension match still fires correctly.
-        var path_str = str_from(path_cstr);
         ic = icon_for_entry(path_str, mode);
     }
     var icon_pad = 0;
     if (want_icons == 1) { icon_pad = icon_display_width(); }
-    if (col_code != 0) { tty_sgr(col_code); }
-    if (ic != 0) {
-        sys_write(STDOUT_FD, ic, strlen(ic));
-        sys_write(STDOUT_FD, " ", 1);
-    } else { if (icon_pad > 0) {
-        sys_write(STDOUT_FD, "  ", 2);
-    } }
-    sys_write(STDOUT_FD, path_cstr, strlen(path_cstr));
-    if (col_code != 0) { tty_sgr_reset(); }
+    var gc = 0;
+    var git_pad = 0;
+    if (git_ctx != 0) {
+        git_pad = git_display_width();
+        var is_dir = 0;
+        if ((mode & S_IFMT) == S_IFDIR) { is_dir = 1; }
+        gc = git_status_for(git_ctx, path_str, is_dir,
+                            load64(stat_buf + STAT_MTIME),
+                            load64(stat_buf + STAT_SIZE));
+    }
+    emit_decorated(path_str, col_code, ic, icon_pad, gc, git_pad);
     sys_write(STDOUT_FD, "\n", 1);
     return 0;
 }

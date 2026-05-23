@@ -32,9 +32,24 @@
 #   * _tree_prefix_buf — depth-stack patterns to expected bytes
 #   * _tree_connector_buf — is_last 0/1 to expected bytes
 #   * _parse_pos_int — argv value parsing for --level
+#
+# M7 coverage (new at v0.8.0):
+#   * _be_u32 / _be_u16 — big-endian decode
+#   * _git_parse_index — header validation + entry walk
+#   * _git_match_one — exact / *suffix / dir-only patterns
+#   * _git_listing_rel — repo-root vs listing-dir prefix strip
+#
+# M8 coverage (new at v0.9.0):
+#   * _mime_for_inode — file type → inode/* mime
+#   * _mime_for_filename — exact match (not prefix) per ADR 0003
+#   * _mime_for_ext — extension lookup
+#   * _mime_for_magic_bytes — synthetic buffers, each magic signature
+#   * mime_for_entry — full precedence chain, fallthrough
 
 include "src/walk.cyr"
 include "src/icons.cyr"
+include "src/mime.cyr"
+include "src/git.cyr"
 include "src/color.cyr"
 include "src/render.cyr"
 include "src/columns.cyr"
@@ -535,6 +550,194 @@ fn main(): i64 {
     assert_eq(_test_parse_pos_int("abc"), 0 - 1, "'abc' -> -1");
     assert_eq(_test_parse_pos_int("12a"), 0 - 1, "'12a' -> -1 (mid-string non-digit)");
     assert_eq(_test_parse_pos_int("-5"), 0 - 1, "'-5' -> -1 (sign rejected)");
+
+    # ============================================================
+    # M7 — git status (helpers + classifier)
+    # ============================================================
+
+    test_group("_be_u32 / _be_u16");
+    var be_buf = alloc(8);
+    store8(be_buf + 0, 0x12);
+    store8(be_buf + 1, 0x34);
+    store8(be_buf + 2, 0x56);
+    store8(be_buf + 3, 0x78);
+    assert_eq(_be_u32(be_buf, 0), 0x12345678, "be32 multi-byte");
+    assert_eq(_be_u16(be_buf, 0), 0x1234, "be16 multi-byte");
+    store8(be_buf + 0, 0x00);
+    store8(be_buf + 1, 0x00);
+    store8(be_buf + 2, 0x00);
+    store8(be_buf + 3, 0x02);
+    assert_eq(_be_u32(be_buf, 0), 2, "be32 = 2 (DIRC version 2 shape)");
+    store8(be_buf + 0, 0x00);
+    store8(be_buf + 1, 0x00);
+    store8(be_buf + 2, 0x00);
+    store8(be_buf + 3, 0x75);
+    assert_eq(_be_u32(be_buf, 0), 0x75, "be32 = 0x75 (117 entries shape)");
+
+    test_group("_git_parse_index");
+    # Malformed: too short
+    var paths_a = vec_new();
+    var mtimes_a = vec_new();
+    var sizes_a = vec_new();
+    assert_eq(_git_parse_index(be_buf, 4, paths_a, mtimes_a, sizes_a), 0 - 1, "len<12 -> -1");
+    # Malformed: bad signature
+    var bad_hdr = alloc(12);
+    store8(bad_hdr + 0, 88); store8(bad_hdr + 1, 88);   # "XX..." not DIRC
+    store8(bad_hdr + 2, 88); store8(bad_hdr + 3, 88);
+    store8(bad_hdr + 4, 0); store8(bad_hdr + 5, 0);
+    store8(bad_hdr + 6, 0); store8(bad_hdr + 7, 2);
+    store8(bad_hdr + 8, 0); store8(bad_hdr + 9, 0);
+    store8(bad_hdr + 10, 0); store8(bad_hdr + 11, 0);
+    assert_eq(_git_parse_index(bad_hdr, 12, paths_a, mtimes_a, sizes_a), 0 - 1, "bad signature -> -1");
+    # Wrong version
+    var v3_hdr = alloc(12);
+    store8(v3_hdr + 0, 68); store8(v3_hdr + 1, 73);     # "DIRC"
+    store8(v3_hdr + 2, 82); store8(v3_hdr + 3, 67);
+    store8(v3_hdr + 4, 0); store8(v3_hdr + 5, 0);
+    store8(v3_hdr + 6, 0); store8(v3_hdr + 7, 3);       # version 3
+    store8(v3_hdr + 8, 0); store8(v3_hdr + 9, 0);
+    store8(v3_hdr + 10, 0); store8(v3_hdr + 11, 0);
+    assert_eq(_git_parse_index(v3_hdr, 12, paths_a, mtimes_a, sizes_a), 0 - 1, "v3 -> -1 (v2 only)");
+    # Valid v2 with 0 entries
+    var v2_empty = alloc(12);
+    store8(v2_empty + 0, 68); store8(v2_empty + 1, 73);
+    store8(v2_empty + 2, 82); store8(v2_empty + 3, 67);
+    store8(v2_empty + 4, 0); store8(v2_empty + 5, 0);
+    store8(v2_empty + 6, 0); store8(v2_empty + 7, 2);
+    store8(v2_empty + 8, 0); store8(v2_empty + 9, 0);
+    store8(v2_empty + 10, 0); store8(v2_empty + 11, 0);
+    var paths_b = vec_new();
+    var mtimes_b = vec_new();
+    var sizes_b = vec_new();
+    assert_eq(_git_parse_index(v2_empty, 12, paths_b, mtimes_b, sizes_b), 0, "v2 empty -> 0");
+    assert_eq(vec_len(paths_b), 0, "v2 empty -> 0 paths pushed");
+
+    test_group("_git_match_one");
+    # Exact basename
+    var pat_make = make_str("Makefile");
+    assert_eq(_git_match_one(pat_make, make_str("Makefile"), 0), 1, "Makefile == Makefile");
+    assert_eq(_git_match_one(pat_make, make_str("makefile"), 0), 0, "case-sensitive");
+    assert_eq(_git_match_one(pat_make, make_str("Makefile.in"), 0), 0, "no partial match");
+    # Suffix glob *.ext
+    var pat_swp = make_str("*.swp");
+    assert_eq(_git_match_one(pat_swp, make_str("foo.swp"), 0), 1, "*.swp matches foo.swp");
+    assert_eq(_git_match_one(pat_swp, make_str("foo.swp.bak"), 0), 0, "*.swp doesn't match foo.swp.bak");
+    assert_eq(_git_match_one(pat_swp, make_str(".swp"), 0), 1, "*.swp matches .swp itself");
+    # Directory-only pattern (trailing /)
+    var pat_build = make_str("build/");
+    assert_eq(_git_match_one(pat_build, make_str("build"), 1), 1, "build/ matches dir 'build'");
+    assert_eq(_git_match_one(pat_build, make_str("build"), 0), 0, "build/ doesn't match file 'build'");
+    assert_eq(_git_match_one(pat_build, make_str("builder"), 1), 0, "build/ doesn't match dir 'builder'");
+    # Empty pattern → no match
+    assert_eq(_git_match_one(make_str(""), make_str("foo"), 0), 0, "empty pattern -> 0");
+
+    test_group("_git_listing_rel");
+    # Equal abs paths → empty rel
+    var rel1 = _git_listing_rel("/home/macro/Repos/darshini", "/home/macro/Repos/darshini");
+    assert_eq(str_len(rel1), 0, "equal paths -> ''");
+    # Listing is subdir of repo → strip prefix + leading slash
+    var rel2 = _git_listing_rel("/home/macro/Repos/darshini", "/home/macro/Repos/darshini/src");
+    assert_eq(str_eq(rel2, make_str("src")), 1, "subdir 'src' -> 'src'");
+    var rel3 = _git_listing_rel("/home/macro/Repos/darshini", "/home/macro/Repos/darshini/docs/adr");
+    assert_eq(str_eq(rel3, make_str("docs/adr")), 1, "nested subdir -> 'docs/adr'");
+    # Non-matching prefix → empty rel
+    var rel4 = _git_listing_rel("/home/macro/Repos/darshini", "/tmp/elsewhere");
+    assert_eq(str_len(rel4), 0, "non-matching prefix -> ''");
+
+    # ============================================================
+    # M8 — mime detection
+    # ============================================================
+
+    test_group("_mime_for_inode");
+    var mime_dir  = _mime_for_inode(0x41ED);          # dir 0755
+    var mime_lnk  = _mime_for_inode(0xA1FF);          # symlink
+    var mime_reg  = _mime_for_inode(0x81A4);          # regular file
+    var mime_fifo = _mime_for_inode(0x11A4);          # fifo
+    var mime_sock = _mime_for_inode(0xC1A4);          # socket
+    var mime_blk  = _mime_for_inode(0x61A4);          # block dev
+    var mime_chr  = _mime_for_inode(0x21A4);          # char dev
+    assert_eq(streq(mime_dir, "inode/directory"), 1, "dir -> inode/directory");
+    assert_eq(streq(mime_lnk, "inode/symlink"), 1, "symlink -> inode/symlink");
+    assert_eq(mime_reg, 0, "regular -> 0 (fall through)");
+    assert_eq(streq(mime_fifo, "inode/fifo"), 1, "fifo");
+    assert_eq(streq(mime_sock, "inode/socket"), 1, "socket");
+    assert_eq(streq(mime_blk, "inode/blockdevice"), 1, "blkdev");
+    assert_eq(streq(mime_chr, "inode/chardevice"), 1, "chrdev");
+
+    test_group("_mime_for_filename");
+    # Exact matches fire
+    assert_eq(streq(_mime_for_filename(make_str("Makefile")), "text/x-makefile"), 1, "Makefile exact");
+    assert_eq(streq(_mime_for_filename(make_str("Dockerfile")), "text/x-dockerfile"), 1, "Dockerfile exact");
+    assert_eq(streq(_mime_for_filename(make_str("LICENSE")), "text/plain"), 1, "LICENSE exact");
+    # NON-prefix per ADR 0003 — README.md must fall through (return 0)
+    assert_eq(_mime_for_filename(make_str("CHANGELOG.md")), 0, "CHANGELOG.md does NOT match prefix");
+    assert_eq(_mime_for_filename(make_str("README.txt")), 0, "README.txt does NOT match prefix");
+    assert_eq(_mime_for_filename(make_str("Makefile.in")), 0, "Makefile.in does NOT match (longer)");
+
+    test_group("_mime_for_ext");
+    assert_eq(streq(_mime_for_ext("md"), "text/markdown"), 1, "md -> text/markdown");
+    assert_eq(streq(_mime_for_ext("cyr"), "application/x-cyrius"), 1, "cyr -> application/x-cyrius");
+    assert_eq(streq(_mime_for_ext("py"), "text/x-python"), 1, "py -> text/x-python");
+    assert_eq(streq(_mime_for_ext("json"), "application/json"), 1, "json");
+    assert_eq(streq(_mime_for_ext("png"), "image/png"), 1, "png");
+    assert_eq(streq(_mime_for_ext("pdf"), "application/pdf"), 1, "pdf");
+    assert_eq(_mime_for_ext("xyzunknown"), 0, "unknown ext -> 0");
+    assert_eq(_mime_for_ext(0), 0, "null ext -> 0");
+
+    test_group("_mime_for_magic_bytes");
+    var mbuf = alloc(16);
+    # ELF: 7f 45 4c 46
+    store8(mbuf + 0, 0x7f); store8(mbuf + 1, 0x45);
+    store8(mbuf + 2, 0x4c); store8(mbuf + 3, 0x46);
+    assert_eq(streq(_mime_for_magic_bytes(mbuf, 4), "application/x-executable"), 1, "ELF magic");
+    # PNG: 89 50 4e 47
+    store8(mbuf + 0, 0x89); store8(mbuf + 1, 0x50);
+    store8(mbuf + 2, 0x4e); store8(mbuf + 3, 0x47);
+    assert_eq(streq(_mime_for_magic_bytes(mbuf, 4), "image/png"), 1, "PNG magic");
+    # JPEG: ff d8 ff
+    store8(mbuf + 0, 0xff); store8(mbuf + 1, 0xd8);
+    store8(mbuf + 2, 0xff);
+    assert_eq(streq(_mime_for_magic_bytes(mbuf, 3), "image/jpeg"), 1, "JPEG magic");
+    # PDF: 25 50 44 46 2d
+    store8(mbuf + 0, 0x25); store8(mbuf + 1, 0x50);
+    store8(mbuf + 2, 0x44); store8(mbuf + 3, 0x46);
+    store8(mbuf + 4, 0x2d);
+    assert_eq(streq(_mime_for_magic_bytes(mbuf, 5), "application/pdf"), 1, "PDF magic");
+    # Shebang: 23 21
+    store8(mbuf + 0, 0x23); store8(mbuf + 1, 0x21);
+    assert_eq(streq(_mime_for_magic_bytes(mbuf, 2), "application/x-shellscript"), 1, "shebang magic");
+    # gzip: 1f 8b
+    store8(mbuf + 0, 0x1f); store8(mbuf + 1, 0x8b);
+    assert_eq(streq(_mime_for_magic_bytes(mbuf, 2), "application/gzip"), 1, "gzip magic");
+    # Insufficient length → 0
+    assert_eq(_mime_for_magic_bytes(mbuf, 1), 0, "len<2 magic -> 0");
+    assert_eq(_mime_for_magic_bytes(mbuf, 0), 0, "len=0 magic -> 0");
+    # Bytes that match nothing
+    store8(mbuf + 0, 0xab); store8(mbuf + 1, 0xcd);
+    store8(mbuf + 2, 0xef); store8(mbuf + 3, 0x00);
+    assert_eq(_mime_for_magic_bytes(mbuf, 4), 0, "random bytes -> 0");
+
+    test_group("mime_for_entry (full chain)");
+    # Directory mode → inode/directory regardless of name.
+    var dir_mode = 0x41ED;
+    assert_eq(streq(mime_for_entry("/tmp", make_str("foo.md"), dir_mode), "inode/directory"), 1,
+              "dir mode beats ext");
+    # Regular file with known extension → extension lookup.
+    var reg_mode = 0x81A4;
+    assert_eq(streq(mime_for_entry("/nonexistent", make_str("README.md"), reg_mode), "text/markdown"), 1,
+              "README.md ext lookup");
+    assert_eq(streq(mime_for_entry("/nonexistent", make_str("main.cyr"), reg_mode), "application/x-cyrius"), 1,
+              "main.cyr ext lookup");
+    # Exact filename match wins over (missing) ext lookup.
+    assert_eq(streq(mime_for_entry("/nonexistent", make_str("Makefile"), reg_mode), "text/x-makefile"), 1,
+              "Makefile exact-filename");
+    # Executable bit on regular file with no known extension → x-executable.
+    var exec_mode = 0x81ED;       # 0755 regular
+    assert_eq(streq(mime_for_entry("/nonexistent", make_str("randomtool"), exec_mode), "application/x-executable"), 1,
+              "executable bit set + no ext -> x-executable");
+    # Regular non-executable + unknown ext + path doesn't exist (magic open fails) → octet-stream
+    assert_eq(streq(mime_for_entry("/nonexistent", make_str("foo.xyzunknown"), reg_mode), "application/octet-stream"), 1,
+              "unknown ext + magic-open-fails -> octet-stream");
 
     return assert_summary();
 }

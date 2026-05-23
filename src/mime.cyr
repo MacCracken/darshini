@@ -1,0 +1,220 @@
+# darshini — mime type detection (M8, `--mime`).
+#
+# Compile-baked lookup chain mirroring mime/default.cyml. Per
+# ADR 0003 detection precedence:
+#   1. inode/* for non-regular file types
+#   2. [filenames] exact match
+#   3. [extensions] lowercased-ext match
+#   4. executable bit → application/x-executable
+#   5. magic-bytes (open + read 16 bytes + dispatch)
+#   6. application/octet-stream fallback
+
+# inode/* mime for the standard non-regular Unix file types.
+# Returns 0 when the entry IS a regular file (caller continues
+# the lookup chain).
+fn _mime_for_inode(mode): i64 {
+    var fmt = mode & S_IFMT;
+    if (fmt == S_IFDIR)  { return "inode/directory"; }
+    if (fmt == S_IFLNK)  { return "inode/symlink"; }
+    if (fmt == S_IFIFO)  { return "inode/fifo"; }
+    if (fmt == S_IFSOCK) { return "inode/socket"; }
+    if (fmt == S_IFBLK)  { return "inode/blockdevice"; }
+    if (fmt == S_IFCHR)  { return "inode/chardevice"; }
+    return 0;
+}
+
+# Exact filename match — fires before the extension lookup.
+# Per ADR 0003: exact match only. Files like CHANGELOG.md
+# must fall through to the extension lookup (text/markdown) —
+# we don't replicate icon.cyr's filename-prefix behavior here.
+fn _mime_for_filename(name): i64 {
+    if (_icons_eq_cstr(name, "Makefile") == 1)        { return "text/x-makefile"; }
+    if (_icons_eq_cstr(name, "Dockerfile") == 1)      { return "text/x-dockerfile"; }
+    if (_icons_eq_cstr(name, "LICENSE") == 1)         { return "text/plain"; }
+    if (_icons_eq_cstr(name, "VERSION") == 1)         { return "text/plain"; }
+    if (_icons_eq_cstr(name, "README") == 1)          { return "text/plain"; }
+    if (_icons_eq_cstr(name, "CHANGELOG") == 1)       { return "text/plain"; }
+    if (_icons_eq_cstr(name, ".gitignore") == 1)      { return "text/x-gitignore"; }
+    if (_icons_eq_cstr(name, ".gitattributes") == 1)  { return "text/plain"; }
+    return 0;
+}
+
+# Extension lookup — mirrors icons table but with mime values.
+fn _mime_for_ext(ext_cstr): i64 {
+    if (ext_cstr == 0) { return 0; }
+    # Cyrius ecosystem
+    if (_icons_ext_eq(ext_cstr, "cyr") == 1)   { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext_cstr, "tcyr") == 1)  { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext_cstr, "bcyr") == 1)  { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext_cstr, "fcyr") == 1)  { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext_cstr, "scyr") == 1)  { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext_cstr, "smcyr") == 1) { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext_cstr, "cyml") == 1)  { return "application/x-cyml"; }
+    if (_icons_ext_eq(ext_cstr, "cyx") == 1)   { return "application/x-cyrius-bytecode"; }
+    # Config
+    if (_icons_ext_eq(ext_cstr, "toml") == 1)  { return "application/toml"; }
+    if (_icons_ext_eq(ext_cstr, "yml") == 1)   { return "application/x-yaml"; }
+    if (_icons_ext_eq(ext_cstr, "yaml") == 1)  { return "application/x-yaml"; }
+    if (_icons_ext_eq(ext_cstr, "json") == 1)  { return "application/json"; }
+    if (_icons_ext_eq(ext_cstr, "ini") == 1)   { return "text/plain"; }
+    if (_icons_ext_eq(ext_cstr, "conf") == 1)  { return "text/plain"; }
+    if (_icons_ext_eq(ext_cstr, "env") == 1)   { return "text/plain"; }
+    # Documentation
+    if (_icons_ext_eq(ext_cstr, "md") == 1)       { return "text/markdown"; }
+    if (_icons_ext_eq(ext_cstr, "markdown") == 1) { return "text/markdown"; }
+    if (_icons_ext_eq(ext_cstr, "rst") == 1)      { return "text/x-rst"; }
+    if (_icons_ext_eq(ext_cstr, "txt") == 1)      { return "text/plain"; }
+    if (_icons_ext_eq(ext_cstr, "adoc") == 1)     { return "text/asciidoc"; }
+    if (_icons_ext_eq(ext_cstr, "log") == 1)      { return "text/plain"; }
+    # Web
+    if (_icons_ext_eq(ext_cstr, "html") == 1)  { return "text/html"; }
+    if (_icons_ext_eq(ext_cstr, "htm") == 1)   { return "text/html"; }
+    if (_icons_ext_eq(ext_cstr, "css") == 1)   { return "text/css"; }
+    if (_icons_ext_eq(ext_cstr, "scss") == 1)  { return "text/x-scss"; }
+    if (_icons_ext_eq(ext_cstr, "js") == 1)    { return "text/javascript"; }
+    if (_icons_ext_eq(ext_cstr, "mjs") == 1)   { return "text/javascript"; }
+    if (_icons_ext_eq(ext_cstr, "ts") == 1)    { return "application/typescript"; }
+    if (_icons_ext_eq(ext_cstr, "tsx") == 1)   { return "application/typescript"; }
+    if (_icons_ext_eq(ext_cstr, "jsx") == 1)   { return "text/javascript"; }
+    # Systems
+    if (_icons_ext_eq(ext_cstr, "c") == 1)     { return "text/x-c"; }
+    if (_icons_ext_eq(ext_cstr, "h") == 1)     { return "text/x-c"; }
+    if (_icons_ext_eq(ext_cstr, "cpp") == 1)   { return "text/x-c++"; }
+    if (_icons_ext_eq(ext_cstr, "hpp") == 1)   { return "text/x-c++"; }
+    if (_icons_ext_eq(ext_cstr, "rs") == 1)    { return "text/rust"; }
+    if (_icons_ext_eq(ext_cstr, "go") == 1)    { return "text/x-go"; }
+    if (_icons_ext_eq(ext_cstr, "zig") == 1)   { return "text/x-zig"; }
+    if (_icons_ext_eq(ext_cstr, "asm") == 1)   { return "text/x-asm"; }
+    if (_icons_ext_eq(ext_cstr, "s") == 1)     { return "text/x-asm"; }
+    # Scripting
+    if (_icons_ext_eq(ext_cstr, "py") == 1)    { return "text/x-python"; }
+    if (_icons_ext_eq(ext_cstr, "sh") == 1)    { return "application/x-shellscript"; }
+    if (_icons_ext_eq(ext_cstr, "bash") == 1)  { return "application/x-shellscript"; }
+    if (_icons_ext_eq(ext_cstr, "fish") == 1)  { return "application/x-shellscript"; }
+    if (_icons_ext_eq(ext_cstr, "zsh") == 1)   { return "application/x-shellscript"; }
+    if (_icons_ext_eq(ext_cstr, "lua") == 1)   { return "text/x-lua"; }
+    if (_icons_ext_eq(ext_cstr, "rb") == 1)    { return "text/x-ruby"; }
+    # Archives
+    if (_icons_ext_eq(ext_cstr, "tar") == 1)   { return "application/x-tar"; }
+    if (_icons_ext_eq(ext_cstr, "gz") == 1)    { return "application/gzip"; }
+    if (_icons_ext_eq(ext_cstr, "zip") == 1)   { return "application/zip"; }
+    if (_icons_ext_eq(ext_cstr, "xz") == 1)    { return "application/x-xz"; }
+    if (_icons_ext_eq(ext_cstr, "bz2") == 1)   { return "application/x-bzip2"; }
+    if (_icons_ext_eq(ext_cstr, "7z") == 1)    { return "application/x-7z-compressed"; }
+    # Images
+    if (_icons_ext_eq(ext_cstr, "png") == 1)   { return "image/png"; }
+    if (_icons_ext_eq(ext_cstr, "jpg") == 1)   { return "image/jpeg"; }
+    if (_icons_ext_eq(ext_cstr, "jpeg") == 1)  { return "image/jpeg"; }
+    if (_icons_ext_eq(ext_cstr, "gif") == 1)   { return "image/gif"; }
+    if (_icons_ext_eq(ext_cstr, "svg") == 1)   { return "image/svg+xml"; }
+    if (_icons_ext_eq(ext_cstr, "webp") == 1)  { return "image/webp"; }
+    # Audio + video
+    if (_icons_ext_eq(ext_cstr, "mp3") == 1)   { return "audio/mpeg"; }
+    if (_icons_ext_eq(ext_cstr, "wav") == 1)   { return "audio/wav"; }
+    if (_icons_ext_eq(ext_cstr, "flac") == 1)  { return "audio/flac"; }
+    if (_icons_ext_eq(ext_cstr, "mp4") == 1)   { return "video/mp4"; }
+    if (_icons_ext_eq(ext_cstr, "mkv") == 1)   { return "video/x-matroska"; }
+    if (_icons_ext_eq(ext_cstr, "webm") == 1)  { return "video/webm"; }
+    # Data
+    if (_icons_ext_eq(ext_cstr, "csv") == 1)   { return "text/csv"; }
+    if (_icons_ext_eq(ext_cstr, "sql") == 1)   { return "application/sql"; }
+    if (_icons_ext_eq(ext_cstr, "db") == 1)    { return "application/x-sqlite3"; }
+    if (_icons_ext_eq(ext_cstr, "sqlite") == 1){ return "application/x-sqlite3"; }
+    # Other
+    if (_icons_ext_eq(ext_cstr, "lock") == 1)  { return "text/plain"; }
+    if (_icons_ext_eq(ext_cstr, "pdf") == 1)   { return "application/pdf"; }
+    return 0;
+}
+
+# Magic-bytes dispatch. `buf` is the first `len` bytes read from
+# the file (len <= 16 expected). Returns mime cstr or 0 when no
+# signature matches. Order matches ADR 0003 §"Magic-bytes set".
+fn _mime_for_magic_bytes(buf, len): i64 {
+    if (len >= 4) {
+        if (load8(buf + 0) == 0x7f) { if (load8(buf + 1) == 0x45) {
+            if (load8(buf + 2) == 0x4c) { if (load8(buf + 3) == 0x46) {
+                return "application/x-executable";
+            } } } }
+        if (load8(buf + 0) == 0x89) { if (load8(buf + 1) == 0x50) {
+            if (load8(buf + 2) == 0x4e) { if (load8(buf + 3) == 0x47) {
+                return "image/png";
+            } } } }
+        if (load8(buf + 0) == 0x47) { if (load8(buf + 1) == 0x49) {
+            if (load8(buf + 2) == 0x46) { if (load8(buf + 3) == 0x38) {
+                return "image/gif";
+            } } } }
+        if (load8(buf + 0) == 0x50) { if (load8(buf + 1) == 0x4b) {
+            if (load8(buf + 2) == 0x03) { if (load8(buf + 3) == 0x04) {
+                return "application/zip";
+            } } } }
+        if (load8(buf + 0) == 0x50) { if (load8(buf + 1) == 0x4b) {
+            if (load8(buf + 2) == 0x05) { if (load8(buf + 3) == 0x06) {
+                return "application/zip";
+            } } } }
+    }
+    if (len >= 5) {
+        if (load8(buf + 0) == 0x25) { if (load8(buf + 1) == 0x50) {
+            if (load8(buf + 2) == 0x44) { if (load8(buf + 3) == 0x46) {
+                if (load8(buf + 4) == 0x2d) { return "application/pdf"; }
+            } } } }
+    }
+    if (len >= 6) {
+        if (load8(buf + 0) == 0xfd) { if (load8(buf + 1) == 0x37) {
+            if (load8(buf + 2) == 0x7a) { if (load8(buf + 3) == 0x58) {
+                if (load8(buf + 4) == 0x5a) { if (load8(buf + 5) == 0x00) {
+                    return "application/x-xz";
+                } } } } } }
+        if (load8(buf + 0) == 0x37) { if (load8(buf + 1) == 0x7a) {
+            if (load8(buf + 2) == 0xbc) { if (load8(buf + 3) == 0xaf) {
+                if (load8(buf + 4) == 0x27) { if (load8(buf + 5) == 0x1c) {
+                    return "application/x-7z-compressed";
+                } } } } } }
+    }
+    if (len >= 3) {
+        if (load8(buf + 0) == 0xff) { if (load8(buf + 1) == 0xd8) {
+            if (load8(buf + 2) == 0xff) { return "image/jpeg"; }
+        } }
+        if (load8(buf + 0) == 0x42) { if (load8(buf + 1) == 0x5a) {
+            if (load8(buf + 2) == 0x68) { return "application/x-bzip2"; }
+        } }
+    }
+    if (len >= 2) {
+        if (load8(buf + 0) == 0x1f) { if (load8(buf + 1) == 0x8b) {
+            return "application/gzip";
+        } }
+        if (load8(buf + 0) == 0x23) { if (load8(buf + 1) == 0x21) {
+            return "application/x-shellscript";
+        } }
+    }
+    return 0;
+}
+
+# Open + read up to 16 bytes + dispatch via magic-byte table.
+# Closes the fd. Returns mime cstr or 0 (no magic match).
+fn _mime_probe_magic(path_cstr): i64 {
+    var fd = sys_open(path_cstr, O_RDONLY, 0);
+    if (fd < 0) { return 0; }
+    var buf[16];
+    var n = sys_read(fd, &buf, 16);
+    sys_close(fd);
+    if (n <= 0) { return 0; }
+    return _mime_for_magic_bytes(&buf, n);
+}
+
+# Master dispatcher. Walks the precedence per ADR 0003 §"Detection
+# precedence". Always returns a non-zero cstr — falls through to
+# application/octet-stream when nothing else matches.
+fn mime_for_entry(path_cstr, name, mode): i64 {
+    var inode_mime = _mime_for_inode(mode);
+    if (inode_mime != 0) { return inode_mime; }
+    var fn_mime = _mime_for_filename(name);
+    if (fn_mime != 0) { return fn_mime; }
+    var ext = _icons_ext_of(name);
+    var ext_mime = _mime_for_ext(ext);
+    if (ext_mime != 0) { return ext_mime; }
+    var x_bits = S_IXUSR | S_IXGRP | S_IXOTH;
+    if ((mode & x_bits) != 0) { return "application/x-executable"; }
+    var magic_mime = _mime_probe_magic(path_cstr);
+    if (magic_mime != 0) { return magic_mime; }
+    return "application/octet-stream";
+}

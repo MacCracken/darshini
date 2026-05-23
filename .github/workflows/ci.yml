@@ -98,6 +98,56 @@ jobs:
           test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
           echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }
 
+      - name: Smoke — --mime column under -l surfaces expected types
+        # M8 contract: `darshini -l --mime` shows mime types
+        # for the listing — text/markdown for .md, application/x-cyml
+        # for .cyml, inode/directory for dirs. Acceptance per
+        # roadmap M8: text/markdown + application/x-cyrius +
+        # application/x-executable visible.
+        # `--mime` without -l is parsed but renders no column.
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} -l --mime > /tmp/mime_long
+          grep -qE 'text/markdown +CLAUDE\.md$' /tmp/mime_long \
+            || { echo "no text/markdown for CLAUDE.md:"; cat /tmp/mime_long; exit 1; }
+          grep -qE 'application/x-cyml +cyrius\.cyml$' /tmp/mime_long \
+            || { echo "no application/x-cyml for cyrius.cyml:"; cat /tmp/mime_long; exit 1; }
+          grep -qE 'inode/directory +docs$' /tmp/mime_long \
+            || { echo "no inode/directory for docs/:"; cat /tmp/mime_long; exit 1; }
+          # --mime without -l: column suppressed; verify no mime
+          # token leaked into the short-format listing.
+          ./build/${{ github.event.repository.name }} --mime > /tmp/mime_short
+          if grep -qE '(text|application|image|inode)/' /tmp/mime_short; then
+            echo "--mime without -l leaked mime tokens:"
+            cat /tmp/mime_short
+            exit 1
+          fi
+
+      - name: Smoke — --git column in repo + silent outside
+        # M7 contract: `darshini --git` in the project root
+        # surfaces status chars — at least one tracked `.` and
+        # at least one ignored `!`. We don't pin specific
+        # filenames as "clean" because CHANGELOG.md / state.md
+        # etc. may have been touched in the same checkout.
+        # Outside a git repo (e.g. /tmp) the column silently
+        # doesn't appear — listing matches a no-flag invocation.
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} --git > /tmp/git_in_repo
+          grep -qE '^\. ' /tmp/git_in_repo \
+            || { echo "no tracked '. ...' lines in --git output:"; cat /tmp/git_in_repo; exit 1; }
+          grep -q '^! build$' /tmp/git_in_repo \
+            || { echo "no '! build' (ignored) in --git output:"; cat /tmp/git_in_repo; exit 1; }
+          # Outside a repo — no column. /tmp may have varying
+          # contents on CI runners; just assert no line starts
+          # with a status-char + space pattern.
+          ./build/${{ github.event.repository.name }} --git /tmp > /tmp/git_outside
+          if grep -qE '^[.M?!] ' /tmp/git_outside; then
+            echo "outside-repo --git leaked status chars:"
+            cat /tmp/git_outside
+            exit 1
+          fi
+
       - name: Smoke — tree mode produces box-drawn output
         # M6 contract: `-T` recurses with box-drawing connectors.
         # Greps for the actual connector bytes (├ = e2 94 9c,

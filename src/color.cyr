@@ -36,23 +36,32 @@ fn color_for_mode(mode): i64 {
 
 # Build per-entry "decoration" vecs for the listing of `entries`
 # (basenames inside `dir_str`):
-#   - colors vec: parallel vec<sgr_code> per ADR 0001 (or 0)
-#   - icons vec : parallel vec<cstr glyph bytes> per ADR 0002
-#                 (or 0 if stat failed)
-# Either vec is omitted if its want_ flag is 0; the returned
-# 16-byte struct stores 0 for the omitted slot.
+#   - colors  vec: parallel vec<sgr_code> per ADR 0001 (or 0)
+#   - icons   vec: parallel vec<cstr glyph bytes> per ADR 0002
+#                  (or 0 if stat failed)
+#   - gitchrs vec: parallel vec<i64 status-char byte> per M7
+#                  (or 0 when want_git == 0; ' ' = 32 when ctx
+#                  is non-null but the lookup failed)
+# Each vec is omitted if its want_ flag is 0; the returned
+# 24-byte struct stores 0 for the omitted slot.
 #
-# Single lstat per entry — saves a pass vs computing color and
-# icon separately. Symlinks pay one extra `sys_stat` for broken-
-# target detection (only when want_color is on; the icon stays
-# the link glyph either way).
+# Single lstat per entry — saves three separate passes.
+# Symlinks pay one extra `sys_stat` for broken-target detection
+# (only when want_color is on; the icon stays the link glyph
+# either way; git status uses lstat-only data).
 #
-# Returns a 16-byte heap struct: {colors@0, icons@8}.
-fn compute_decor(entries, dir_str, want_color, want_icons): i64 {
+# Returns a 24-byte heap struct: {colors@0, icons@8, gitchrs@16}.
+fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime): i64 {
     var colors = 0;
     var icons = 0;
+    var gitchrs = 0;
+    var mimes = 0;
+    var want_git = 0;
+    if (git_ctx != 0) { want_git = 1; }
     if (want_color == 1) { colors = vec_new(); }
     if (want_icons == 1) { icons = vec_new(); }
+    if (want_git == 1)   { gitchrs = vec_new(); }
+    if (want_mime == 1)  { mimes = vec_new(); }
     var n = vec_len(entries);
     var i = 0;
     while (i < n) {
@@ -62,14 +71,13 @@ fn compute_decor(entries, dir_str, want_color, want_icons): i64 {
         var rc = lstat_path(str_data(full), stat_buf);
         var c = 0;
         var ic = 0;
+        var gc = 32;
+        var mm = 0;
         if (rc >= 0) {
             var mode = load32(stat_buf + STAT_MODE);
             var fmt = mode & S_IFMT;
             if (want_color == 1) {
                 if (fmt == S_IFLNK) {
-                    # Follow to detect broken-symlink. sys_stat
-                    # (not lstat) walks the symlink chain; ENOENT
-                    # / ELOOP mean the target is unreachable.
                     var probe[144];
                     var rc2 = sys_stat(str_data(full), &probe);
                     if (rc2 < 0) { c = TTY_FG_RED; }
@@ -79,35 +87,64 @@ fn compute_decor(entries, dir_str, want_color, want_icons): i64 {
                 }
             }
             if (want_icons == 1) { ic = icon_for_entry(name, mode); }
+            if (want_git == 1) {
+                var is_dir = 0;
+                if (fmt == S_IFDIR) { is_dir = 1; }
+                var mtime = load64(stat_buf + STAT_MTIME);
+                var size = load64(stat_buf + STAT_SIZE);
+                gc = git_status_for(git_ctx, name, is_dir, mtime, size);
+            }
+            if (want_mime == 1) {
+                mm = mime_for_entry(str_data(full), name, mode);
+            }
+        } else {
+            if (want_mime == 1) { mm = "application/octet-stream"; }
         }
         if (want_color == 1) { vec_push(colors, c); }
         if (want_icons == 1) { vec_push(icons, ic); }
+        if (want_git == 1)   { vec_push(gitchrs, gc); }
+        if (want_mime == 1)  { vec_push(mimes, mm); }
         i = i + 1;
     }
-    var r = alloc(16);
-    store64(r, colors);
+    var r = alloc(32);
+    store64(r + 0, colors);
     store64(r + 8, icons);
+    store64(r + 16, gitchrs);
+    store64(r + 24, mimes);
     return r;
 }
 
-# Write `name` bytes to stdout, optionally prefixed by `icon`
-# (cstr glyph + space; ADR 0002 fixes the display-width budget
-# at 2 cells) and optionally wrapped in the SGR pair
-# `\x1b[<color>m ... \x1b[0m`. The SGR wrap envelopes icon +
-# space + name so the icon takes the name's color.
+# Write `name` bytes to stdout with full decoration: optional
+# git status char (M7), optional icon (M5), optional color (M4).
+# Emission order before the name: `<git><space><icon><space>`
+# (each pair only emitted when its budget is non-zero).
+# Color SGR wrap envelopes ALL prefixed decoration so the
+# status / icon takes the name's color.
 #
-# `color == 0` skips the SGR; `icon == 0` skips the icon prefix
-# (and emits 2 spaces of padding when caller is in icon-mode but
-# this specific entry has no glyph — keeps column alignment).
-# `icon_width_pad` is 0 when icons are disabled globally; 2 when
-# icons are enabled but `icon` is 0 (preserves column alignment
-# for stat-failed entries).
-fn emit_decorated(name, color, icon, icon_width_pad): i64 {
+# `color == 0` skips the SGR. `icon == 0` skips the icon glyph
+# (and emits 2 spaces of padding when `icon_pad > 0` to keep
+# column alignment for stat-failed entries). `git_char == 0`
+# is the same shape for the git column (emits 2 spaces when
+# `git_pad > 0` and char is 0).
+#
+# All four pad params (color is implicit, others explicit) are
+# 0 when the corresponding decoration is globally disabled.
+fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad): i64 {
     if (color != 0) { tty_sgr(color); }
+    if (git_pad > 0) {
+        if (git_char != 0) {
+            var cb[1];
+            store8(&cb, git_char);
+            sys_write(STDOUT_FD, &cb, 1);
+            sys_write(STDOUT_FD, " ", 1);
+        } else {
+            sys_write(STDOUT_FD, "  ", 2);
+        }
+    }
     if (icon != 0) {
         sys_write(STDOUT_FD, icon, strlen(icon));
         sys_write(STDOUT_FD, " ", 1);
-    } else { if (icon_width_pad > 0) {
+    } else { if (icon_pad > 0) {
         sys_write(STDOUT_FD, "  ", 2);
     } }
     sys_write(STDOUT_FD, str_data(name), str_len(name));
@@ -115,8 +152,9 @@ fn emit_decorated(name, color, icon, icon_width_pad): i64 {
     return 0;
 }
 
-# Back-compat for callers that still want the no-icon path.
-# `colors`-only emit kept thin on top of emit_decorated.
+# Back-compat shim for callers that still want the no-decoration
+# (or color-only) path — most of the long-format / non-listing
+# emit paths.
 fn emit_colored(name, color): i64 {
-    return emit_decorated(name, color, 0, 0);
+    return emit_decorated(name, color, 0, 0, 0, 0);
 }

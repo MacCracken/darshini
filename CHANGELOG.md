@@ -4,6 +4,129 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.0] — M8: `--mime` type column
+
+### Added
+- `--mime`: per-entry mime type, shown as a left-aligned
+  column under `-l` (only under `-l` — see ADR 0003 for
+  why short / multi-column / tree formats don't get it).
+- Detection precedence (per ADR 0003, intentionally
+  diverging from the roadmap's literal "magic-first" text
+  for cost reasons):
+  1. Non-regular file type → `inode/*` (directory / symlink /
+     fifo / socket / blockdev / chardevice).
+  2. Exact `[filenames]` match (Makefile, Dockerfile, LICENSE,
+     VERSION, README, CHANGELOG, .gitignore, .gitattributes).
+  3. Lowercased `[extensions]` match (80+ entries, mirrors
+     icons/default.cyml shape).
+  4. Executable bit set on a regular file →
+     `application/x-executable`.
+  5. Magic-bytes probe (open + read 16 bytes): ELF / PNG /
+     JPEG / GIF / ZIP / gzip / bzip2 / xz / 7z / PDF / shebang.
+  6. Fallback → `application/octet-stream`.
+- `docs/adr/0003-mime-detection.md` — third ADR. Documents
+  the precedence divergence + magic-byte set + why
+  `--mime` is `-l`-only at v1.0.
+- `mime/default.cyml` — human-readable mime mapping (source
+  of truth for the compile-baked table in `src/mime.cyr`,
+  same pattern as ADR 0002 for icons).
+- `src/mime.cyr` — `mime_for_entry` master + the four
+  per-precedence-tier helpers.
+- `src/color.cyr` `compute_decor` extended again: now also
+  produces a parallel `mimes` vec when requested. Single
+  lstat pass still covers all four decoration vecs (colors,
+  icons, git, mimes).
+- `src/long.cyr` `render_long` two-pass for mime: first
+  scan finds max mime width, second emits each row with
+  the mime column left-aligned + padded.
+- Tests: 36 new assertions across `_mime_for_inode`,
+  `_mime_for_filename` (exact-only, not prefix),
+  `_mime_for_ext`, `_mime_for_magic_bytes` (synthetic
+  byte buffers per signature), `mime_for_entry` full
+  precedence chain. Total now 233/233.
+
+### Notes
+- `--mime` without `-l` is parsed but silent (no column).
+  Column placement under short / multi-column / tree
+  would clash with the fixed-width prefix budget those
+  layouts rely on. Future fixed-width-truncated variant
+  is a post-v1 enhancement if asked.
+- Cost ceiling: 0 extra opens for entries with a known
+  extension (~95% of typical listings). 1 open + read(16)
+  + close per extensionless non-executable regular file.
+- `application/zip` mime covers JAR / DOCX / ODT containers
+  too. Acceptable v1.0 imprecision; deeper inspection
+  needs unzipping (out of scope).
+- README / CHANGELOG / LICENSE filenames are EXACT-match
+  only here (in contrast to icons.cyr's filename
+  prefixes) — so `README.md` correctly reports
+  `text/markdown`, not `text/plain`.
+
+## [0.8.0] — M7: `--git` status column
+
+### Added
+- `--git`: per-entry git status, read directly from
+  `.git/index` (v2 binary) + `.gitignore` +
+  `.git/info/exclude`. NO `git` subprocess per the
+  CLAUDE.md hard rule — every byte parsed from
+  on-disk files via sys_open + sys_read.
+- Status chars (single char, 2-cell column with trailing
+  space): `.` tracked (clean), `M` tracked (modified —
+  mtime_sec or size differs from index), `?` untracked,
+  `!` ignored.
+- Directory entries aggregate: a directory is shown as
+  tracked (`.`) when ANY indexed path lives under it
+  (git's index has no directory entries, only files).
+- Silent skip outside a git repo: when `.git/` isn't
+  in the ancestor chain, `--git` is a no-op (no column,
+  no error). Acceptance criterion per roadmap M7.
+- Composes with `-l` (column slots after mtime, before
+  the icon/name decoration), short / multi-column modes
+  (decoration prefix), and tree mode (per-entry).
+- `src/git.cyr` — big-endian decode helpers, `.git/index`
+  v2 parser, minimal `.gitignore` parser (exact basename,
+  `*suffix` glob, `dir/` directory-only), `git_open`
+  top-level (find root → load context), `git_status_for`
+  classifier with directory-aggregate semantics.
+- `src/color.cyr` `compute_decor` extended: single lstat
+  pass now also produces the git_status vec when a
+  GitCtx is supplied. `emit_decorated` gains
+  `(git_char, git_pad)` params; old `emit_colored` shim
+  forwards 0s.
+- Cell-width math: `pick_cols` / `_columns_total_width`
+  treat `--git`'s 2-cell prefix the same way they treat
+  icons — uniform per-cell offset, padding diff
+  unaffected.
+- Tests: 23 new assertions across `_be_u32` / `_be_u16`
+  (multi-byte big-endian decode), `_git_parse_index`
+  (header validation, version check, empty index),
+  `_git_match_one` (exact / suffix-glob / dir-only),
+  `_git_listing_rel` (prefix-strip edge cases). Total
+  now 197/197.
+
+### Notes
+- MVP scope: `.git/index` v2 only (v3+ rejected; index-v4
+  path-compression unsupported). Linear-scan lookup of
+  tracked paths (acceptable through low-thousands files;
+  hashmap upgrade is post-v1). `.gitignore` subset:
+  exact-basename + `*<suffix>` + `dir/`. Skips negation
+  (`!`), brace expansion, mid-string globs, `**`
+  deep-match. Full gitignore semantics would 5x the
+  module size; v1.0 ships the 80% case.
+- "Added/staged-vs-HEAD" distinction not shown — would
+  require HEAD object parsing. Treated as tracked.
+  Defer to post-v1.
+- nsec-precision modification check skipped (filesystems
+  often return 0 nsec, would false-flag clean files).
+  Only `mtime_sec` and `size` are compared.
+- The `.git/` directory itself shows as `?` (not in
+  index, not in .gitignore). Acceptable; eza skips it
+  with a built-in but darshini stays uniform.
+- ADR not authored for M7 — git format is the
+  upstream-frozen contract, no original design decisions
+  worth documenting (in contrast to ADRs 0001/0002).
+  The scope-cuts above are the audit trail.
+
 ## [0.7.0] — M6: tree mode (`-T` / `--tree`)
 
 ### Added

@@ -1,0 +1,134 @@
+# darshini mime mapping — v1.0 default set.
+#
+# Schema + detection precedence: see docs/adr/0003-mime-detection.md.
+# v0.9.0 compile-bakes the mapping into src/mime.cyr; this CYML
+# is the human-readable source of truth. Edit BOTH when adding
+# a mapping.
+#
+# Detection order (per ADR 0003):
+#   1. Non-regular file type → inode/*
+#   2. Extension match here → mapped mime
+#   3. No-ext + executable bit → application/x-executable
+#   4. No-ext + magic-bytes match → from [magic_bytes]
+#   5. Default → application/octet-stream
+
+[filenames]
+# Exact-match (case-sensitive). Fires before the extension lookup.
+Makefile = "text/x-makefile"
+Dockerfile = "text/x-dockerfile"
+LICENSE = "text/plain"
+VERSION = "text/plain"
+README = "text/plain"
+CHANGELOG = "text/plain"
+.gitignore = "text/x-gitignore"
+.gitattributes = "text/plain"
+
+[extensions]
+# Cyrius ecosystem
+cyr = "application/x-cyrius"
+tcyr = "application/x-cyrius"
+bcyr = "application/x-cyrius"
+fcyr = "application/x-cyrius"
+scyr = "application/x-cyrius"
+smcyr = "application/x-cyrius"
+cyml = "application/x-cyml"
+cyx = "application/x-cyrius-bytecode"
+
+# Config formats
+toml = "application/toml"
+yml = "application/x-yaml"
+yaml = "application/x-yaml"
+json = "application/json"
+ini = "text/plain"
+conf = "text/plain"
+env = "text/plain"
+
+# Documentation + text
+md = "text/markdown"
+markdown = "text/markdown"
+rst = "text/x-rst"
+txt = "text/plain"
+adoc = "text/asciidoc"
+log = "text/plain"
+
+# Web
+html = "text/html"
+htm = "text/html"
+css = "text/css"
+scss = "text/x-scss"
+js = "text/javascript"
+mjs = "text/javascript"
+ts = "application/typescript"
+tsx = "application/typescript"
+jsx = "text/javascript"
+
+# Systems / lower-level
+c = "text/x-c"
+h = "text/x-c"
+cpp = "text/x-c++"
+hpp = "text/x-c++"
+rs = "text/rust"
+go = "text/x-go"
+zig = "text/x-zig"
+asm = "text/x-asm"
+s = "text/x-asm"
+
+# Scripting
+py = "text/x-python"
+sh = "application/x-shellscript"
+bash = "application/x-shellscript"
+fish = "application/x-shellscript"
+zsh = "application/x-shellscript"
+lua = "text/x-lua"
+rb = "text/x-ruby"
+
+# Archives
+tar = "application/x-tar"
+gz = "application/gzip"
+zip = "application/zip"
+xz = "application/x-xz"
+bz2 = "application/x-bzip2"
+"7z" = "application/x-7z-compressed"
+
+# Images
+png = "image/png"
+jpg = "image/jpeg"
+jpeg = "image/jpeg"
+gif = "image/gif"
+svg = "image/svg+xml"
+webp = "image/webp"
+
+# Audio + video
+mp3 = "audio/mpeg"
+wav = "audio/wav"
+flac = "audio/flac"
+mp4 = "video/mp4"
+mkv = "video/x-matroska"
+webm = "video/webm"
+
+# Data
+csv = "text/csv"
+xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+sql = "application/sql"
+db = "application/x-sqlite3"
+sqlite = "application/x-sqlite3"
+
+# Other
+lock = "text/plain"
+pdf = "application/pdf"
+
+[magic_bytes]
+# Reserved table — v1.0 compile-bakes the magic-byte set in
+# src/mime.cyr. Listed here for reference / future runtime-CYML.
+# "7f454c46"   = "application/x-executable"     # ELF
+# "89504e47"   = "image/png"                    # PNG
+# "ffd8ff"     = "image/jpeg"                   # JPEG
+# "47494638"   = "image/gif"                    # GIF8...
+# "504b0304"   = "application/zip"              # PK\3\4
+# "504b0506"   = "application/zip"              # Empty PK\5\6
+# "1f8b"       = "application/gzip"             # gzip
+# "425a68"     = "application/x-bzip2"          # BZh
+# "fd377a585a00" = "application/x-xz"           # \xfd7zXZ\0
+# "377abcaf271c" = "application/x-7z-compressed"
+# "255044462d" = "application/pdf"              # %PDF-
+# "2321"       = "application/x-shellscript"    # #!

@@ -1,0 +1,500 @@
+# darshini — git status column (M7, `--git`).
+#
+# Reads `.git/index` (v2 binary format) directly + `.gitignore`
+# (text) to classify each listing entry as tracked / modified /
+# untracked / ignored. Per CLAUDE.md hard rule: NO `git`
+# subprocess — every byte comes from sys_open + sys_read against
+# the on-disk files.
+#
+# Status chars (per-entry, single char):
+#   '.' (46) — tracked, clean (stat matches index)
+#   'M' (77) — tracked, modified (mtime_sec or size differs)
+#   '?' (63) — untracked, not matched by ignore patterns
+#   '!' (33) — ignored (matches a .gitignore / info/exclude rule)
+#   ' ' (32) — entry's mode lookup failed (broken symlink, race)
+#
+# MVP scope at v0.8.0:
+#   - .git/index v2 only (errors out on v3+ / index-v4 path
+#     compression; the majority of working repos are v2)
+#   - Linear-scan tracked vec for path membership (fine through
+#     low thousands of entries; hashmap upgrade is post-v1)
+#   - .gitignore line-by-line pattern subset: exact-basename,
+#     `*<suffix>` glob (e.g. `*.swp`), `<name>/` directory match.
+#     Skips negation (`!`), brace expansion, mid-string globs,
+#     `**` deep-match. Per-line comments + blank lines stripped.
+#   - No HEAD vs index diff (so "added/staged" doesn't show
+#     distinctly — treated as tracked). Defer to post-v1.
+#   - No nsec-precision modification check (most filesystems
+#     return 0 nsec; comparing would false-flag clean files).
+
+# ================================================================
+# Endian + path helpers
+# ================================================================
+
+# Read 32 bits big-endian from buf+off as a non-negative i64.
+fn _be_u32(buf, off): i64 {
+    var a = load8(buf + off + 0);
+    var b = load8(buf + off + 1);
+    var c = load8(buf + off + 2);
+    var d = load8(buf + off + 3);
+    return (a << 24) | (b << 16) | (c << 8) | d;
+}
+
+# Read 16 bits big-endian.
+fn _be_u16(buf, off): i64 {
+    var a = load8(buf + off + 0);
+    var b = load8(buf + off + 1);
+    return (a << 8) | b;
+}
+
+# Return the absolute version of a path cstr. If already
+# absolute (starts with '/'), returns the input directly.
+# Else, prepends cwd + '/'. Doesn't resolve `..` or symlinks
+# — fine for our use (we just need a stable prefix for the
+# repo-root walk-up and the listing-rel computation).
+fn _git_make_absolute(p): i64 {
+    if (load8(p) == 47) { return p; }
+    var cwd_buf = alloc(4096);
+    var n = syscall(SYS_GETCWD, cwd_buf, 4096);
+    if (n <= 0) { return p; }
+    var plen = strlen(p);
+    var cwd_len = strlen(cwd_buf);
+    var out = alloc(cwd_len + 1 + plen + 1);
+    memcpy(out, cwd_buf, cwd_len);
+    store8(out + cwd_len, 47);
+    memcpy(out + cwd_len + 1, p, plen);
+    store8(out + cwd_len + 1 + plen, 0);
+    return out;
+}
+
+# Walk up from `dir_abs` (must be an absolute cstr), checking
+# at each level whether `<dir>/.git` is a directory. Returns
+# a heap-alloc'd cstr of the directory containing `.git/` on
+# success, or 0 when no enclosing repo was found before
+# reaching the filesystem root.
+fn _git_find_root(dir_abs): i64 {
+    var len = strlen(dir_abs);
+    var buf = alloc(len + 1);
+    memcpy(buf, dir_abs, len);
+    store8(buf + len, 0);
+    var done = 0;
+    while (done == 0) {
+        var cur_len = strlen(buf);
+        # Probe <buf>/.git as a directory.
+        var probe = alloc(cur_len + 8);
+        memcpy(probe, buf, cur_len);
+        var pos = cur_len;
+        if (cur_len == 0) {
+            store8(probe + pos, 47);
+            pos = pos + 1;
+        } else { if (load8(buf + cur_len - 1) != 47) {
+            store8(probe + pos, 47);
+            pos = pos + 1;
+        } }
+        store8(probe + pos + 0, 46);
+        store8(probe + pos + 1, 103);
+        store8(probe + pos + 2, 105);
+        store8(probe + pos + 3, 116);
+        store8(probe + pos + 4, 0);
+        var stat_buf[144];
+        var rc = sys_stat(probe, &stat_buf);
+        if (rc >= 0) {
+            var mode = load32(&stat_buf + STAT_MODE);
+            if ((mode & S_IFMT) == S_IFDIR) { return buf; }
+        }
+        # Walk up — find last '/' in buf and truncate.
+        if (cur_len <= 1) { done = 1; }
+        else {
+            var i = cur_len - 1;
+            var found = 0 - 1;
+            var scanning = 1;
+            while (scanning == 1) {
+                if (load8(buf + i) == 47) {
+                    found = i;
+                    scanning = 0;
+                } else { if (i == 0) { scanning = 0; }
+                else { i = i - 1; } }
+            }
+            if (found <= 0) { done = 1; }
+            else { store8(buf + found, 0); }
+        }
+    }
+    return 0;
+}
+
+# Compute the relative path from `repo_root` to `listing_abs`.
+# Both must be absolute cstrs. Returns a heap-alloc'd Str (may
+# be empty when listing_abs == repo_root).
+fn _git_listing_rel(repo_root, listing_abs): i64 {
+    var rlen = strlen(repo_root);
+    var llen = strlen(listing_abs);
+    if (llen < rlen) { return str_clone(str_from("")); }
+    if (memeq(listing_abs, repo_root, rlen) == 0) { return str_clone(str_from("")); }
+    if (llen == rlen) { return str_clone(str_from("")); }
+    var off = rlen;
+    if (load8(listing_abs + off) == 47) { off = off + 1; }
+    var slen = llen - off;
+    var buf = alloc(slen + 1);
+    memcpy(buf, listing_abs + off, slen);
+    store8(buf + slen, 0);
+    return str_clone(str_from(buf));
+}
+
+# ================================================================
+# .git/index parsing (v2)
+# ================================================================
+
+# Parse the index buffer into three parallel vecs:
+#   paths  : vec<Str>  — repo-relative path of each tracked entry
+#   mtimes : vec<i64>  — index-recorded mtime_sec
+#   sizes  : vec<i64>  — index-recorded size (u32)
+# Returns 0 on success, -1 if the header is not v2 / DIRC.
+fn _git_parse_index(buf, len, paths, mtimes, sizes): i64 {
+    if (len < 12) { return 0 - 1; }
+    if (load8(buf + 0) != 68) { return 0 - 1; }   # 'D'
+    if (load8(buf + 1) != 73) { return 0 - 1; }   # 'I'
+    if (load8(buf + 2) != 82) { return 0 - 1; }   # 'R'
+    if (load8(buf + 3) != 67) { return 0 - 1; }   # 'C'
+    var version = _be_u32(buf, 4);
+    if (version != 2) { return 0 - 1; }
+    var n = _be_u32(buf, 8);
+    var pos = 12;
+    var i = 0;
+    while (i < n) {
+        if (pos + 62 > len) { return 0 - 1; }
+        var mtime_sec = _be_u32(buf, pos + 8);
+        var size = _be_u32(buf, pos + 36);
+        var flags = _be_u16(buf, pos + 60);
+        var name_len = flags & 0xFFF;
+        # Handle the rare "name >= 4095 bytes" case by treating
+        # the field as "scan until NUL" up to the end of the
+        # index — safe even though the precise length is unknown.
+        if (name_len == 0xFFF) {
+            var k = pos + 62;
+            while (k < len) {
+                if (load8(buf + k) == 0) { k = len; }
+                else { name_len = name_len + 1; k = k + 1; }
+            }
+        }
+        var name_start = pos + 62;
+        if (name_start + name_len > len) { return 0 - 1; }
+        var name_buf = alloc(name_len + 1);
+        memcpy(name_buf, buf + name_start, name_len);
+        store8(name_buf + name_len, 0);
+        vec_push(paths, str_clone(str_from(name_buf)));
+        vec_push(mtimes, mtime_sec);
+        vec_push(sizes, size);
+        # Total entry size: 62 + name_len + 1..8 NUL pad to
+        # multiple-of-8. ceil((62+name_len+1)/8)*8.
+        var total = 62 + name_len + 1;
+        var rem = total % 8;
+        if (rem != 0) { total = total + (8 - rem); }
+        pos = pos + total;
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# .gitignore parsing
+# ================================================================
+
+# Parse a .gitignore-style text buffer into the patterns vec.
+# Each pattern is a Str of the trimmed line. Comments (#) and
+# negation (!) and blank lines are skipped. Trailing '\r' from
+# CRLF endings is trimmed. Patterns are stored as-given (with
+# any trailing '/' preserved — _git_match_ignore handles that).
+fn _git_parse_ignore(buf, len, patterns): i64 {
+    var pos = 0;
+    while (pos < len) {
+        # Find end of line
+        var eol = pos;
+        while (eol < len) {
+            if (load8(buf + eol) == 10) { eol = len + 1; }
+            else { eol = eol + 1; }
+        }
+        var line_end = pos;
+        var scanning = 1;
+        while (scanning == 1) {
+            if (line_end >= len) { scanning = 0; }
+            else { if (load8(buf + line_end) == 10) { scanning = 0; }
+            else { line_end = line_end + 1; } }
+        }
+        var line_len = line_end - pos;
+        # Trim trailing CR
+        if (line_len > 0) {
+            if (load8(buf + pos + line_len - 1) == 13) { line_len = line_len - 1; }
+        }
+        # Trim leading whitespace (spaces)
+        var s = pos;
+        var l = line_len;
+        while (l > 0) {
+            if (load8(buf + s) == 32) { s = s + 1; l = l - 1; }
+            else { l = 0 - 1; }     # break-via-flag
+        }
+        if (l < 0) { l = line_end - s; }
+        # Skip blank
+        if (l > 0) {
+            var first = load8(buf + s);
+            if (first != 35) { if (first != 33) {
+                # Not comment, not negation — keep it.
+                # Strip leading '/' (root-anchor; we match basename only).
+                if (first == 47) { s = s + 1; l = l - 1; }
+                if (l > 0) {
+                    var pat = alloc(l + 1);
+                    memcpy(pat, buf + s, l);
+                    store8(pat + l, 0);
+                    vec_push(patterns, str_clone(str_from(pat)));
+                }
+            } }
+        }
+        pos = line_end + 1;
+    }
+    return 0;
+}
+
+# Match `name` against one ignore `pattern` (both Strs).
+# `is_dir` (0/1) is honored by directory-only `pat/` patterns.
+# Subset semantics — see docs/adr at M7 closeout if added.
+fn _git_match_one(pattern, name, is_dir): i64 {
+    var plen = str_len(pattern);
+    var nlen = str_len(name);
+    if (plen == 0) { return 0; }
+    var pd = str_data(pattern);
+    var nd = str_data(name);
+    # Directory-only `pat/`
+    var dir_only = 0;
+    var match_len = plen;
+    if (load8(pd + plen - 1) == 47) {
+        dir_only = 1;
+        match_len = plen - 1;
+        if (is_dir == 0) { return 0; }
+    }
+    # `*<suffix>` glob — check the rest of the pattern as a
+    # suffix of `name`.
+    if (load8(pd) == 42) {
+        var sfx_len = match_len - 1;
+        if (sfx_len > nlen) { return 0; }
+        var sfx_off = 1;
+        return memeq(nd + nlen - sfx_len, pd + sfx_off, sfx_len);
+    }
+    # Exact basename match.
+    if (match_len != nlen) { return 0; }
+    return memeq(nd, pd, match_len);
+}
+
+# Match `name` against any pattern in `patterns`. `is_dir` is
+# the entry's directory flag.
+fn _git_match_any(patterns, name, is_dir): i64 {
+    var n = vec_len(patterns);
+    var i = 0;
+    while (i < n) {
+        if (_git_match_one(vec_get(patterns, i), name, is_dir) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ================================================================
+# GitCtx — the "loaded git state for this listing"
+# ================================================================
+#
+# 40-byte struct:
+#   +0  paths    : vec<Str> tracked repo-relative paths
+#   +8  mtimes   : vec<i64> index-recorded mtime_sec, parallel
+#   +16 sizes    : vec<i64> index-recorded size, parallel
+#   +24 patterns : vec<Str> ignore patterns
+#   +32 listing  : Str — listing dir relative to repo root ("" if at root)
+
+fn _ctx_paths(c): i64    { return load64(c + 0); }
+fn _ctx_mtimes(c): i64   { return load64(c + 8); }
+fn _ctx_sizes(c): i64    { return load64(c + 16); }
+fn _ctx_patterns(c): i64 { return load64(c + 24); }
+fn _ctx_listing(c): i64  { return load64(c + 32); }
+
+# Try to open + slurp a file into a heap buf. Returns
+# (buf_ptr, len) packed: a 16-byte struct {ptr@0, len@8}. ptr=0
+# on failure.
+fn _git_slurp(path_cstr, cap): i64 {
+    var fd = sys_open(path_cstr, O_RDONLY, 0);
+    var r = alloc(16);
+    store64(r, 0);
+    store64(r + 8, 0);
+    if (fd < 0) { return r; }
+    var buf = alloc(cap);
+    var n = sys_read(fd, buf, cap);
+    sys_close(fd);
+    if (n < 0) { return r; }
+    store64(r, buf);
+    store64(r + 8, n);
+    return r;
+}
+
+# Top-level: open the listing path's enclosing git repo,
+# parse index + ignores, build a GitCtx. Returns 0 when no
+# enclosing `.git/` was found (caller renders without the
+# column per acceptance criterion).
+fn git_open(listing_cstr): i64 {
+    var listing_abs = _git_make_absolute(listing_cstr);
+    var repo_root = _git_find_root(listing_abs);
+    if (repo_root == 0) { return 0; }
+    # .git/index path
+    var rlen = strlen(repo_root);
+    var idx_path = alloc(rlen + 16);
+    memcpy(idx_path, repo_root, rlen);
+    store8(idx_path + rlen + 0, 47);  # /
+    store8(idx_path + rlen + 1, 46);  # .
+    store8(idx_path + rlen + 2, 103); # g
+    store8(idx_path + rlen + 3, 105); # i
+    store8(idx_path + rlen + 4, 116); # t
+    store8(idx_path + rlen + 5, 47);  # /
+    store8(idx_path + rlen + 6, 105); # i
+    store8(idx_path + rlen + 7, 110); # n
+    store8(idx_path + rlen + 8, 100); # d
+    store8(idx_path + rlen + 9, 101); # e
+    store8(idx_path + rlen + 10, 120);# x
+    store8(idx_path + rlen + 11, 0);
+    # Index cap: 4 MB — covers low-100k-entry repos.
+    var idx_slurp = _git_slurp(idx_path, 4194304);
+    var paths = vec_new();
+    var mtimes = vec_new();
+    var sizes = vec_new();
+    if (load64(idx_slurp) != 0) {
+        _git_parse_index(load64(idx_slurp), load64(idx_slurp + 8), paths, mtimes, sizes);
+    }
+    # .gitignore path
+    var ign_path = alloc(rlen + 16);
+    memcpy(ign_path, repo_root, rlen);
+    store8(ign_path + rlen + 0, 47);
+    store8(ign_path + rlen + 1, 46);
+    store8(ign_path + rlen + 2, 103);
+    store8(ign_path + rlen + 3, 105);
+    store8(ign_path + rlen + 4, 116);
+    store8(ign_path + rlen + 5, 105);  # i
+    store8(ign_path + rlen + 6, 103);  # g
+    store8(ign_path + rlen + 7, 110);  # n
+    store8(ign_path + rlen + 8, 111);  # o
+    store8(ign_path + rlen + 9, 114);  # r
+    store8(ign_path + rlen + 10, 101); # e
+    store8(ign_path + rlen + 11, 0);
+    var ign_slurp = _git_slurp(ign_path, 1048576);
+    var patterns = vec_new();
+    if (load64(ign_slurp) != 0) {
+        _git_parse_ignore(load64(ign_slurp), load64(ign_slurp + 8), patterns);
+    }
+    # .git/info/exclude (optional second layer)
+    var exc_path = alloc(rlen + 24);
+    memcpy(exc_path, repo_root, rlen);
+    store8(exc_path + rlen + 0, 47);
+    store8(exc_path + rlen + 1, 46);
+    store8(exc_path + rlen + 2, 103);
+    store8(exc_path + rlen + 3, 105);
+    store8(exc_path + rlen + 4, 116);
+    store8(exc_path + rlen + 5, 47);
+    store8(exc_path + rlen + 6, 105);  # i
+    store8(exc_path + rlen + 7, 110);  # n
+    store8(exc_path + rlen + 8, 102);  # f
+    store8(exc_path + rlen + 9, 111);  # o
+    store8(exc_path + rlen + 10, 47);
+    store8(exc_path + rlen + 11, 101); # e
+    store8(exc_path + rlen + 12, 120); # x
+    store8(exc_path + rlen + 13, 99);  # c
+    store8(exc_path + rlen + 14, 108); # l
+    store8(exc_path + rlen + 15, 117); # u
+    store8(exc_path + rlen + 16, 100); # d
+    store8(exc_path + rlen + 17, 101); # e
+    store8(exc_path + rlen + 18, 0);
+    var exc_slurp = _git_slurp(exc_path, 1048576);
+    if (load64(exc_slurp) != 0) {
+        _git_parse_ignore(load64(exc_slurp), load64(exc_slurp + 8), patterns);
+    }
+    var listing = _git_listing_rel(repo_root, listing_abs);
+    var ctx = alloc(40);
+    store64(ctx + 0, paths);
+    store64(ctx + 8, mtimes);
+    store64(ctx + 16, sizes);
+    store64(ctx + 24, patterns);
+    store64(ctx + 32, listing);
+    return ctx;
+}
+
+# Build the repo-relative path for an entry: `<listing>/<name>`,
+# or just `<name>` when listing is empty. Returns heap-alloc'd Str.
+fn _git_entry_relpath(ctx, name): i64 {
+    var l = _ctx_listing(ctx);
+    var llen = str_len(l);
+    var nlen = str_len(name);
+    if (llen == 0) { return str_clone(name); }
+    var out = alloc(llen + 1 + nlen + 1);
+    memcpy(out, str_data(l), llen);
+    store8(out + llen, 47);
+    memcpy(out + llen + 1, str_data(name), nlen);
+    store8(out + llen + 1 + nlen, 0);
+    return str_clone(str_from(out));
+}
+
+# Look up an entry's repo-relative path in the tracked vec.
+# Returns the slot index (>=0) on hit, -1 on miss. Linear scan
+# — acceptable through low thousands of entries.
+fn _git_find_tracked(ctx, rel_path): i64 {
+    var paths = _ctx_paths(ctx);
+    var n = vec_len(paths);
+    var i = 0;
+    while (i < n) {
+        if (str_eq(vec_get(paths, i), rel_path) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# Check whether any tracked path lives under `dir_rel`. Used for
+# directory entries — git's index doesn't track directories
+# themselves, only files, so a directory is "tracked" iff it
+# contains a tracked file. Linear scan, prefix-then-slash match.
+fn _git_dir_has_tracked(ctx, dir_rel): i64 {
+    var paths = _ctx_paths(ctx);
+    var n = vec_len(paths);
+    var dlen = str_len(dir_rel);
+    if (dlen == 0) { return 0; }
+    var dd = str_data(dir_rel);
+    var i = 0;
+    while (i < n) {
+        var p = vec_get(paths, i);
+        if (str_len(p) > dlen) {
+            if (memeq(str_data(p), dd, dlen) == 1) {
+                if (load8(str_data(p) + dlen) == 47) { return 1; }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Classify a listing entry → status char (per the header).
+# `mtime_sec` and `size` come from the entry's lstat; `is_dir`
+# is its directory flag (drives directory-only ignore matches
+# and the dir-aggregate tracked-check).
+fn git_status_for(ctx, name, is_dir, mtime_sec, size): i64 {
+    var rel = _git_entry_relpath(ctx, name);
+    var idx = _git_find_tracked(ctx, rel);
+    if (idx >= 0) {
+        var indexed_mtime = vec_get(_ctx_mtimes(ctx), idx);
+        var indexed_size = vec_get(_ctx_sizes(ctx), idx);
+        if (indexed_mtime != mtime_sec) { return 77; }   # 'M'
+        if (indexed_size != size) { return 77; }
+        return 46;                                        # '.'
+    }
+    # Directories aren't in the index directly — treat as
+    # tracked if any indexed path lives under them. Doesn't
+    # surface per-subtree dirty status (would need aggregating
+    # — defer to post-v1 enhancement).
+    if (is_dir == 1) {
+        if (_git_dir_has_tracked(ctx, rel) == 1) { return 46; }
+    }
+    if (_git_match_any(_ctx_patterns(ctx), name, is_dir) == 1) { return 33; }   # '!'
+    return 63;                                            # '?'
+}
+
+# Fixed display-width budget per entry when `--git` is on.
+# Same shape as icon_display_width — 1 char status + 1 space.
+fn git_display_width(): i64 { return 2; }

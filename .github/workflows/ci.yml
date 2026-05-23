@@ -98,6 +98,33 @@ jobs:
           test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
           echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }
 
+      - name: Smoke — tree mode produces box-drawn output
+        # M6 contract: `-T` recurses with box-drawing connectors.
+        # Greps for the actual connector bytes (├ = e2 94 9c,
+        # └ = e2 94 94) in the output, then verifies that
+        # --level 1 limits depth (a single level should NOT
+        # contain ANY connectors from a deeper-than-1 path —
+        # we test by listing `docs` at --level 1 and checking
+        # that no grandchildren appear in the output).
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} -T docs > /tmp/tree
+          od -An -tx1 /tmp/tree | grep -q -E ' e2 94 9c ' \
+            || { echo "tree output missing ├ connector:"; cat /tmp/tree; exit 1; }
+          od -An -tx1 /tmp/tree | grep -q -E ' e2 94 94 ' \
+            || { echo "tree output missing └ connector:"; cat /tmp/tree; exit 1; }
+          # --level 1 on docs: shows docs + its direct children
+          # (adr / architecture / development / examples / guides)
+          # but NOT their contents (no roadmap.md, no
+          # 0001-color-scheme.md, etc.). Negative grep.
+          ./build/${{ github.event.repository.name }} -T --level 1 docs > /tmp/tree1
+          grep -q "adr" /tmp/tree1 || { echo "--level 1 dropped adr/:"; cat /tmp/tree1; exit 1; }
+          if grep -q "roadmap.md" /tmp/tree1; then
+            echo "--level 1 leaked grandchildren:"
+            cat /tmp/tree1
+            exit 1
+          fi
+
       - name: Smoke — pipe emits no icon glyphs
         # M5 contract: pipe → no Nerd Font PUA bytes. Same
         # principle as the color escape suppression — script

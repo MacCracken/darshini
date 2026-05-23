@@ -1,4 +1,4 @@
-# darshini test suite — M1 + M2 + M3 + M4 + M5.
+# darshini test suite — M1 + M2 + M3 + M4 + M5 + M6.
 # Stdlib auto-included via cyrius.cyml.
 #
 # M1 coverage (carried forward from v0.2.0):
@@ -27,6 +27,11 @@
 #     (filename / prefix / type / extension / fallback)
 #   * pick_cols with icon_width > 0 — uniform shift in effective
 #     per-cell width
+#
+# M6 coverage (new at v0.7.0):
+#   * _tree_prefix_buf — depth-stack patterns to expected bytes
+#   * _tree_connector_buf — is_last 0/1 to expected bytes
+#   * _parse_pos_int — argv value parsing for --level
 
 include "src/walk.cyr"
 include "src/icons.cyr"
@@ -34,6 +39,24 @@ include "src/color.cyr"
 include "src/render.cyr"
 include "src/columns.cyr"
 include "src/long.cyr"
+include "src/tree.cyr"
+# main.cyr defines _parse_pos_int but pulling main.cyr also
+# pulls its `var r = main(); syscall(SYS_EXIT, r);` top-level
+# which would fire from the test harness — so we copy the
+# parser into the test file (small, self-contained).
+fn _test_parse_pos_int(cstr): i64 {
+    if (load8(cstr) == 0) { return 0 - 1; }
+    var v = 0;
+    var i = 0;
+    while (load8(cstr + i) != 0) {
+        var b = load8(cstr + i);
+        if (b < 48) { return 0 - 1; }
+        if (b > 57) { return 0 - 1; }
+        v = v * 10 + (b - 48);
+        i = i + 1;
+    }
+    return v;
+}
 
 fn make_str(c): i64 {
     return str_clone(str_from(c));
@@ -440,6 +463,78 @@ fn main(): i64 {
     # _columns_total_width with icon_width=2 adds cols*2.
     assert_eq(_columns_total_width(five, 5, 5, 1, 2), 43, "five@5x1 icon_width=2 -> 33 + 10 = 43");
     assert_eq(_columns_total_width(five, 5, 3, 2, 2), 25, "five@3x2 icon_width=2 -> 19 + 6 = 25");
+
+    # ============================================================
+    # M6 — tree mode (prefix + connector byte shapes)
+    # ============================================================
+
+    test_group("_tree_connector_buf");
+    var cbuf = alloc(10);
+    # is_last == 0 → "├── " = e2 94 9c e2 94 80 e2 94 80 20
+    assert_eq(_tree_connector_buf(0, cbuf), 10, "non-last -> 10 bytes");
+    assert_eq(load8(cbuf + 0), 0xe2, "non-last[0] = 0xe2");
+    assert_eq(load8(cbuf + 1), 0x94, "non-last[1] = 0x94");
+    assert_eq(load8(cbuf + 2), 0x9c, "non-last[2] = 0x9c (├)");
+    assert_eq(load8(cbuf + 3), 0xe2, "non-last[3] = 0xe2");
+    assert_eq(load8(cbuf + 4), 0x94, "non-last[4] = 0x94");
+    assert_eq(load8(cbuf + 5), 0x80, "non-last[5] = 0x80 (─)");
+    assert_eq(load8(cbuf + 6), 0xe2, "non-last[6] = 0xe2");
+    assert_eq(load8(cbuf + 7), 0x94, "non-last[7] = 0x94");
+    assert_eq(load8(cbuf + 8), 0x80, "non-last[8] = 0x80 (─)");
+    assert_eq(load8(cbuf + 9), 0x20, "non-last[9] = ' '");
+    # is_last == 1 → "└── " = e2 94 94 e2 94 80 e2 94 80 20
+    assert_eq(_tree_connector_buf(1, cbuf), 10, "last -> 10 bytes");
+    assert_eq(load8(cbuf + 0), 0xe2, "last[0] = 0xe2");
+    assert_eq(load8(cbuf + 1), 0x94, "last[1] = 0x94");
+    assert_eq(load8(cbuf + 2), 0x94, "last[2] = 0x94 (└)");
+    assert_eq(load8(cbuf + 9), 0x20, "last[9] = ' '");
+
+    test_group("_tree_prefix_buf");
+    var pbuf = alloc(64);
+    # Empty depth_stack → 0 bytes (root level).
+    var empty_stk = vec_new();
+    assert_eq(_tree_prefix_buf(empty_stk, pbuf), 0, "empty stack -> 0 bytes");
+    # One slot, "more siblings" (1) → "│   " = 6 bytes (e2 94 82 20 20 20)
+    var stk1 = vec_new();
+    vec_push(stk1, 1);
+    assert_eq(_tree_prefix_buf(stk1, pbuf), 6, "[1] -> 6 bytes (│   )");
+    assert_eq(load8(pbuf + 0), 0xe2, "[1] bytes[0] = 0xe2");
+    assert_eq(load8(pbuf + 1), 0x94, "[1] bytes[1] = 0x94");
+    assert_eq(load8(pbuf + 2), 0x82, "[1] bytes[2] = 0x82 (│)");
+    assert_eq(load8(pbuf + 3), 0x20, "[1] bytes[3] = ' '");
+    assert_eq(load8(pbuf + 4), 0x20, "[1] bytes[4] = ' '");
+    assert_eq(load8(pbuf + 5), 0x20, "[1] bytes[5] = ' '");
+    # One slot, "no more siblings" (0) → "    " = 4 spaces
+    var stk0 = vec_new();
+    vec_push(stk0, 0);
+    assert_eq(_tree_prefix_buf(stk0, pbuf), 4, "[0] -> 4 bytes");
+    assert_eq(load8(pbuf + 0), 0x20, "[0] bytes[0] = ' '");
+    assert_eq(load8(pbuf + 1), 0x20, "[0] bytes[1] = ' '");
+    assert_eq(load8(pbuf + 2), 0x20, "[0] bytes[2] = ' '");
+    assert_eq(load8(pbuf + 3), 0x20, "[0] bytes[3] = ' '");
+    # Mixed [1, 0, 1] → "│   " + "    " + "│   " = 6+4+6 = 16 bytes
+    var stk_mix = vec_new();
+    vec_push(stk_mix, 1);
+    vec_push(stk_mix, 0);
+    vec_push(stk_mix, 1);
+    assert_eq(_tree_prefix_buf(stk_mix, pbuf), 16, "[1,0,1] -> 16 bytes");
+    # First slot: │
+    assert_eq(load8(pbuf + 2), 0x82, "[1,0,1] first vert at +2");
+    # Second slot starts at offset 6, all spaces.
+    assert_eq(load8(pbuf + 6), 0x20, "[1,0,1] second slot[0] = ' '");
+    assert_eq(load8(pbuf + 9), 0x20, "[1,0,1] second slot[3] = ' '");
+    # Third slot starts at offset 10, vertical bar.
+    assert_eq(load8(pbuf + 12), 0x82, "[1,0,1] third vert at +12");
+
+    test_group("_parse_pos_int");
+    assert_eq(_test_parse_pos_int("1"), 1, "'1' -> 1");
+    assert_eq(_test_parse_pos_int("42"), 42, "'42' -> 42");
+    assert_eq(_test_parse_pos_int("999"), 999, "'999' -> 999");
+    assert_eq(_test_parse_pos_int(""), 0 - 1, "'' -> -1");
+    assert_eq(_test_parse_pos_int("0"), 0, "'0' -> 0 (caller rejects 0)");
+    assert_eq(_test_parse_pos_int("abc"), 0 - 1, "'abc' -> -1");
+    assert_eq(_test_parse_pos_int("12a"), 0 - 1, "'12a' -> -1 (mid-string non-digit)");
+    assert_eq(_test_parse_pos_int("-5"), 0 - 1, "'-5' -> -1 (sign rejected)");
 
     return assert_summary();
 }

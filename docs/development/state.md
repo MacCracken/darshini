@@ -5,9 +5,9 @@
 
 ## Version
 
-**0.6.0** — M5 (icons via CYML mapping) shipped 2026-05-22.
-Same day as M1 (v0.2.0), M2 (v0.3.0), M3 (v0.4.0), M4 (v0.5.0).
-Scaffolded as **0.1.0** on 2026-05-19 via `cyrius init darshini`.
+**0.7.0** — M6 (tree mode + `--level`) shipped 2026-05-23.
+M1–M5 (v0.2.0 → v0.6.0) shipped 2026-05-22. Scaffolded as
+**0.1.0** on 2026-05-19 via `cyrius init darshini`.
 
 ## Toolchain
 
@@ -35,10 +35,12 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
   pass), `emit_decorated` write wrap
 - `src/icons.cyr` — compile-baked icon picker (`icon_for_entry`,
   `icon_display_width`) mirroring `icons/default.cyml`
+- `src/tree.cyr` — `render_tree` + the depth-stack recursion;
+  `_tree_prefix_buf` / `_tree_connector_buf` for testable
+  byte-sequence helpers
 
-M6+ onward fills:
+M7+ onward fills:
 
-- `src/tree.cyr` — recursive box-drawn rendering (M6)
 - `src/git.cyr` — `.git/`-direct status column (M7)
 - `src/mime.cyr` — magic-bytes mime detector (M8)
 
@@ -51,18 +53,19 @@ M6+ onward fills:
 | Multi-column auto-layout, `-1` | M3 | **shipped** (v0.4.0) |
 | Color via darshana | M4 | **shipped** (v0.5.0) |
 | Icons via CYML mapping | M5 | **shipped** (v0.6.0) |
-| `-T` / `--tree` | M6 | pending |
+| `-T` / `--tree` | M6 | **shipped** (v0.7.0) |
 | `--git` status column | M7 | pending |
 | `--mime` recognition | M8 | pending |
 
 ## Tests
 
-- `tests/darshini.tcyr` — 132 assertions across M1 (lower_byte,
+- `tests/darshini.tcyr` — 174 assertions across M1 (lower_byte,
   str_lt_ci, sort_entries, classify_path, check_dir_readable),
   M2 (format_perms, format_size_decimal, format_size_human,
   format_mtime), M3 (pick_cols, _columns_total_width), M4
-  (color_for_mode), and M5 (icon_display_width, icon_for_entry,
-  pick_cols + icon_width)
+  (color_for_mode), M5 (icon_display_width, icon_for_entry,
+  pick_cols + icon_width), and M6 (_tree_connector_buf,
+  _tree_prefix_buf, _parse_pos_int)
 - `tests/darshini.bcyr` — benchmark stub
 - `tests/darshini.fcyr` — fuzz stub
 
@@ -86,12 +89,12 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). Next ship is M6 (`-T` /
-`--tree` recursive display), targeting v0.7.0. Box-drawing
-characters for the connectors; `--level N` to cap depth;
-reuses M2's row format per entry. Tests: nested dirs,
-symlink-to-dir (don't recurse by default; explicit flag to
-follow).
+See [`roadmap.md`](roadmap.md). Next ship is M7 (`--git`
+status column), targeting v0.8.0. Per-entry git status
+(modified / added / ignored / untracked / clean), read
+directly from `.git/index` + `.git/info/exclude` +
+`.gitignore` (no `git` subprocess per CLAUDE.md hard rule).
+Skips silently when no `.git/` is in the ancestor chain.
 
 ## Known gotchas
 

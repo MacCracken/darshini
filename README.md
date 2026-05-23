@@ -45,7 +45,7 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-Pre-1.0. v0.6.0 — M1 + M2 + M3 + M4 + M5 shipped:
+Pre-1.0. v0.7.0 — M1 + M2 + M3 + M4 + M5 + M6 shipped:
 
 - M1: basic listing — `darshini` / `darshini <path>`,
   case-insensitive alphabetical, error-discriminated.
@@ -64,9 +64,12 @@ Pre-1.0. v0.6.0 — M1 + M2 + M3 + M4 + M5 shipped:
   [ADR 0002](docs/adr/0002-icon-format.md);
   human-readable mapping in `icons/default.cyml`.
   `--no-icons` for terminals without Nerd Fonts.
+- M6: tree mode — `darshini -T` / `-T --level N` / `-lT`.
+  Standard box-drawing connectors. Composes with the long
+  format + color + icons. Doesn't follow symlinks-to-dirs.
 
-No git column or tree mode yet — M6–M7. Linux x86_64 only
-through v1.0; other platforms post-v1.
+No git column yet — M7. Linux x86_64 only through v1.0;
+other platforms post-v1.
 
 ## Build
 

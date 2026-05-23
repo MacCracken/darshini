@@ -4,6 +4,57 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] — M6: tree mode (`-T` / `--tree`)
+
+### Added
+- `-T` / `--tree`: recursive box-drawn display.
+  `tree(1)`-style connectors: `├──` for non-last siblings,
+  `└──` for the last, `│` for still-continuing ancestors,
+  spaces for finished ones. Standard Unicode box-drawing
+  (U+251C/2514/2502/2500).
+- `--level N`: cap recursion depth at N levels. Value
+  parses as a positive integer in the next argv slot
+  (`darshini -T --level 2 docs` shape — matches `tree
+  --level` / `eza --level`). Without `--level`, recurses
+  to the bottom.
+- `-T` composes with `-l`: long-format columns
+  (perms / size / mtime) prefix the tree connector +
+  name. Composes with `-h` for human-readable sizes,
+  `--no-color` / `--no-icons` for plain output.
+- Symlink-to-dir handling: tree does NOT recurse into
+  symlinked directories (matches `tree(1)` / `eza` default;
+  an opt-in follow flag is out of scope for v1.0 per the
+  M10 frozen flag set).
+- `src/tree.cyr` — `render_tree(root, max_depth, want_long,
+  want_human, want_color, want_icons)` top-level entry +
+  the depth-stack recursion (`_tree_recurse`).
+  Testable helpers `_tree_prefix_buf` /
+  `_tree_connector_buf` write the byte sequences into a
+  caller buffer for direct assertion.
+- `src/main.cyr` — argv parser learns `-T` (short) /
+  `--tree` (long) / `--level N` (long with required int
+  value). `_parse_pos_int` validates non-empty digit-only
+  cstr; rejects empty / signed / non-digit input.
+- Tests: 28 new assertions across `_tree_connector_buf`
+  (exact bytes for both is_last variants), `_tree_prefix_buf`
+  (empty / single-slot / mixed depth-stack patterns),
+  `_parse_pos_int` (positive ints, zero, empty, negative,
+  mid-string non-digit). Total now 174/174.
+
+### Notes
+- Size column in `-T -l` is not max-aware (each row emits
+  the natural-width size). The tree's vertical structure
+  provides enough visual rhythm; a two-pass walk to compute
+  max-size-per-subtree was deemed over-engineering for v1.0.
+- Box-drawing characters render correctly in any modern
+  UTF-8 terminal — no Nerd Font assumption (icons remain
+  separate, gated by `--no-icons`). No ASCII fallback flag
+  at v1.0 (`tree(1)`'s `--charset=ascii` equivalent); revisit
+  post-v1 if a serial-console / dumb-terminal user asks.
+- `-1` under `-T` is a no-op: tree mode is inherently
+  one-entry-per-line. Doesn't error — the bundling stays
+  forgiving.
+
 ## [0.6.0] — M5: icons via CYML mapping
 
 ### Added

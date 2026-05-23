@@ -23,6 +23,7 @@ include "src/color.cyr"
 include "src/render.cyr"
 include "src/columns.cyr"
 include "src/long.cyr"
+include "src/tree.cyr"
 
 fn print_cstr_fd(fd, c): i64 {
     sys_write(fd, c, strlen(c));
@@ -43,7 +44,7 @@ fn emit_unknown_flag(arg): i64 {
     print_cstr_fd(STDERR_FD, "darshini: unknown flag: ");
     print_cstr_fd(STDERR_FD, arg);
     sys_write(STDERR_FD, "\n", 1);
-    print_cstr_fd(STDERR_FD, "usage: darshini [-l] [-h] [-1] [--no-color] [--no-icons] [path]\n");
+    print_cstr_fd(STDERR_FD, "usage: darshini [-l] [-h] [-1] [-T] [--level N] [--no-color] [--no-icons] [path]\n");
     return 0;
 }
 
@@ -63,23 +64,43 @@ fn _arg_eq(arg, lit): i64 {
     return 0;
 }
 
-# Parse argv into (long_flag, human_flag, single_flag, no_color_flag,
-# no_icons_flag, path_cstr). Returns 0 on success, 1 on error.
-# Outputs land via the pointer-out args so the caller can keep them
-# on the stack.
+# Parse a positive integer from a cstr. Returns the value on
+# success or -1 on parse failure (empty / non-digit / overflow
+# beyond i64). Used by --level. Tight; no leading sign, no
+# whitespace, no leading zeros sanity.
+fn _parse_pos_int(cstr): i64 {
+    if (load8(cstr) == 0) { return 0 - 1; }
+    var v = 0;
+    var i = 0;
+    while (load8(cstr + i) != 0) {
+        var b = load8(cstr + i);
+        if (b < 48) { return 0 - 1; }
+        if (b > 57) { return 0 - 1; }
+        v = v * 10 + (b - 48);
+        i = i + 1;
+    }
+    return v;
+}
+
+# Parse argv into (long, human, single, no_color, no_icons, tree,
+# level, path_cstr). Returns 0 on success, 1 on error. Outputs
+# land via pointer-out args so the caller can keep them on the stack.
 #
-# Supports bundled short flags (`-lh1` == `-l -h -1`). A bare `-`
-# is treated as a positional. Multiple positional paths are
-# rejected; multi-path support is out-of-scope for v1.0. Long-form
-# flags at v0.6.0: `--no-color` (M4), `--no-icons` (M5). More
-# long flags arrive at M6 / M7 / M8 (`--tree`, `--git`, `--mime`).
-fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons, out_path): i64 {
+# Supports bundled short flags (`-lh1T`). A bare `-` is treated
+# as positional. Multiple positional paths are rejected. Long-form
+# flags through v0.7.0: `--no-color`, `--no-icons`, `--tree`,
+# `--level N` (value in the NEXT argv slot — same shape as
+# `tree --level N` / `eza --level N`). M7 / M8 add `--git` and
+# `--mime`.
+fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons, out_tree, out_level, out_path): i64 {
     var n = argc();
     var lflag = 0;
     var hflag = 0;
     var sflag = 0;
     var ncflag = 0;
     var niflag = 0;
+    var tflag = 0;
+    var level = 0;
     var path_cstr = ".";
     var path_seen = 0;
     var i = 1;
@@ -93,10 +114,24 @@ fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons, out_pa
                 # Long flag (`--foo`).
                 if (_arg_eq(arg, "--no-color") == 1) { ncflag = 1; }
                 else { if (_arg_eq(arg, "--no-icons") == 1) { niflag = 1; }
-                else { emit_unknown_flag(arg); failed = 1; } }
+                else { if (_arg_eq(arg, "--tree") == 1) { tflag = 1; }
+                else { if (_arg_eq(arg, "--level") == 1) {
+                    if (i + 1 >= n) {
+                        print_cstr_fd(STDERR_FD, "darshini: --level requires a value\n");
+                        failed = 1;
+                    } else {
+                        i = i + 1;
+                        var v = _parse_pos_int(argv(i));
+                        if (v <= 0) {
+                            print_cstr_fd(STDERR_FD, "darshini: --level requires a positive integer\n");
+                            failed = 1;
+                        } else { level = v; }
+                    }
+                }
+                else { emit_unknown_flag(arg); failed = 1; } } } }
             } }
             if (first == 45) { if (second != 45) { if (second != 0) {
-                # Short-flag bundle (everything after '-').
+                # Short-flag bundle.
                 var k = 1;
                 while (load8(arg + k) != 0) {
                     if (failed == 0) {
@@ -104,7 +139,8 @@ fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons, out_pa
                         if (c == 108) { lflag = 1; }            # 'l'
                         else { if (c == 104) { hflag = 1; }     # 'h'
                         else { if (c == 49)  { sflag = 1; }     # '1'
-                        else { emit_unknown_flag(arg); failed = 1; } } }
+                        else { if (c == 84)  { tflag = 1; }     # 'T'
+                        else { emit_unknown_flag(arg); failed = 1; } } } }
                     }
                     k = k + 1;
                 }
@@ -134,11 +170,13 @@ fn parse_cli(out_long, out_human, out_single, out_no_color, out_no_icons, out_pa
     store64(out_single, sflag);
     store64(out_no_color, ncflag);
     store64(out_no_icons, niflag);
+    store64(out_tree, tflag);
+    store64(out_level, level);
     store64(out_path, path_cstr);
     return failed;
 }
 
-fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_icons): i64 {
+fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_icons, want_tree, level): i64 {
     var c = classify_path(path_cstr);
     if (c == 0 - ENOENT) {
         emit_error("darshini", path_cstr, "no such file or directory");
@@ -152,9 +190,6 @@ fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_ico
         emit_error("darshini", path_cstr, "cannot stat");
         return 1;
     }
-    # TTY probe once — drives column layout (M3), color (M4),
-    # and icons (M5). All three are TTY-default-on / pipe-off /
-    # explicit-flag-overrides-to-off.
     var tw = term_width();
     var want_color = 0;
     var want_icons = 0;
@@ -171,6 +206,12 @@ fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_ico
         if (rd < 0) {
             emit_error("darshini", path_cstr, "cannot open directory");
             return 1;
+        }
+        # Tree mode bypasses the column / single-column dispatch
+        # entirely — every line in tree mode is one entry with a
+        # box-drawing prefix.
+        if (want_tree == 1) {
+            return render_tree(path_cstr, level, want_long, want_human, want_color, want_icons);
         }
         var dir_str = str_from(path_cstr);
         var entries = list_dir(dir_str);
@@ -212,10 +253,14 @@ fn main(): i64 {
     var want_single = 0;
     var want_no_color = 0;
     var want_no_icons = 0;
+    var want_tree = 0;
+    var level = 0;
     var path_cstr = 0;
-    var rc = parse_cli(&want_long, &want_human, &want_single, &want_no_color, &want_no_icons, &path_cstr);
+    var rc = parse_cli(&want_long, &want_human, &want_single, &want_no_color, &want_no_icons,
+                       &want_tree, &level, &path_cstr);
     if (rc != 0) { return 1; }
-    return run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_icons);
+    return run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_icons,
+               want_tree, level);
 }
 
 var r = main();

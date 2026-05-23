@@ -88,6 +88,35 @@ fn list_dir(path: Str): i64 {
     return dir_list(path);
 }
 
+# Classify-indicator (POSIX `-F`) for a stat mode. Returns the
+# trailing-byte indicator or 0 (no indicator). Suffix
+# semantics:
+#   /  S_IFDIR
+#   *  S_IFREG with any execute bit
+#   @  S_IFLNK
+#   |  S_IFIFO
+#   =  S_IFSOCK
+# Block / char devices have no POSIX indicator; we return 0.
+fn classify_indicator(mode): i64 {
+    var fmt = mode & S_IFMT;
+    if (fmt == S_IFDIR)  { return 47; }    # '/'
+    if (fmt == S_IFLNK)  { return 64; }    # '@'
+    if (fmt == S_IFIFO)  { return 124; }   # '|'
+    if (fmt == S_IFSOCK) { return 61; }    # '='
+    if (fmt == S_IFREG) {
+        var x_bits = S_IXUSR | S_IXGRP | S_IXOTH;
+        if ((mode & x_bits) != 0) { return 42; }   # '*'
+    }
+    return 0;
+}
+
+# Fixed display-width budget per entry when `-F` is on (1 char
+# trailing indicator; 0 cost when entry's mode has no
+# indicator but the column reserves the slot for alignment).
+fn classify_display_width(): i64 {
+    return 1;
+}
+
 # lstat a path into a caller-provided 144-byte buffer (heap or
 # stack). Returns 0 on success, negative errno on failure. Used
 # by long.cyr's per-entry stat collection; lstat (not stat) so

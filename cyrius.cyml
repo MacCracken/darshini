@@ -12,7 +12,7 @@ test = "src/test.cyr"
 output = "darshini"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "args", "fs", "chrono", "assert", "bench"]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "args", "fs", "chrono", "hashmap", "assert", "bench"]
 
 # darshana — TTY/ANSI/cursor primitives. Per CLAUDE.md's hard rule
 # (no raw ANSI inline), every color escape darshini emits routes

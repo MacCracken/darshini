@@ -56,7 +56,7 @@ fn _emit_spaces(n): i64 {
 # `l...` with their own length rather than the target's. M2
 # scope: no symlink-target rendering yet — the `-> target` tail
 # lands when the symlink-display ADR opens for M6 / M7 territory.
-fn render_long(entries, dir_str, want_human, colors, icons, gitchrs, mimes): i64 {
+fn render_long(entries, dir_str, want_human, colors, icons, gitchrs, mimes, classifies): i64 {
     var n = vec_len(entries);
     var rows = vec_new();
     var max_size_w = 0;
@@ -158,19 +158,23 @@ fn render_long(entries, dir_str, want_human, colors, icons, gitchrs, mimes): i64
             }
             sys_write(STDOUT_FD, " ", 1);
         }
-        # name + ADR 0001 color + ADR 0002 icon + M7 git status
+        # name + ADR 0001 color + ADR 0002 icon + M7 git status + v1.1 -F
         var name = vec_get(entries, i);
         var col_code = 0;
-        if (colors != 0)  { col_code = vec_get(colors, i); }
+        if (colors != 0)     { col_code = vec_get(colors, i); }
         var ic = 0;
-        if (icons != 0)   { ic = vec_get(icons, i); }
+        if (icons != 0)      { ic = vec_get(icons, i); }
         var gc = 0;
-        if (gitchrs != 0) { gc = vec_get(gitchrs, i); }
+        if (gitchrs != 0)    { gc = vec_get(gitchrs, i); }
+        var cl = 0;
+        if (classifies != 0) { cl = vec_get(classifies, i); }
         var icon_pad = 0;
-        if (icons != 0)   { icon_pad = icon_display_width(); }
+        if (icons != 0)      { icon_pad = icon_display_width(); }
         var git_pad = 0;
-        if (gitchrs != 0) { git_pad = git_display_width(); }
-        emit_decorated(name, col_code, ic, icon_pad, gc, git_pad);
+        if (gitchrs != 0)    { git_pad = git_display_width(); }
+        var cls_pad = 0;
+        if (classifies != 0) { cls_pad = classify_display_width(); }
+        emit_decorated(name, col_code, ic, icon_pad, gc, git_pad, cl, cls_pad);
         sys_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }
@@ -186,7 +190,7 @@ fn render_long(entries, dir_str, want_human, colors, icons, gitchrs, mimes): i64
 # `want_color` (M4) / `want_icons` (M5): toggle decoration.
 # Symlinks pay the extra `sys_stat` for broken-target color
 # detection only when want_color is on.
-fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx): i64 {
+fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx, want_classify): i64 {
     var stat_buf = alloc(144);
     var rc = lstat_path(path_cstr, stat_buf);
     if (rc < 0) { return 1; }
@@ -220,9 +224,7 @@ fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx): i64 
     }
     var path_str = str_from(path_cstr);
     var ic = 0;
-    if (want_icons == 1) {
-        ic = icon_for_entry(path_str, mode);
-    }
+    if (want_icons == 1) { ic = icon_for_entry(path_str, mode); }
     var icon_pad = 0;
     if (want_icons == 1) { icon_pad = icon_display_width(); }
     var gc = 0;
@@ -235,7 +237,13 @@ fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx): i64 
                             load64(stat_buf + STAT_MTIME),
                             load64(stat_buf + STAT_SIZE));
     }
-    emit_decorated(path_str, col_code, ic, icon_pad, gc, git_pad);
+    var cl = 0;
+    var cls_pad = 0;
+    if (want_classify == 1) {
+        cl = classify_indicator(mode);
+        cls_pad = classify_display_width();
+    }
+    emit_decorated(path_str, col_code, ic, icon_pad, gc, git_pad, cl, cls_pad);
     sys_write(STDOUT_FD, "\n", 1);
     return 0;
 }

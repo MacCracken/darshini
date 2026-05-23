@@ -112,7 +112,8 @@ fn pick_cols(entries, term_width, icon_width): i64 {
 # (visible name width) + `icon_width` + `git_width` (both
 # uniform per cell) so escapes + multi-byte glyphs don't
 # disturb alignment.
-fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, icon_width, git_width): i64 {
+fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, classifies,
+                 icon_width, git_width, classify_width): i64 {
     var sep = 2;
     var r = 0;
     while (r < rows) {
@@ -128,12 +129,14 @@ fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, ico
             var name = vec_get(entries, idx);
             var nlen = str_len(name);
             var col_code = 0;
-            if (colors != 0)  { col_code = vec_get(colors, idx); }
+            if (colors != 0)     { col_code = vec_get(colors, idx); }
             var ic = 0;
-            if (icons != 0)   { ic = vec_get(icons, idx); }
+            if (icons != 0)      { ic = vec_get(icons, idx); }
             var gc = 0;
-            if (gitchrs != 0) { gc = vec_get(gitchrs, idx); }
-            emit_decorated(name, col_code, ic, icon_width, gc, git_width);
+            if (gitchrs != 0)    { gc = vec_get(gitchrs, idx); }
+            var cl = 0;
+            if (classifies != 0) { cl = vec_get(classifies, idx); }
+            emit_decorated(name, col_code, ic, icon_width, gc, git_width, cl, classify_width);
             if (c < last_c) {
                 var w = load64(col_widths + c * 8);
                 var pad = w - nlen + sep;
@@ -154,17 +157,19 @@ fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, ico
 # Top-level: pick the column count, compute per-column max NAME
 # widths, emit. Falls back to single-column print_entries when
 # the picker chooses 1 column. Per-cell prefix budget is
-# icon_width + git_width (both 0 when disabled).
-fn render_columns(entries, term_width, colors, icons, gitchrs): i64 {
+# icon_width + git_width + classify_width (all 0 when disabled).
+fn render_columns(entries, term_width, colors, icons, gitchrs, classifies): i64 {
     var n = vec_len(entries);
     if (n == 0) { return 0; }
     var icon_w = 0;
-    if (icons != 0)   { icon_w = icon_display_width(); }
+    if (icons != 0)      { icon_w = icon_display_width(); }
     var git_w = 0;
-    if (gitchrs != 0) { git_w = git_display_width(); }
-    var prefix_w = icon_w + git_w;
+    if (gitchrs != 0)    { git_w = git_display_width(); }
+    var cls_w = 0;
+    if (classifies != 0) { cls_w = classify_display_width(); }
+    var prefix_w = icon_w + git_w + cls_w;
     var cols = pick_cols(entries, term_width, prefix_w);
-    if (cols <= 1) { return print_entries(entries, colors, icons, gitchrs); }
+    if (cols <= 1) { return print_entries(entries, colors, icons, gitchrs, classifies); }
     var rows = (n + cols - 1) / cols;
     var col_widths = alloc(cols * 8);
     var c = 0;
@@ -182,5 +187,5 @@ fn render_columns(entries, term_width, colors, icons, gitchrs): i64 {
         store64(col_widths + c * 8, max_w);
         c = c + 1;
     }
-    return _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, icon_w, git_w);
+    return _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, classifies, icon_w, git_w, cls_w);
 }

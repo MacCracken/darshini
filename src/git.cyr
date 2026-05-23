@@ -299,18 +299,24 @@ fn _git_match_any(patterns, name, is_dir): i64 {
 # GitCtx — the "loaded git state for this listing"
 # ================================================================
 #
-# 40-byte struct:
-#   +0  paths    : vec<Str> tracked repo-relative paths
-#   +8  mtimes   : vec<i64> index-recorded mtime_sec, parallel
-#   +16 sizes    : vec<i64> index-recorded size, parallel
-#   +24 patterns : vec<Str> ignore patterns
-#   +32 listing  : Str — listing dir relative to repo root ("" if at root)
+# 48-byte struct:
+#   +0  paths       : vec<Str> tracked repo-relative paths
+#   +8  mtimes      : vec<i64> index-recorded mtime_sec, parallel
+#   +16 sizes       : vec<i64> index-recorded size, parallel
+#   +24 patterns    : vec<Str> ignore patterns
+#   +32 listing     : Str — listing dir relative to repo root ("" if at root)
+#   +40 tracked_map : Str-keyed hashmap of repo-relative-path → (idx + 1)
+#                     into the parallel mtimes/sizes vecs. v1.1 replaces
+#                     the v1.0 linear scan in _git_find_tracked. Values are
+#                     stored as `idx + 1` so a 0 result from map_get can be
+#                     distinguished from "first entry's idx is 0".
 
-fn _ctx_paths(c): i64    { return load64(c + 0); }
-fn _ctx_mtimes(c): i64   { return load64(c + 8); }
-fn _ctx_sizes(c): i64    { return load64(c + 16); }
-fn _ctx_patterns(c): i64 { return load64(c + 24); }
-fn _ctx_listing(c): i64  { return load64(c + 32); }
+fn _ctx_paths(c): i64       { return load64(c + 0); }
+fn _ctx_mtimes(c): i64      { return load64(c + 8); }
+fn _ctx_sizes(c): i64       { return load64(c + 16); }
+fn _ctx_patterns(c): i64    { return load64(c + 24); }
+fn _ctx_listing(c): i64     { return load64(c + 32); }
+fn _ctx_tracked_map(c): i64 { return load64(c + 40); }
 
 # Try to open + slurp a file into a heap buf. Returns
 # (buf_ptr, len) packed: a 16-byte struct {ptr@0, len@8}. ptr=0
@@ -409,12 +415,23 @@ fn git_open(listing_cstr): i64 {
         _git_parse_ignore(load64(exc_slurp), load64(exc_slurp + 8), patterns);
     }
     var listing = _git_listing_rel(repo_root, listing_abs);
-    var ctx = alloc(40);
+    # v1.1: build the tracked-path hashmap so _git_find_tracked
+    # can drop from O(N) linear scan to O(1) average. Values are
+    # (idx + 1) so a get-miss returns 0.
+    var tracked_map = map_new_str();
+    var pi = 0;
+    var pn = vec_len(paths);
+    while (pi < pn) {
+        map_set(tracked_map, vec_get(paths, pi), pi + 1);
+        pi = pi + 1;
+    }
+    var ctx = alloc(48);
     store64(ctx + 0, paths);
     store64(ctx + 8, mtimes);
     store64(ctx + 16, sizes);
     store64(ctx + 24, patterns);
     store64(ctx + 32, listing);
+    store64(ctx + 40, tracked_map);
     return ctx;
 }
 
@@ -434,17 +451,14 @@ fn _git_entry_relpath(ctx, name): i64 {
 }
 
 # Look up an entry's repo-relative path in the tracked vec.
-# Returns the slot index (>=0) on hit, -1 on miss. Linear scan
-# — acceptable through low thousands of entries.
+# Returns the slot index (>=0) on hit, -1 on miss. v1.1: O(1)
+# average via the GitCtx's hashmap built at git_open time
+# (was O(N) linear scan through v1.0). Map values are stored
+# as `idx + 1` so the 0 sentinel maps to "not found".
 fn _git_find_tracked(ctx, rel_path): i64 {
-    var paths = _ctx_paths(ctx);
-    var n = vec_len(paths);
-    var i = 0;
-    while (i < n) {
-        if (str_eq(vec_get(paths, i), rel_path) == 1) { return i; }
-        i = i + 1;
-    }
-    return 0 - 1;
+    var v = map_get(_ctx_tracked_map(ctx), rel_path);
+    if (v == 0) { return 0 - 1; }
+    return v - 1;
 }
 
 # Check whether any tracked path lives under `dir_rel`. Used for

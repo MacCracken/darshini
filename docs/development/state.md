@@ -5,12 +5,13 @@
 
 ## Version
 
-**1.0.0** — M10 (v1.0 freeze) shipped 2026-05-23. CLI flag
-surface frozen per ADR 0001 / 0002 / 0003 / 0004. M9
-(v0.9.1) shipped the audit + bench baseline + ADR 0004
-back-fill earlier same day. M1–M8 (v0.2.0 → v0.9.0)
-shipped 2026-05-22/23. Scaffolded as **0.1.0** on 2026-05-19
-via `cyrius init darshini`.
+**1.1.0** — v1.1 backlog burndown shipped 2026-05-23.
+Adds `--help` / `--version` / `-F` / `-d`; upgrades
+`sort_entries` to merge-sort (56× worst-case faster) +
+`_git_find_tracked` to hashmap. Non-breaking under the
+M10 freeze. v1.0.0 froze the contract earlier same day;
+M1–M9 shipped 2026-05-22/23. Scaffolded as **0.1.0** on
+2026-05-19 via `cyrius init darshini`.
 
 ## Toolchain
 
@@ -67,6 +68,7 @@ M9+ onward fills:
 | `--mime` recognition | M8 | **shipped** (v0.9.0) |
 | Pre-v1 audit + bench baseline | M9 | **shipped** (v0.9.1) |
 | v1.0.0 freeze | M10 | **shipped** (v1.0.0) |
+| v1.1: `--help` / `--version` / `-F` / `-d` + merge-sort + git hashmap | v1.1 | **shipped** (v1.1.0) |
 
 ## Tests
 
@@ -101,24 +103,25 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-v1.x maintenance + v1.1 enhancement backlog. From the
-[2026-05-23 audit](../audit/2026-05-23-audit.md) Step 5
-findings and the M10 release notes:
+v1.2 backlog (per user direction post-v1.1):
 
-- **`sort_entries` merge-sort upgrade** — eliminates the
-  O(N²) worst case (36 ms@1k reversed per the bench
-  baseline). Worth doing when a user hits the case.
-- **`git_status_for` hashmap** — linear-scan goes quadratic
-  for repos > ~5k tracked files.
-- **`-F` (classify) + `-d` (list-dir-as-self)** flags —
-  surfaced by the maintainer's dotfile migration (would
-  retire the remaining `eza` aliases `lfiles`, `llfiles`,
-  `ldir`, `lldir`).
-- **mtime localization** — keep UTC default; add an
-  opt-in flag for local time per the M2 notes.
-- **Platform support** — aarch64 Linux, then macOS / BSD /
-  Windows. The arch-specific sites are already documented
-  in this file's "Known gotchas" section.
+- **mtime localization** — keep UTC default; add an opt-in
+  flag for local time per the M2 notes.
+- **Multi-path argv** — `darshini dir1 dir2 ...`. Would
+  retire the maintainer's last two eza aliases
+  (`ldir` / `lldir` which use shell-glob `*/`).
+- **Platform support** — aarch64 Linux first, then macOS /
+  BSD / Windows. Arch-specific sites enumerated below in
+  "Known gotchas".
+
+Smaller v1.2+ candidates from
+[`docs/benchmarks.md`](../benchmarks.md) "v1.2 hot-path
+optimization candidates":
+
+- Hybrid sort (insertion-sort cutoff under merge) — restore
+  best-case perf at small N.
+- `pick_cols` early-out for the widest-entry-doesn't-fit case.
+- `path_join` per-listing stack buffer reuse.
 
 Non-roadmap items remain non-breaking additions per the M10
 freeze contract.

@@ -51,17 +51,19 @@ fn color_for_mode(mode): i64 {
 # either way; git status uses lstat-only data).
 #
 # Returns a 24-byte heap struct: {colors@0, icons@8, gitchrs@16}.
-fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime): i64 {
+fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, want_classify): i64 {
     var colors = 0;
     var icons = 0;
     var gitchrs = 0;
     var mimes = 0;
+    var classifies = 0;
     var want_git = 0;
     if (git_ctx != 0) { want_git = 1; }
-    if (want_color == 1) { colors = vec_new(); }
-    if (want_icons == 1) { icons = vec_new(); }
-    if (want_git == 1)   { gitchrs = vec_new(); }
-    if (want_mime == 1)  { mimes = vec_new(); }
+    if (want_color == 1)    { colors = vec_new(); }
+    if (want_icons == 1)    { icons = vec_new(); }
+    if (want_git == 1)      { gitchrs = vec_new(); }
+    if (want_mime == 1)     { mimes = vec_new(); }
+    if (want_classify == 1) { classifies = vec_new(); }
     var n = vec_len(entries);
     var i = 0;
     while (i < n) {
@@ -73,6 +75,7 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime): 
         var ic = 0;
         var gc = 32;
         var mm = 0;
+        var cl = 0;
         if (rc >= 0) {
             var mode = load32(stat_buf + STAT_MODE);
             var fmt = mode & S_IFMT;
@@ -97,20 +100,25 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime): 
             if (want_mime == 1) {
                 mm = mime_for_entry(str_data(full), name, mode);
             }
+            if (want_classify == 1) {
+                cl = classify_indicator(mode);
+            }
         } else {
             if (want_mime == 1) { mm = "application/octet-stream"; }
         }
-        if (want_color == 1) { vec_push(colors, c); }
-        if (want_icons == 1) { vec_push(icons, ic); }
-        if (want_git == 1)   { vec_push(gitchrs, gc); }
-        if (want_mime == 1)  { vec_push(mimes, mm); }
+        if (want_color == 1)    { vec_push(colors, c); }
+        if (want_icons == 1)    { vec_push(icons, ic); }
+        if (want_git == 1)      { vec_push(gitchrs, gc); }
+        if (want_mime == 1)     { vec_push(mimes, mm); }
+        if (want_classify == 1) { vec_push(classifies, cl); }
         i = i + 1;
     }
-    var r = alloc(32);
+    var r = alloc(40);
     store64(r + 0, colors);
     store64(r + 8, icons);
     store64(r + 16, gitchrs);
     store64(r + 24, mimes);
+    store64(r + 32, classifies);
     return r;
 }
 
@@ -129,7 +137,7 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime): 
 #
 # All four pad params (color is implicit, others explicit) are
 # 0 when the corresponding decoration is globally disabled.
-fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad): i64 {
+fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad, classify_char, classify_pad): i64 {
     if (color != 0) { tty_sgr(color); }
     if (git_pad > 0) {
         if (git_char != 0) {
@@ -148,6 +156,18 @@ fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad): i64 {
         sys_write(STDOUT_FD, "  ", 2);
     } }
     sys_write(STDOUT_FD, str_data(name), str_len(name));
+    # v1.1 -F classify indicator: trailing 1-char suffix (or
+    # space if `-F` is on but the entry's mode has no indicator —
+    # keeps column alignment).
+    if (classify_pad > 0) {
+        if (classify_char != 0) {
+            var cb2[1];
+            store8(&cb2, classify_char);
+            sys_write(STDOUT_FD, &cb2, 1);
+        } else {
+            sys_write(STDOUT_FD, " ", 1);
+        }
+    }
     if (color != 0) { tty_sgr_reset(); }
     return 0;
 }
@@ -156,5 +176,5 @@ fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad): i64 {
 # (or color-only) path — most of the long-format / non-listing
 # emit paths.
 fn emit_colored(name, color): i64 {
-    return emit_decorated(name, color, 0, 0, 0, 0);
+    return emit_decorated(name, color, 0, 0, 0, 0, 0, 0);
 }

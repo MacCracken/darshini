@@ -2,6 +2,8 @@
 
 Captured 2026-05-23 at v0.9.0 via `cyrius bench
 tests/darshini.bcyr` on the maintainer's x86_64 Linux box.
+**Refreshed 2026-05-23 at v1.1.0** after the merge-sort +
+git-hashmap upgrades — diff section at the bottom.
 Pure-algorithm benchmarks — filesystem I/O excluded (those vary
 with kernel page cache + fs state and are dominated by syscall
 overhead, not by darshini's code).
@@ -64,3 +66,47 @@ cyrius build src/main.cyr build/darshini       # cleanliness check
 cyrius bench tests/darshini.bcyr               # run this set
 # Capture new numbers + diff into a follow-up section here.
 ```
+
+## v1.1.0 refresh — 2026-05-23
+
+After the merge-sort upgrade (eliminates O(N²) worst case)
+and the git tracked-set hashmap (linear-scan → O(1) avg).
+
+| Path                          | v0.9.0   | v1.1.0   | Δ |
+|-------------------------------|----------|----------|---|
+| `sort_entries` best=5         | 578 ns   | 1 µs     | 1.7× slower (merge-sort overhead at tiny N) |
+| `sort_entries` best=100       | 11 µs    | 44 µs    | 4× slower |
+| `sort_entries` best=1000      | 112 µs   | 635 µs   | 5.6× slower |
+| `sort_entries` worst=100      | 394 µs   | 48 µs    | **8× faster** |
+| `sort_entries` worst=1000     | 36.2 ms  | 640 µs   | **56× faster** |
+| `pick_cols` 1k@80 no-decor    | 177 µs   | 177 µs   | flat |
+| `pick_cols` 1k@200 icons+git  | 133 µs   | 133 µs   | flat |
+| `color_for_mode` (dir)        | 3 ns     | 3 ns     | flat |
+| `icon_for_entry` `.cyr`       | 345 ns   | 380 ns   | flat (within noise) |
+| `mime_for_entry` `.md`        | 615 ns   | 623 ns   | flat |
+
+**Verdict**: trade was right. The worst-case sort path was
+36 ms — perceptible. Now it's sub-ms across the board. The
+best-case regression (5.6× at 1k) sits at 635 µs total — still
+well under any perception threshold and dwarfed by the actual
+`lstat(2)` syscall cost on the same listing.
+
+Git hashmap delta isn't visible at this repo's 117-file index
+size (linear scan was already sub-µs). The win lands at
+~5k+ tracked files where the linear-scan goes quadratic — that
+upgrade is preemptive for large-repo users, not a measurable
+improvement at typical scales.
+
+### v1.2 hot-path optimization candidates
+
+- Hybrid sort: switch to insertion sort for subarrays below ~16
+  elements. Removes the merge-sort overhead at small N
+  (restores the 100-entry best-case regression). Classic
+  optimization; ~10 lines.
+- `pick_cols` is O(N × cols-tried). For very wide TTYs with
+  many entries, the recompute per cols-tried is wasteful — could
+  short-circuit by checking the WIDEST entry's width against
+  per-cell budget.
+- `path_join` allocates per call; per-listing reuse a single
+  stack buffer would save N allocations under `-l` / `--git` /
+  `--mime` decoration.

@@ -50,36 +50,72 @@ fn str_lt_ci(a: Str, b: Str): i64 {
     return 0;
 }
 
-# Insertion sort over a vec<Str>, in-place, by str_lt_ci.
-# Insertion sort is the right call for the v1.0 directory-listing
-# workload: typical entry counts are well under 1k, the input is
-# often already nearly-sorted (getdents64 returns entries in
-# filesystem-order which on ext4/xfs is close to alphabetical for
-# most user directories), and the O(n) best case beats any
-# divide-and-conquer's constant factor at those sizes.
+# Stable merge over `v[lo..mid)` + `v[mid..hi)` using `scratch`
+# as auxiliary storage. Preference on tie goes to the left
+# operand → stable sort. Writes the merged result into
+# scratch[lo..hi), then copies back to v.
+fn _merge(v, lo, mid, hi, scratch): i64 {
+    var i = lo;
+    var j = mid;
+    var k = lo;
+    while (k < hi) {
+        if (i >= mid) {
+            vec_set(scratch, k, vec_get(v, j));
+            j = j + 1;
+        } else { if (j >= hi) {
+            vec_set(scratch, k, vec_get(v, i));
+            i = i + 1;
+        } else {
+            # Stable: take left unless right is strictly less.
+            if (str_lt_ci(vec_get(v, j), vec_get(v, i)) == 1) {
+                vec_set(scratch, k, vec_get(v, j));
+                j = j + 1;
+            } else {
+                vec_set(scratch, k, vec_get(v, i));
+                i = i + 1;
+            }
+        } }
+        k = k + 1;
+    }
+    var c = lo;
+    while (c < hi) {
+        vec_set(v, c, vec_get(scratch, c));
+        c = c + 1;
+    }
+    return 0;
+}
+
+# Top-down recursive merge-sort on `v[lo..hi)`. log₂(N) deep —
+# safe through any practical entry count (1M entries → 20 frames).
+fn _merge_sort(v, lo, hi, scratch): i64 {
+    if (hi - lo <= 1) { return 0; }
+    var mid = lo + (hi - lo) / 2;
+    _merge_sort(v, lo, mid, scratch);
+    _merge_sort(v, mid, hi, scratch);
+    _merge(v, lo, mid, hi, scratch);
+    return 0;
+}
+
+# Sort a vec<Str> in-place by str_lt_ci (case-insensitive
+# locale-free). Stable + O(N log N) worst case via top-down
+# merge-sort. Replaces the v1.0 insertion sort whose
+# 36 ms@1k-reverse-sorted worst case was bench-flagged in
+# the M9 audit. Allocates an N-slot scratch vec (O(N) extra
+# memory) — acceptable since listings are bounded by
+# `dir_list`'s vec growth anyway.
+#
+# Caller contract unchanged from v1.0: takes a vec<Str>,
+# sorts in place, returns 0.
 fn sort_entries(entries): i64 {
     var n = vec_len(entries);
-    var i = 1;
-    while (i < n) {
-        var cur = vec_get(entries, i);
-        var pos = i;
-        var moving = 1;
-        while (moving == 1) {
-            if (pos == 0) {
-                moving = 0;
-            } else {
-                var prev = vec_get(entries, pos - 1);
-                if (str_lt_ci(cur, prev) == 1) {
-                    vec_set(entries, pos, prev);
-                    pos = pos - 1;
-                } else {
-                    moving = 0;
-                }
-            }
-        }
-        vec_set(entries, pos, cur);
-        i = i + 1;
+    if (n <= 1) { return 0; }
+    var scratch = vec_new();
+    var s = 0;
+    while (s < n) {
+        vec_push(scratch, 0);
+        s = s + 1;
     }
+    _merge_sort(entries, 0, n, scratch);
     return 0;
 }
 
@@ -87,22 +123,26 @@ fn sort_entries(entries): i64 {
 #
 # Decoration vecs (`colors` / `icons` / `gitchrs`): non-zero
 # means "decorate"; passing 0 disables that decoration.
-fn print_entries(entries, colors, icons, gitchrs): i64 {
+fn print_entries(entries, colors, icons, gitchrs, classifies): i64 {
     var i = 0;
     var n = vec_len(entries);
     var icon_pad = 0;
-    if (icons != 0)   { icon_pad = icon_display_width(); }
+    if (icons != 0)      { icon_pad = icon_display_width(); }
     var git_pad = 0;
-    if (gitchrs != 0) { git_pad = git_display_width(); }
+    if (gitchrs != 0)    { git_pad = git_display_width(); }
+    var cls_pad = 0;
+    if (classifies != 0) { cls_pad = classify_display_width(); }
     while (i < n) {
         var s = vec_get(entries, i);
         var c = 0;
-        if (colors != 0)   { c = vec_get(colors, i); }
+        if (colors != 0)     { c = vec_get(colors, i); }
         var ic = 0;
-        if (icons != 0)    { ic = vec_get(icons, i); }
+        if (icons != 0)      { ic = vec_get(icons, i); }
         var gc = 0;
-        if (gitchrs != 0)  { gc = vec_get(gitchrs, i); }
-        emit_decorated(s, c, ic, icon_pad, gc, git_pad);
+        if (gitchrs != 0)    { gc = vec_get(gitchrs, i); }
+        var cl = 0;
+        if (classifies != 0) { cl = vec_get(classifies, i); }
+        emit_decorated(s, c, ic, icon_pad, gc, git_pad, cl, cls_pad);
         sys_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }

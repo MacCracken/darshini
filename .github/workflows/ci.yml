@@ -98,6 +98,40 @@ jobs:
           test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
           echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }
 
+      - name: Smoke — --help / --version exit 0 with expected output
+        # v1.1 contract: both meta flags exit 0 + print to stdout.
+        # --version output is exactly "darshini X.Y.Z\n".
+        run: |
+          set -e
+          out=$(./build/${{ github.event.repository.name }} --version)
+          test "$out" = "darshini 1.1.0" || { echo "--version mismatch: $out"; exit 1; }
+          ./build/${{ github.event.repository.name }} --help > /tmp/help
+          grep -q "^usage: darshini" /tmp/help \
+            || { echo "--help missing usage line:"; cat /tmp/help; exit 1; }
+          grep -q "^  -F " /tmp/help \
+            || { echo "--help missing -F flag doc:"; cat /tmp/help; exit 1; }
+
+      - name: Smoke — -F appends classify indicators
+        # v1.1 contract: dirs get `/`, regular files no indicator,
+        # the column reserves a cell either way for alignment.
+        run: |
+          set -e
+          ./build/${{ github.event.repository.name }} -F > /tmp/classify
+          grep -q '^src/$' /tmp/classify \
+            || { echo "no 'src/' classify in -F output:"; cat /tmp/classify; exit 1; }
+          grep -q '^CHANGELOG\.md $' /tmp/classify \
+            || { echo "regular file should have trailing space (no indicator):"; cat /tmp/classify; exit 1; }
+
+      - name: Smoke — -d renders single entry for dir
+        # v1.1 contract: -d echoes path verbatim, -dF appends /,
+        # -ld renders one long-format row.
+        run: |
+          set -e
+          out=$(./build/${{ github.event.repository.name }} -d src)
+          test "$out" = "src" || { echo "-d src mismatch: $out"; exit 1; }
+          out=$(./build/${{ github.event.repository.name }} -dF src)
+          test "$out" = "src/" || { echo "-dF src mismatch: $out"; exit 1; }
+
       - name: Smoke — --mime column under -l surfaces expected types
         # M8 contract: `darshini -l --mime` shows mime types
         # for the listing — text/markdown for .md, application/x-cyml

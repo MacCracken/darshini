@@ -115,10 +115,13 @@ fn _tree_emit_long_prefix(stat_buf, want_long, want_human): i64 {
 # status char from the stat_buf. compute_decor's per-listing
 # pattern doesn't apply here (we're streaming through a
 # recursive walk), so each render is independent.
-fn _tree_decor(stat_buf, full_path_cstr, name_str, want_color, want_icons, git_ctx, out_color, out_icon, out_git): i64 {
+fn _tree_decor(stat_buf, full_path_cstr, name_str,
+               want_color, want_icons, git_ctx, want_classify,
+               out_color, out_icon, out_git, out_classify): i64 {
     var col = 0;
     var ic = 0;
     var gc = 0;
+    var cl = 0;
     var mode = load32(stat_buf + STAT_MODE);
     var fmt = mode & S_IFMT;
     if (want_color == 1) {
@@ -139,9 +142,11 @@ fn _tree_decor(stat_buf, full_path_cstr, name_str, want_color, want_icons, git_c
                             load64(stat_buf + STAT_MTIME),
                             load64(stat_buf + STAT_SIZE));
     }
+    if (want_classify == 1) { cl = classify_indicator(mode); }
     store64(out_color, col);
     store64(out_icon, ic);
     store64(out_git, gc);
+    store64(out_classify, cl);
     return 0;
 }
 
@@ -150,7 +155,9 @@ fn _tree_decor(stat_buf, full_path_cstr, name_str, want_color, want_icons, git_c
 # (not following symlinks-to-dirs). Stops when depth ≥ max_depth
 # (when max_depth > 0; 0 means unlimited). `git_ctx` is the
 # shared M7 context (0 disables the git column).
-fn _tree_recurse(dir_str, depth, max_depth, depth_stack, want_long, want_human, want_color, want_icons, git_ctx): i64 {
+fn _tree_recurse(dir_str, depth, max_depth, depth_stack,
+                 want_long, want_human, want_color, want_icons,
+                 git_ctx, want_classify): i64 {
     if (max_depth > 0) { if (depth >= max_depth) { return 0; } }
     var entries = list_dir(dir_str);
     sort_entries(entries);
@@ -169,19 +176,23 @@ fn _tree_recurse(dir_str, depth, max_depth, depth_stack, want_long, want_human, 
         var col_slot[8];
         var ic_slot[8];
         var gc_slot[8];
+        var cl_slot[8];
         store64(&col_slot, 0);
         store64(&ic_slot, 0);
         store64(&gc_slot, 0);
+        store64(&cl_slot, 0);
         if (rc >= 0) {
-            _tree_decor(stat_buf, str_data(full), name, want_color, want_icons, git_ctx,
-                        &col_slot, &ic_slot, &gc_slot);
+            _tree_decor(stat_buf, str_data(full), name, want_color, want_icons, git_ctx, want_classify,
+                        &col_slot, &ic_slot, &gc_slot, &cl_slot);
         }
         var icon_pad = 0;
-        if (want_icons == 1) { icon_pad = icon_display_width(); }
+        if (want_icons == 1)    { icon_pad = icon_display_width(); }
         var git_pad = 0;
-        if (git_ctx != 0)    { git_pad = git_display_width(); }
+        if (git_ctx != 0)       { git_pad = git_display_width(); }
+        var cls_pad = 0;
+        if (want_classify == 1) { cls_pad = classify_display_width(); }
         emit_decorated(name, load64(&col_slot), load64(&ic_slot), icon_pad,
-                       load64(&gc_slot), git_pad);
+                       load64(&gc_slot), git_pad, load64(&cl_slot), cls_pad);
         sys_write(STDOUT_FD, "\n", 1);
         if (rc >= 0) {
             var mode = load32(stat_buf + STAT_MODE);
@@ -189,7 +200,7 @@ fn _tree_recurse(dir_str, depth, max_depth, depth_stack, want_long, want_human, 
             if (fmt == S_IFDIR) {
                 vec_push(depth_stack, 1 - is_last);
                 _tree_recurse(full, depth + 1, max_depth, depth_stack,
-                              want_long, want_human, want_color, want_icons, git_ctx);
+                              want_long, want_human, want_color, want_icons, git_ctx, want_classify);
                 vec_pop(depth_stack);
             }
         }
@@ -200,29 +211,33 @@ fn _tree_recurse(dir_str, depth, max_depth, depth_stack, want_long, want_human, 
 
 # Top-level: emit the root path, then recurse. `max_depth = 0`
 # means unlimited; otherwise stop at depth `max_depth`.
-fn render_tree(root_cstr, max_depth, want_long, want_human, want_color, want_icons, git_ctx): i64 {
+fn render_tree(root_cstr, max_depth, want_long, want_human, want_color, want_icons, git_ctx, want_classify): i64 {
     var stat_buf = alloc(144);
     var rc = lstat_path(root_cstr, stat_buf);
     var col_slot[8];
     var ic_slot[8];
     var gc_slot[8];
+    var cl_slot[8];
     store64(&col_slot, 0);
     store64(&ic_slot, 0);
     store64(&gc_slot, 0);
+    store64(&cl_slot, 0);
     if (rc >= 0) {
         var root_name = str_from(root_cstr);
-        _tree_decor(stat_buf, root_cstr, root_name, want_color, want_icons, git_ctx,
-                    &col_slot, &ic_slot, &gc_slot);
+        _tree_decor(stat_buf, root_cstr, root_name, want_color, want_icons, git_ctx, want_classify,
+                    &col_slot, &ic_slot, &gc_slot, &cl_slot);
     }
     var icon_pad = 0;
-    if (want_icons == 1) { icon_pad = icon_display_width(); }
+    if (want_icons == 1)    { icon_pad = icon_display_width(); }
     var git_pad = 0;
-    if (git_ctx != 0)    { git_pad = git_display_width(); }
+    if (git_ctx != 0)       { git_pad = git_display_width(); }
+    var cls_pad = 0;
+    if (want_classify == 1) { cls_pad = classify_display_width(); }
     emit_decorated(str_from(root_cstr), load64(&col_slot), load64(&ic_slot), icon_pad,
-                   load64(&gc_slot), git_pad);
+                   load64(&gc_slot), git_pad, load64(&cl_slot), cls_pad);
     sys_write(STDOUT_FD, "\n", 1);
     var depth_stack = vec_new();
     _tree_recurse(str_from(root_cstr), 0, max_depth, depth_stack,
-                  want_long, want_human, want_color, want_icons, git_ctx);
+                  want_long, want_human, want_color, want_icons, git_ctx, want_classify);
     return 0;
 }

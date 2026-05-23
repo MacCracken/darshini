@@ -4,6 +4,78 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] — v1.1: backlog burndown
+
+Pure additions + internal upgrades, all non-breaking under the
+M10 freeze contract.
+
+### Added
+
+- `--help` — flag summary + exits 0. Back-fills the M10
+  roadmap omission.
+- `--version` — prints `darshini 1.1.0` + exits 0. Same back-fill.
+- `-F` — classify entries with POSIX-style trailing indicator:
+  `/` directory, `*` executable regular file, `@` symlink,
+  `|` fifo, `=` socket. Block / char devices have no POSIX
+  indicator and don't emit one. Composes with every existing
+  format (long / multi-column / single-column / tree).
+  Display-width: 1 cell per entry (with-or-without indicator;
+  padding reserves the cell for alignment).
+- `-d` — list the path as a single entry instead of listing its
+  contents (matches `ls -d` shape). Composes with `-l` (single
+  long-format row) and `-F` (trailing `/` for directories).
+  Multi-path support (`-d dir1 dir2 ...`) stays out of scope —
+  v1.2 candidate.
+
+### Performance
+
+- `sort_entries` upgraded from insertion sort → top-down
+  merge-sort. Stable, O(N log N) worst case (was O(N²)).
+  Bench delta:
+  - 1k reverse-sorted entries: **36.3 ms → 640 µs (56× faster)**
+  - 100 reverse-sorted entries: 391 µs → 48 µs (8× faster)
+  - 1k already-sorted: 114 µs → 635 µs (5.6× slower —
+    overhead of the auxiliary vec; absolute still sub-ms, well
+    under any perception threshold)
+  Caller contract unchanged; allocates O(N) scratch internally.
+- `_git_find_tracked` upgraded from O(N) linear scan → O(1)
+  average hashmap lookup. Built once at `git_open` time, lives
+  on the `GitCtx`. Quadratic → linear total cost for repos with
+  thousands of tracked files. Invisible on this repo's 117-file
+  index (sub-µs either way); matters at scale.
+
+### Internal
+
+- `cyrius.cyml` [deps].stdlib gains `hashmap`.
+- `GitCtx` struct grew 40 → 48 bytes (new `tracked_map` slot
+  at +40).
+- `emit_decorated` and the four render-path entry points
+  (`print_entries`, `render_columns`, `render_long`,
+  `render_long_one`, `render_tree`) gained `classify_char` +
+  `classify_pad` params. `compute_decor` gained a parallel
+  `classifies` vec at +32.
+
+### Dotfile retirement progress
+
+The maintainer's `~/.config/zsh/.aliases.zsh` migration
+continues. v1.0 retired `ll` and `l`; v1.1 retires `lfiles`
+and `llfiles` via the new `-F` flag. `ldir` / `lldir` need
+multi-path argv support (v1.2 candidate); they stay on eza
+until then.
+
+### Notes
+
+- v1.1 is a SemVer-minor bump per the new flags. The M10
+  freeze contract holds — no behavior changed for any v1.0
+  flag, only additions.
+- Tests stayed at 233/233. New flags don't add their own
+  test functions (they thread through existing emit code
+  whose contracts didn't change); their effects are
+  exercised end-to-end via the binary in CI smokes.
+- v1.2 backlog (per user direction): mtime localization,
+  multi-path argv, post-v1 platforms (aarch64 Linux first,
+  then macOS / BSD / Windows).
+
 ## [1.0.0] — M10: v1.0 freeze
 
 ### Breaking

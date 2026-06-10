@@ -4,6 +4,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.3] — v1.1.3: toolchain bump
+
+Pure version-pin release; no functional source changes (only the
+lockstep `--version` string bump). Catches darshini up
+to the ecosystem-wide cycc pin — the `cyrius` wrapper had already
+drifted to `6.1.24` while the manifest pin sat stale at `6.0.0`.
+`cyrius update` refreshed `lib/` (101 files) from the matching
+snapshot; no source edits required. darshana bumped `0.5.3` →
+`0.5.4` (itself a pure toolchain bump to the same 6.1.24 pin, no
+API surface change). Build clean and all 233 assertions green on
+the new toolchain. Non-breaking under the M10 freeze.
+
+### Changed
+
+- `cyrius.cyml` pin bumped `6.0.0` → `6.1.24`.
+- `[deps.darshana]` tag bumped `0.5.3` → `0.5.4` (toolchain-bump
+  release; no API change).
+- `lib/` refreshed via `cyrius update` to the 6.1.24 snapshot.
+
 ## [1.1.2] — v1.1.2: hot-path optimizations
 
 Three perf wins from the v1.2 candidates list in

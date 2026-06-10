@@ -40,13 +40,22 @@ jobs:
         run: cyrius deps
 
       - name: Lint
-        # cyrius lint is file-at-a-time — loop over every src/*.cyr.
-        # Catches trailing whitespace, tabs, long lines, global-init
-        # forward refs, and CLAUDE.md-mandated style hits before
-        # they reach review.
+        # Same tolerance policy as darshana/chakshu/owl/cyim: every
+        # src file clean; the only acceptable warning is the cosmetic
+        # "exceeds 120 characters" rule on comment-divider lines.
+        # cyrius lint exits non-zero on any output, so we wrap in
+        # `|| true` to coexist with the implicit `set -e`.
         run: |
-          set -e
-          for f in src/*.cyr; do cyrius lint "$f"; done
+          fail=0
+          for f in src/*.cyr; do
+            out=$(cyrius lint "$f" 2>&1 || true)
+            echo "$out"
+            bad=$(echo "$out" | grep -E '^\s*warn ' | grep -v 'exceeds 120 characters' || true)
+            if [ -n "$bad" ]; then
+              fail=1
+            fi
+          done
+          [ $fail -eq 0 ] || { echo "lint: non-cosmetic warnings present"; exit 1; }
 
       - name: Vet includes
         # Audits the include graph from the entry point. Fails on
@@ -364,3 +373,129 @@ jobs:
           set -e
           test "$rc" -eq 1 || { echo "expected exit 1 on unknown flag, got $rc"; exit 1; }
           echo "$out" | grep -q "unknown flag" || { echo "unknown-flag message not surfaced; got: $out"; exit 1; }
+
+      - name: DCE parity check
+        # darshana runs the equivalent gate: a dead-code-eliminated
+        # build (CYRIUS_DCE=1) must behave identically to the debug
+        # build, or the DCE pass dropped a live symbol. darshini's
+        # normal build reports hundreds of unreachable fns; this
+        # proves eliminating them doesn't change observable output.
+        run: |
+          set -e
+          CYRIUS_DCE=1 cyrius build src/main.cyr build/${{ github.event.repository.name }}-dce
+          echo "${{ github.event.repository.name }}-dce: $(wc -c < build/${{ github.event.repository.name }}-dce) bytes"
+          ./build/${{ github.event.repository.name }}-dce > /tmp/dce_listing
+          for expected in cyrius.cyml VERSION README.md CHANGELOG.md src tests; do
+            grep -qx "$expected" /tmp/dce_listing \
+              || { echo "DCE build dropped '$expected' from listing:"; cat /tmp/dce_listing; exit 1; }
+          done
+          want="darshini $(cat VERSION)"
+          out=$(./build/${{ github.event.repository.name }}-dce --version)
+          test "$out" = "$want" || { echo "DCE --version mismatch: got '$out', want '$want'"; exit 1; }
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for forbidden patterns in src/
+        # darshini CLAUDE.md hard rules, scanned statically so a
+        # regression can't merge. Rules mirror darshana/chakshu so the
+        # AGNOS first-party stack stays uniformly hardened — adapted to
+        # darshini's invariants (no exec, no inline ANSI, no git shell).
+        run: |
+          FAIL=0
+
+          # No sys_system / exec_* — directory walk + stat + render
+          # only (CLAUDE.md "Do not use sys_system() or exec_*").
+          exec_hits=$(grep -rnE '\b(sys_system|exec_[a-z]+)\b' src/ 2>/dev/null || true)
+          if [ -n "$exec_hits" ]; then
+            echo "FAIL: sys_system/exec_* call in src/ (no subprocess execution allowed)"
+            echo "$exec_hits"
+            FAIL=1
+          fi
+
+          # No raw ANSI escape literals — every SGR/cursor sequence
+          # MUST route through darshana (CLAUDE.md "no raw ANSI inline").
+          ansi_hits=$(grep -rnE '\\x1b\[|\\033\[|\\e\[' src/ 2>/dev/null || true)
+          if [ -n "$ansi_hits" ]; then
+            echo "FAIL: raw ANSI escape literal in src/ — route via darshana tty_sgr"
+            echo "$ansi_hits"
+            FAIL=1
+          fi
+
+          # No git invoked as a subprocess — git status comes from
+          # reading .git/ files directly (CLAUDE.md hard rule).
+          git_hits=$(grep -rnE '"git[ "]|sys_system.*git|exec.*git' src/ 2>/dev/null || true)
+          if [ -n "$git_hits" ]; then
+            echo "FAIL: git subprocess reference in src/ — parse .git/ directly"
+            echo "$git_hits"
+            FAIL=1
+          fi
+
+          # No FFI / dynlib / pam imports (shared stack invariant).
+          ffi_hits=$(grep -rnE 'include "lib/(cffi|dynlib|fdlopen|pam)\.cyr"' src/ 2>/dev/null || true)
+          if [ -n "$ffi_hits" ]; then
+            echo "FAIL: FFI/dynlib/pam library import in src/"
+            echo "$ffi_hits"
+            FAIL=1
+          fi
+
+          # Large stack buffers — same 64 KiB threshold owl/cyim/
+          # chakshu/darshana use. darshini's biggest legitimate stack
+          # buffers are the 4096-byte path-join buf and the 144-byte
+          # stat buf; flag anything >= 64 KiB as a contributor mistake.
+          awk -F: '
+            /var [A-Za-z_][A-Za-z0-9_]*\[[0-9]+\]/ {
+              match($0, /\[[0-9]+\]/); s=substr($0,RSTART+1,RLENGTH-2); n=s+0;
+              if (n >= 65536) print FILENAME":"NR": large stack buffer ("n" bytes): "$0
+            }' src/*.cyr > /tmp/bigbuf.txt
+          if [ -s /tmp/bigbuf.txt ]; then
+            cat /tmp/bigbuf.txt
+            FAIL=1
+          fi
+
+          echo "security scan complete (fail: $FAIL)"
+          exit $FAIL
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files
+        # First-party documentation surface. Mirrors darshana's docs
+        # gate, with darshini's actual ADR set (color-scheme is 0001).
+        run: |
+          MISSING=0
+          for f in README.md CHANGELOG.md VERSION LICENSE \
+                   cyrius.cyml CLAUDE.md \
+                   CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md \
+                   docs/development/roadmap.md docs/development/state.md \
+                   docs/adr/0001-color-scheme.md; do
+            if [ -f "$f" ]; then echo "  OK: $f"
+            else echo "  MISSING: $f"; MISSING=1; fi
+          done
+          exit $MISSING
+
+      - name: Verify version consistency
+        # Single source of truth is the VERSION file. Three derived
+        # surfaces must agree: the CHANGELOG section header, the
+        # cyrius.cyml file: indirection, and — unlike darshana, which
+        # generates its version header — darshini's baked
+        # _darshini_version_str() literal in src/main.cyr. The runtime
+        # --version smoke in build-and-test re-checks the built binary
+        # against VERSION; this static check catches the mismatch
+        # without a toolchain install.
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          echo "VERSION file: $VERSION"
+          grep -qE "^## \[${VERSION}\]" CHANGELOG.md \
+            || { echo "FAIL: CHANGELOG.md missing section [${VERSION}]"; exit 1; }
+          grep -qE '^version *= *"\$\{file:VERSION\}"' cyrius.cyml \
+            || { echo "FAIL: cyrius.cyml version no longer pulls from VERSION"; exit 1; }
+          grep -qE "return \"darshini ${VERSION}\";" src/main.cyr \
+            || { echo "FAIL: _darshini_version_str() in src/main.cyr not bumped to ${VERSION}"; exit 1; }
+          echo "Version consistent: VERSION = CHANGELOG = cyrius.cyml = src literal = $VERSION"

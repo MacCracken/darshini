@@ -123,11 +123,15 @@ jobs:
 
       - name: Smoke — --help / --version exit 0 with expected output
         # v1.1 contract: both meta flags exit 0 + print to stdout.
-        # --version output is exactly "darshini X.Y.Z\n".
+        # --version output is exactly "darshini X.Y.Z\n", where X.Y.Z
+        # is sourced from the VERSION file (single source of truth —
+        # this catches a stale _darshini_version_str() that was not
+        # bumped in lockstep with VERSION).
         run: |
           set -e
+          want="darshini $(cat VERSION)"
           out=$(./build/${{ github.event.repository.name }} --version)
-          test "$out" = "darshini 1.1.2" || { echo "--version mismatch: $out"; exit 1; }
+          test "$out" = "$want" || { echo "--version mismatch: got '$out', want '$want'"; exit 1; }
           ./build/${{ github.event.repository.name }} --help > /tmp/help
           grep -q "^usage: darshini" /tmp/help \
             || { echo "--help missing usage line:"; cat /tmp/help; exit 1; }

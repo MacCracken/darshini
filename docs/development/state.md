@@ -5,10 +5,12 @@
 
 ## Version
 
-**1.1.3** — toolchain bump shipped 2026-06-10 (cycc pin
-`6.0.0` → `6.1.24`, darshana `0.5.3` → `0.5.4`, `lib/`
-refreshed). Pure version-pin release, no source changes.
-Prior: v1.1.2 hot-path optimizations 2026-05-23 (hybrid
+**1.1.4** — darshana dep bump shipped 2026-06-10 (`0.5.4`
+→ `0.6.0`; upstream test-only PTY-harness release, no
+public-surface change). Dependency-only. Prior: v1.1.3
+toolchain bump same day (cycc pin `6.0.0` → `6.1.24`,
+darshana `0.5.3` → `0.5.4`, `lib/` refreshed).
+Earlier: v1.1.2 hot-path optimizations 2026-05-23 (hybrid
 sort + pick_cols early-out + path_join buf reuse). Same day
 as v1.1.0 (`--help` / `--version` / `-F` / `-d` + merge-sort
 + git hashmap) and v1.1.1 (multi-path argv). v1.0.0 froze
@@ -75,6 +77,7 @@ M9+ onward fills:
 | v1.1.1: multi-path argv (full eza alias retirement) | v1.1.1 | **shipped** (v1.1.1) |
 | v1.1.2: hybrid sort + pick_cols early-out + path_join buf reuse | v1.1.2 | **shipped** (v1.1.2) |
 | v1.1.3: toolchain bump (cycc 6.1.24, darshana 0.5.4) | v1.1.3 | **shipped** (v1.1.3) |
+| v1.1.4: darshana dep bump (0.6.0, test-only upstream) | v1.1.4 | **shipped** (v1.1.4) |
 
 ## Tests
 
@@ -97,7 +100,7 @@ Direct (declared in `cyrius.cyml`):
   chrono, assert, bench. `args` + `fs` added at M1 (argv access
   + getdents64-backed dir_list); `chrono` added at M2 for
   `epoch_to_date` + the 2-digit / 4-digit formatting helpers.
-- `[deps.darshana]` (git, tag 0.5.4) — TTY/ANSI/cursor primitives.
+- `[deps.darshana]` (git, tag 0.6.0) — TTY/ANSI/cursor primitives.
   First external dep; landed at M4 for the color escapes. All
   raw ANSI routes through darshana's `tty_sgr` / `tty_sgr_reset`
   per CLAUDE.md.

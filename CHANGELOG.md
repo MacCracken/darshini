@@ -4,6 +4,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.4] — v1.1.4: darshana 0.6.0 dep bump
+
+Dependency-only release. `[deps.darshana]` tag bumped `0.5.4` →
+`0.6.0` — an upstream **test-only** release (in-repo PTY harness;
+no `src/` change, no public-surface change), so darshini's color
+path is byte-identical. No functional source change here either
+(only the lockstep `--version` string bump). Build clean and all
+233 assertions green. Non-breaking under the M10 freeze.
+
+### Changed
+
+- `[deps.darshana]` tag bumped `0.5.4` → `0.6.0` (test-only
+  upstream release; no API change).
+
 ## [1.1.3] — v1.1.3: toolchain bump
 
 Pure version-pin release; no functional source changes (only the

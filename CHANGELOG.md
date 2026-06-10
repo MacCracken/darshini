@@ -4,6 +4,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] — v1.2.0: darshana 0.7.0 (breaking upstream) + cycc 6.1.26
+
+Minor bump to absorb darshana's pre-freeze API-reshaping cut.
+darshana **0.7.0 is a breaking release**, but every breaking
+change lands on a symbol darshini does not call:
+
+- `tty_cooked(fd)` → `tty_cooked()` (zero-arg)
+- `tty_itoa` → `tty_dec_buf` (renamed + return harmonized)
+- `tty_clear_to_end` → `tty_clear_to_eos`
+- `tty_apply_raw_flags` → `_tty_apply_raw_flags` (privatized)
+
+darshini's entire darshana surface is `tty_sgr` / `tty_sgr_reset`,
+both unchanged — so this upgrade needs **no call-site repair**
+(same category as darshana's anuenue/bannermanor consumers).
+Verified: clean build + 233/233 assertions green against 0.7.0.
+darshini's own CLI contract is unchanged (non-breaking under the
+M10 freeze); the minor bump reflects the significant dependency
+major-surface move, not a darshini behavior change. The only
+functional source change is the lockstep `--version` string.
+
+### Changed
+
+- `[deps.darshana]` tag bumped `0.6.0` → `0.7.0` (breaking
+  upstream; darshini's call sites unaffected — `tty_sgr` /
+  `tty_sgr_reset` unchanged).
+- `cyrius.cyml` pin bumped `6.1.24` → `6.1.26`.
+- `lib/` refreshed via `cyrius update` to the 6.1.26 snapshot.
+
 ## [1.1.4] — v1.1.4: darshana 0.6.0 dep bump
 
 Dependency-only release. `[deps.darshana]` tag bumped `0.5.4` →

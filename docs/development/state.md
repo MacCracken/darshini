@@ -5,7 +5,18 @@
 
 ## Version
 
-**1.2.0** — darshana 0.7.0 (breaking upstream) + cycc
+**1.2.1** — cycc 6.2.22 + darshana 0.7.1, shipped
+2026-06-18. Toolchain bump: the installed wrapper had
+moved to `6.2.22` while the manifest pin stayed `6.1.26`
+(drift warning every build); this catches the manifest
+up. darshana `0.7.0` → `0.7.1` is itself a toolchain-only
+upstream cut (no source / API change, module bodies
+byte-identical, regenerated only to stamp the 6.2.22
+header), so darshini's color path is byte-identical and
+no call-site repair was needed (verified: clean build +
+233/233 green). Patch bump — no darshana surface move
+this time. `lib/` refreshed to the 6.2.22 snapshot. Prior:
+v1.2.0 darshana 0.7.0 (breaking upstream) + cycc
 6.1.26, shipped 2026-06-10. darshana's pre-freeze
 API-reshaping cut broke 4 symbols (`tty_cooked`,
 `tty_itoa`, `tty_clear_to_end`, `tty_apply_raw_flags`),
@@ -14,7 +25,7 @@ API-reshaping cut broke 4 symbols (`tty_cooked`,
 call-site repair was needed (verified: clean build +
 233/233 green on 0.7.0). cycc pin `6.1.24` → `6.1.26`,
 `lib/` refreshed. CLI contract unchanged; minor bump
-reflects the dep major-surface move. Prior: v1.1.4
+reflected the dep major-surface move. Prior: v1.1.4
 darshana `0.5.4` → `0.6.0` (test-only); v1.1.3 toolchain
 bump (cycc `6.0.0` → `6.1.24`, darshana `0.5.3` → `0.5.4`).
 Earlier: v1.1.2 hot-path optimizations 2026-05-23 (hybrid
@@ -27,7 +38,7 @@ darshini`. Non-breaking under the M10 freeze.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.1.26` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.2.22` (in `cyrius.cyml [package].cyrius`)
 
 ## Shape
 
@@ -86,6 +97,7 @@ M9+ onward fills:
 | v1.1.3: toolchain bump (cycc 6.1.24, darshana 0.5.4) | v1.1.3 | **shipped** (v1.1.3) |
 | v1.1.4: darshana dep bump (0.6.0, test-only upstream) | v1.1.4 | **shipped** (v1.1.4) |
 | v1.2.0: darshana 0.7.0 (breaking, no repair) + cycc 6.1.26 | v1.2.0 | **shipped** (v1.2.0) |
+| v1.2.1: cycc 6.2.22 + darshana 0.7.1 (toolchain-only) | v1.2.1 | **shipped** (v1.2.1) |
 
 ## Tests
 
@@ -108,7 +120,7 @@ Direct (declared in `cyrius.cyml`):
   chrono, assert, bench. `args` + `fs` added at M1 (argv access
   + getdents64-backed dir_list); `chrono` added at M2 for
   `epoch_to_date` + the 2-digit / 4-digit formatting helpers.
-- `[deps.darshana]` (git, tag 0.7.0) — TTY/ANSI/cursor primitives.
+- `[deps.darshana]` (git, tag 0.7.1) — TTY/ANSI/cursor primitives.
   First external dep; landed at M4 for the color escapes. All
   raw ANSI routes through darshana's `tty_sgr` / `tty_sgr_reset`
   per CLAUDE.md.

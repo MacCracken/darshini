@@ -4,6 +4,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.1] — v1.2.1: cycc 6.2.22 + darshana 0.7.1
+
+Toolchain bump. The installed cycc wrapper had moved to `6.2.22`
+while the manifest pin stayed at `6.1.26` (drift warning on every
+build); this catches the manifest back up. darshana is bumped
+`0.7.0` → `0.7.1`, itself a **toolchain-only** upstream release
+(no source / public-API change, module bodies byte-identical,
+regenerated only to stamp the `6.2.22` header) — so darshini's
+color path stays byte-identical and no call-site repair is needed.
+Patch bump: no darshana surface move this time (unlike 1.2.0), no
+darshini behavior change. The only functional source change is the
+lockstep `--version` string. Verified: clean build + 233/233
+assertions green.
+
+### Changed
+
+- `cyrius.cyml` pin bumped `6.1.26` → `6.2.22` (catches the
+  manifest up to the installed wrapper; clears the pin-drift
+  warning).
+- `[deps.darshana]` tag bumped `0.7.0` → `0.7.1` (toolchain-only
+  upstream; darshini's color path byte-identical).
+- `lib/` refreshed to the 6.2.22 snapshot.
+
 ## [1.2.0] — v1.2.0: darshana 0.7.0 (breaking upstream) + cycc 6.1.26
 
 Minor bump to absorb darshana's pre-freeze API-reshaping cut.

@@ -5,6 +5,24 @@
 
 ## Version
 
+**1.3.0** — agnos target support + cycc 6.4.24 +
+darshana 0.9.0, shipped 2026-07-08. darshini now builds
+`cyrius build --agnos` and **runs on AGNOS under mirshi** —
+full listing across every mode (plain / `-l` / `-F` / `-T`
+/ `--git` / `--mime`), all `#ifdef CYRIUS_TARGET_AGNOS`
+-gated so the Linux/macOS paths stay byte-identical
+(233/233 green). Ported the FS-ABI split behind the initial
+`SYS_GETCWD` break: getcwd-gated `--git`; explicit-length
+`stat`/`open` wrappers; a native `getdents`(#29)
+`AgnosDirent` enumerator (the stdlib `dir_list` is
+Linux-#217-only); `ioctl`/`TIOCGWINSZ` → 0 in `term_width`;
+`ENOENT`/`EACCES` defined for agnos. Added `darshini` to
+the agnosticos agnos-dev docker image (`DELTA[dev]`).
+Toolchain: pin `6.2.22` → `6.4.24` (`lib/` re-synced, 98
+files); darshana `0.7.1` → `0.9.0` (dep-bump-only —
+`tty_sgr` / `tty_sgr_reset` unchanged across 0.7→0.9).
+Minor bump: new platform, no CLI-contract or behavior
+change on existing targets. Prior:
 **1.2.1** — cycc 6.2.22 + darshana 0.7.1, shipped
 2026-06-18. Toolchain bump: the installed wrapper had
 moved to `6.2.22` while the manifest pin stayed `6.1.26`
@@ -38,7 +56,7 @@ darshini`. Non-breaking under the M10 freeze.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.22` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.4.24` (in `cyrius.cyml [package].cyrius`)
 
 ## Shape
 
@@ -98,6 +116,7 @@ M9+ onward fills:
 | v1.1.4: darshana dep bump (0.6.0, test-only upstream) | v1.1.4 | **shipped** (v1.1.4) |
 | v1.2.0: darshana 0.7.0 (breaking, no repair) + cycc 6.1.26 | v1.2.0 | **shipped** (v1.2.0) |
 | v1.2.1: cycc 6.2.22 + darshana 0.7.1 (toolchain-only) | v1.2.1 | **shipped** (v1.2.1) |
+| v1.3.0: agnos target support (FS-ABI port) + cycc 6.4.24 + darshana 0.9.0 | v1.3.0 | **shipped** (v1.3.0) |
 
 ## Tests
 
@@ -120,7 +139,7 @@ Direct (declared in `cyrius.cyml`):
   chrono, assert, bench. `args` + `fs` added at M1 (argv access
   + getdents64-backed dir_list); `chrono` added at M2 for
   `epoch_to_date` + the 2-digit / 4-digit formatting helpers.
-- `[deps.darshana]` (git, tag 0.7.1) — TTY/ANSI/cursor primitives.
+- `[deps.darshana]` (git, tag 0.9.0) — TTY/ANSI/cursor primitives.
   First external dep; landed at M4 for the color escapes. All
   raw ANSI routes through darshana's `tty_sgr` / `tty_sgr_reset`
   per CLAUDE.md.

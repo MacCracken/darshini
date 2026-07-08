@@ -4,6 +4,59 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-07-08: agnos target support + cycc 6.4.24 / darshana 0.9.0
+
+darshini now builds `cyrius build --agnos src/main.cyr` and **runs on
+AGNOS under mirshi** — full listing across every mode (plain /
+multi-column / `-l` / `-F` / `-T` / `--git` / `--mime`), not just a
+launch. The port is entirely `#ifdef CYRIUS_TARGET_AGNOS`-gated, so the
+Linux/macOS paths stay byte-identical (suite 233/233 unchanged). Ships
+in the agnosticos agnos-dev docker image (`DELTA[dev]`). Minor bump: new
+platform, zero CLI-contract or behavior change on existing targets.
+
+The agnos work was a cascade of low-level FS-ABI divergences behind the
+initial `SYS_GETCWD` build break — agnos has no ambient cwd, no
+`ioctl`/`TIOCGWINSZ`, no `lstat`, and a different `getdents` ABI.
+
+### Added
+
+- **agnos target support.** `cyrius build --agnos` produces a static
+  agnos ELF; verified end-to-end under mirshi (`--root`) across every
+  listing mode. Added `darshini` to `agnosticos/docker/build-dev.sh`
+  `DELTA[dev]`.
+- Portable FS wrappers in `src/walk.cyr` (`d_stat` / `d_open_ro` /
+  `d_lstat`) hiding the Linux-vs-agnos call-shape split: agnos
+  `stat`/`open` take an explicit path length, and agnos has no lstat
+  (#6 is `close`) so `d_lstat` falls back to `stat`. The `STAT_*` field
+  offsets are already per-target in the stdlib, so field reads are
+  untouched.
+- `_d_dir_list_agnos` — a native agnos `getdents`(#29) enumerator that
+  parses the packed `AgnosDirent` layout, since the stdlib `dir_list`
+  is Linux-`getdents64`(#217)-only. `list_dir` dispatches per target.
+
+### Changed
+
+- `cyrius.cyml` pin bumped `6.2.22` → `6.4.24`; `lib/` refreshed to the
+  6.4.24 snapshot (`cyrius lib sync --full`, 98 files).
+- darshana dep bumped `0.7.1` → `0.9.0` — dep-bump-only; darshini's
+  entire darshana surface is `tty_sgr` / `tty_sgr_reset`, both
+  unchanged across the 0.7→0.9 line (the 0.8/0.9 additions are agnos
+  TTY peers for full-screen TUI consumers darshini never calls).
+- `--version` string → `darshini 1.3.0`.
+
+### Fixed
+
+- `_git_make_absolute` (`--git`): the Linux `getcwd(2)` path is now
+  gated Linux-only. On agnos (no ambient cwd) an absolute listing path
+  works fully; a relative one gracefully omits the git column, matching
+  the existing out-of-repo behavior.
+- `term_width`: no agnos `ioctl`/`TIOCGWINSZ`, so it returns 0 (the
+  same pipe/non-TTY sentinel) → single-column, decoration-free output
+  instead of failing to build.
+- `ENOENT` / `EACCES` defined for the agnos build (they are Linux-enum
+  -only; agnos reports a flat `-1` on failure, so the fine-grained
+  error branches simply fall through to the generic message there).
+
 ## [1.2.1] — v1.2.1: cycc 6.2.22 + darshana 0.7.1
 
 Toolchain bump. The installed cycc wrapper had moved to `6.2.22`

@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "darshini — eza-equivalent pretty file listing (colors, icons, git-status, tree view, mime-type recognition). Sanskrit दर्शिनी: she who shows. Sibling-not-competitor to kriya's minimal ls."
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.2.22"
+cyrius = "6.4.24"
 
 [build]
 entry = "src/main.cyr"
@@ -16,19 +16,16 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "args", "fs"
 
 # darshana — TTY/ANSI/cursor primitives. Per CLAUDE.md's hard rule
 # (no raw ANSI inline), every color escape darshini emits routes
-# through darshana's tty_sgr / tty_sgr_reset. Pinned at 0.7.1 (a
-# toolchain-only release: no source / public-API change, module
-# bodies byte-identical to 0.7.0, regenerated only to stamp the
-# cycc 6.2.22 header). 0.7.0 had carried BREAKING changes — but
-# only to symbols darshini never calls: tty_cooked (now zero-arg),
-# tty_itoa→tty_dec_buf, tty_clear_to_end→tty_clear_to_eos,
-# tty_apply_raw_flags (privatized). darshini's entire darshana
-# surface is tty_sgr / tty_sgr_reset, both unchanged — so 0.7.1 is
-# a dep-bump-only upgrade for us. Roadmap M4 dep gate is "≥ 0.3.0";
+# through darshana's tty_sgr / tty_sgr_reset. Pinned at 0.9.0 (was
+# 0.7.1). darshini's entire darshana surface is tty_sgr /
+# tty_sgr_reset, both unchanged across the 0.7→0.9 line — the 0.8/0.9
+# additions (agnos TTY peers: signalfd/epoll/getdents for full-screen
+# TUI consumers) are ones darshini never calls, so this is a
+# dep-bump-only upgrade for us. Roadmap M4 dep gate is "≥ 0.3.0";
 # we're well past that.
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
-tag = "0.7.1"
+tag = "0.9.0"
 modules = ["dist/darshana.cyr"]
 
 # Future: possibly [deps.chakshu] later for AI-augmented mime-

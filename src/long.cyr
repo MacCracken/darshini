@@ -215,7 +215,7 @@ fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx, want_
         var fmt = mode & S_IFMT;
         if (fmt == S_IFLNK) {
             var probe[144];
-            var rc2 = sys_stat(path_cstr, &probe);
+            var rc2 = d_stat(path_cstr, &probe);
             if (rc2 < 0) { col_code = TTY_FG_RED; }
             else { col_code = TTY_FG_CYAN; }
         } else {

@@ -127,7 +127,7 @@ fn _tree_decor(stat_buf, full_path_cstr, name_str,
     if (want_color == 1) {
         if (fmt == S_IFLNK) {
             var probe[144];
-            var rc = sys_stat(full_path_cstr, &probe);
+            var rc = d_stat(full_path_cstr, &probe);
             if (rc < 0) { col = TTY_FG_RED; }
             else        { col = TTY_FG_CYAN; }
         } else {

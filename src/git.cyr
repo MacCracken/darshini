@@ -54,6 +54,16 @@ fn _be_u16(buf, off): i64 {
 # repo-root walk-up and the listing-rel computation).
 fn _git_make_absolute(p): i64 {
     if (load8(p) == 47) { return p; }
+#ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no getcwd (no per-process cwd in the userland ABI —
+    # "CWD is userland-owned, absolute paths"). A relative listing
+    # path therefore can't be anchored to a repo root, so `--git` is
+    # only available when an absolute path is passed. Returning `p`
+    # unchanged makes _git_find_root's walk-up bail (no absolute
+    # anchor) → git_open returns 0 → the column silently doesn't
+    # appear, exactly as the M7 out-of-repo acceptance criterion.
+    return p;
+#else
     var cwd_buf = alloc(4096);
     var n = syscall(SYS_GETCWD, cwd_buf, 4096);
     if (n <= 0) { return p; }
@@ -65,6 +75,7 @@ fn _git_make_absolute(p): i64 {
     memcpy(out + cwd_len + 1, p, plen);
     store8(out + cwd_len + 1 + plen, 0);
     return out;
+#endif
 }
 
 # Walk up from `dir_abs` (must be an absolute cstr), checking
@@ -97,7 +108,7 @@ fn _git_find_root(dir_abs): i64 {
         store8(probe + pos + 3, 116);
         store8(probe + pos + 4, 0);
         var stat_buf[144];
-        var rc = sys_stat(probe, &stat_buf);
+        var rc = d_stat(probe, &stat_buf);
         if (rc >= 0) {
             var mode = load32(&stat_buf + STAT_MODE);
             if ((mode & S_IFMT) == S_IFDIR) { return buf; }
@@ -322,7 +333,7 @@ fn _ctx_tracked_map(c): i64 { return load64(c + 40); }
 # (buf_ptr, len) packed: a 16-byte struct {ptr@0, len@8}. ptr=0
 # on failure.
 fn _git_slurp(path_cstr, cap): i64 {
-    var fd = sys_open(path_cstr, O_RDONLY, 0);
+    var fd = d_open_ro(path_cstr);
     var r = alloc(16);
     store64(r, 0);
     store64(r + 8, 0);

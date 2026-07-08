@@ -21,12 +21,20 @@ var TIOCGWINSZ_LINUX = 0x5413;
 # var buf[N] is N **bytes** per the project's confirmed gotcha,
 # so `var ws[8]` is exactly one winsize.
 fn term_width(): i64 {
+#ifdef CYRIUS_TARGET_AGNOS
+    # agnos's frozen syscall floor has no ioctl / TIOCGWINSZ — there's
+    # no way to query the terminal size. Return 0, the same sentinel
+    # term_width() yields on a pipe / non-TTY, so the caller falls back
+    # to single-column, decoration-free output (pipe-safe path).
+    return 0;
+#else
     var ws[8];
     var rc = syscall(SYS_IOCTL, STDOUT_FD, TIOCGWINSZ_LINUX, &ws);
     if (rc < 0) { return 0; }
     var cols = load16(&ws + 2);
     if (cols == 0) { return 80; }
     return cols;
+#endif
 }
 
 # Compute the total horizontal width that would be consumed by

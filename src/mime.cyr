@@ -192,7 +192,7 @@ fn _mime_for_magic_bytes(buf, len): i64 {
 # Open + read up to 16 bytes + dispatch via magic-byte table.
 # Closes the fd. Returns mime cstr or 0 (no magic match).
 fn _mime_probe_magic(path_cstr): i64 {
-    var fd = sys_open(path_cstr, O_RDONLY, 0);
+    var fd = d_open_ro(path_cstr);
     if (fd < 0) { return 0; }
     var buf[16];
     var n = sys_read(fd, &buf, 16);

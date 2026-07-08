@@ -1,3 +1,4 @@
+commit	c85f7885afee4444740af0b594457e90d376db62	darshana	https://github.com/MacCracken/darshana.git	0.7.1
 d9f3b17ddbbe1bba48917c3a679807b01c39c4a1ce776efdbdfbb7a1680e86e4  lib/tagged.cyr
 f8f46d0e84ed36263cc10baedcf3ae6c072fb991032a50b1532f45e70d75ace8  lib/toml.cyr
 d499d5f4e7a99b752c5ea60d220c8c436f0c84c4468c5825feec1cd0c23a0cd9  lib/net.cyr

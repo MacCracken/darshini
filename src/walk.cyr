@@ -115,7 +115,26 @@ fn d_lstat(cpath, buf): i64 {
 fn classify_path(cpath): i64 {
     var buf[144];
     var rc = d_stat(cpath, &buf);
-    if (rc < 0) { return rc; }
+    # v1.3.2 (P(-1)): d_stat FOLLOWS symlinks, so a dangling link
+    # named on the command line classified as -ENOENT and run()
+    # aborted the whole invocation with "no such file or directory"
+    # and exit 1 — while the very same link listed as a MEMBER of its
+    # parent directory rendered fine as `lrwxrwxrwx ... broken`.
+    # `ls -l broken` shows the link and exits 0; darshini refused to.
+    # In run_all a single dangling link among several arguments also
+    # forced a non-zero exit for every other path.
+    #
+    # Retry with lstat: if the link itself exists, treat it as a
+    # non-directory (0) and let the caller render it — render_long_one
+    # already lstats, so `-l` produces the correct `l...` row. Only
+    # paths that currently ERROR change behavior; a live symlink still
+    # stats successfully on the first call and keeps following to its
+    # target, so symlink-to-directory arguments still list contents.
+    if (rc < 0) {
+        var lbuf[144];
+        if (d_lstat(cpath, &lbuf) >= 0) { return 0; }
+        return rc;
+    }
     var mode = load32(&buf + STAT_MODE);
     var fmt = mode & S_IFMT;
     if (fmt == S_IFDIR) { return 1; }

@@ -5,6 +5,50 @@
 
 ## Version
 
+**1.3.2** — P(-1) audit / refactor / hardening / security
+sweep, shipped 2026-08-23. Six independent audit lenses over
+`src/`, `tests/`, `docs/` and CI, every material finding put
+through an adversarial refutation pass: **75 raised, 24
+refutation-tested, 5 killed, 19 confirmed**. Full report in
+[`../audit/2026-08-23-audit.md`](../audit/2026-08-23-audit.md).
+
+v1.3.1 shipped **one memory-safety defect and one
+terminal-injection vulnerability**, both reachable from
+ordinary use, plus four wrong-answer bugs. All fixed:
+
+- `_path_join_into` wrote past its fixed 4096-byte buffer
+  with no capacity check — measured 76 bytes past the
+  allocation, argv-reachable, silent because the bump
+  allocator absorbed it. Present since v1.1.2. Found by
+  four of the six lenses independently.
+- Entry names reached the terminal raw, so a crafted
+  filename executed control sequences — including
+  cursor-up + erase-line to **hide a sibling file from the
+  listing**. Now `?` per C0/DEL/UTF-8-C1 byte on a TTY
+  (`ls -q` shape); raw on a pipe so scripts still get an
+  openable name.
+- `--git` reported every tracked file as untracked whenever
+  the path was `.`, ended in `/`, or held a `/./` — i.e.
+  bare `darshini --git` in any subdirectory, the commonest
+  form of the flag.
+- `-T --git` mislabelled everything below depth 1;
+  `-T -l` printed *fabricated* perms/size/mtime for
+  unstat-able entries; `format_mtime` emitted 0xD4 into the
+  terminal for pre-1970 mtimes; a CRLF `.gitignore` matched
+  nothing at all; an oversized `.git/index` was silently
+  truncated; a dangling symlink as an argument aborted the
+  whole run.
+
+Every fix is byte-for-byte output-preserving on well-formed
+input — the only output that changed is output that was
+already wrong. Verified by 31 A/B comparisons against a
+v1.3.1 reference binary (cycc 6.4.24) across TTY, pipe and
+both cross-targets: zero differences. Suite **233 → 272**
+assertions. Docs: `SECURITY.md` had claimed a sanitization
+control that did not exist; `docs/adr/README.md` had said
+"No ADRs yet" since v0.1.0 with four ADRs beside it;
+`docs/architecture/` was empty and now carries three notes.
+Patch bump. Prior:
 **1.3.1** — cycc 6.5.35 + darshana 1.0.0, shipped
 2026-08-23. Toolchain + dep bump, no darshini behavior
 change on any target. The manifest pin had drifted a full
@@ -144,6 +188,7 @@ M9+ onward fills:
 | v1.2.1: cycc 6.2.22 + darshana 0.7.1 (toolchain-only) | v1.2.1 | **shipped** (v1.2.1) |
 | v1.3.0: agnos target support (FS-ABI port) + cycc 6.4.24 + darshana 0.9.0 | v1.3.0 | **shipped** (v1.3.0) |
 | v1.3.1: cycc 6.5.35 + darshana 1.0.0 (upstream API freeze) | v1.3.1 | **shipped** (v1.3.1) |
+| v1.3.2: P(-1) audit sweep — OOB write + terminal-injection + 6 wrong-answer fixes | v1.3.2 | **shipped** (v1.3.2) |
 
 ## Tests
 
@@ -212,6 +257,35 @@ available, neither is a defect:
 Both are non-breaking additions permitted under the M10
 freeze, and both were left out of the v1.3.1 patch cut as
 source changes beyond a dep bump.
+
+**Deferred out of the v1.3.2 P(-1) cut** (confirmed
+findings, accepted with rationale in the audit's "Deferred"
+table — none are regressions, all tracked for 1.4.0):
+
+- **`sys_write` returns are never checked** — 56 sites. A
+  full filesystem yields exit 0 with truncated output; a
+  closed stdout the same. Wants a looping `d_write` wrapper
+  plus a sticky failure flag threaded to `main()` — every
+  output path, which does not belong in a patch cut
+  alongside seven other repairs.
+- **`-l` stats every entry twice** — `compute_decor` and
+  `render_long` each `lstat` the whole listing: 2 syscalls
+  per entry where 1 suffices. Pure perf, no wrong output.
+  Needs `compute_decor` to widen its returned struct and
+  hand its stat buffers back.
+- **`tests/darshini.fcyr` is a stub** — `cyrius fuzz`
+  passes while executing zero darshini code, so every
+  attacker-facing byte path (index parser, gitignore
+  matcher, magic bytes, filenames) is unfuzzed. A 512-line
+  replacement was drafted during the sweep; adopting it
+  wants its own review pass.
+- **`-T --git <dir>` root line** shows `?` for the tree root
+  itself — the root's rel should be the listing prefix
+  rather than prefix + name. Pre-existing, unchanged by the
+  v1.3.2 tree fix, cosmetic.
+- The agnos scratch-alloc asymmetry and the chrono
+  `DateTime` raw-offset dependency, both already described
+  under "Known gotchas" below.
 
 Non-roadmap items remain non-breaking additions per the M10
 freeze contract.

@@ -318,6 +318,28 @@ fn format_size_human(size, buf): i64 {
 # crucially makes tests deterministic — the M2 acceptance check
 # fixtures have known epoch values.
 fn format_mtime(epoch, buf): i64 {
+    # v1.3.2 (P(-1)): pre-1970 mtimes drive `epoch_to_date` into
+    # negative month/day/hour/minute components. `_chrono_w2` then
+    # writes `48 + n` for a negative n, emitting bytes BELOW '0' —
+    # including non-ASCII. Measured on a 1960 mtime, the column read
+    # `1970-01-\xD4+ /.:00`: 0xD4 straight into the user's terminal,
+    # and the field contracted below its fixed 16 bytes, which
+    # misaligns every following column in the `-l` row.
+    #
+    # Reachable from restored backups, extracted tarballs that
+    # preserve timestamps, and `touch -d`. Degrade to the same
+    # placeholder long.cyr already emits for a failed stat, so the
+    # field keeps its exact 16-byte width. Epochs >= 0 are untouched
+    # and byte-identical.
+    if (epoch < 0) {
+        store8(buf + 0, 63);  store8(buf + 1, 63);  store8(buf + 2, 63);
+        store8(buf + 3, 63);  store8(buf + 4, 45);  store8(buf + 5, 63);
+        store8(buf + 6, 63);  store8(buf + 7, 45);  store8(buf + 8, 63);
+        store8(buf + 9, 63);  store8(buf + 10, 32); store8(buf + 11, 63);
+        store8(buf + 12, 63); store8(buf + 13, 58); store8(buf + 14, 63);
+        store8(buf + 15, 63);
+        return 16;
+    }
     var d = epoch_to_date(epoch);
     _chrono_w4(buf, 0, load64(d));            # year
     store8(buf + 4, 45);                       # '-'

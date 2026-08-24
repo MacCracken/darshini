@@ -4,6 +4,144 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.2] — v1.3.2: P(-1) audit / hardening / security sweep
+
+A full P(-1) sweep — six independent audit lenses over `src/`, `tests/`,
+`docs/` and CI, every material finding put through an adversarial refutation
+pass. **75 raised, 24 refutation-tested, 5 killed, 19 confirmed.** Full report:
+[`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md).
+
+v1.3.1 shipped one memory-safety defect and one terminal-injection
+vulnerability, both reachable from ordinary use, plus four wrong-answer bugs in
+`--git` and `-T`. All are fixed here.
+
+**Every fix is byte-for-byte output-preserving on well-formed input** — the
+only output that changes is output that was already wrong. Verified by 31 A/B
+comparisons against a v1.3.1 reference binary (built with cycc 6.4.24) across
+TTY, pipe, and both cross-targets: zero differences. Suite 233 → **272**
+assertions, lint clean, `vet` 9/0/0, DCE parity byte-identical, agnos re-run
+under `mirshi`.
+
+### Security
+
+- **Terminal escape injection via filenames.** Entry names went to the terminal
+  byte-for-byte, so a crafted filename executed terminal control sequences.
+  Demonstrated: a name clears the screen, sets the window title, overwrites its
+  own line, resets the SGR state darshini set — and, using cursor-up plus
+  erase-line, **erases the preceding entry**, letting a hostile archive hide a
+  sibling file from the listing. `ls`, `eza` and BSD `ls` all sanitize here.
+
+  On a TTY, `?` now replaces each C0 byte (0x00–0x1f), DEL, and the UTF-8
+  encoding of the C1 controls (0xC2 0x80–0x9F) — the shape `ls -q` uses. One
+  `?` **per byte**: every width calculation measures `str_len(name)`, so a
+  length-preserving substitution keeps that arithmetic correct untouched, and
+  incidentally fixes the alignment of such rows. Bytes ≥ 0x80 are left alone,
+  so UTF-8 names render intact — which depends on `load8` being unsigned,
+  established by probe and now guarded by seven assertions that fail if it
+  changes.
+
+  **On a pipe the true bytes are still written**, matching
+  `ls --quoting-style=literal`, so `darshini | while read -r f` yields an
+  openable name. Gated on `term_width() > 0`, deliberately not on `want_color`:
+  `--no-color` disables decoration, not the terminal.
+- **Heap out-of-bounds write in `_path_join_into`** (`src/color.cyr`). It
+  `memcpy`'d `dir + '/' + name + NUL` into a fixed 4096-byte buffer with no
+  capacity check at all; a listing path near `PATH_MAX` holding a `NAME_MAX`
+  entry needs 4353 bytes. Measured **76 bytes past the end** of the allocation
+  on a 3915-byte directory holding a 255-byte name — reachable from `argv`, and
+  silent, because the bump allocator's slack absorbs it. Present since v1.1.2.
+  Now bounded before the first write; an overlong join renders the same `?`
+  row it always did, because the syscall would fail `ENAMETOOLONG` anyway.
+  Found independently by four of the six lenses.
+
+### Fixed
+
+- **`--git` reported every tracked file as untracked** whenever the listing path
+  was `.`, had a trailing `/`, or contained a `/./` — which includes bare
+  `darshini --git` inside any repository subdirectory, the most common form of
+  the flag. The un-normalized path defeated the repo-root walk-up, so entries
+  were looked up as `src/./a.txt` against an index keyed on `src/a.txt`. It
+  worked at the repo root only by accident. `_git_normalize_abs` now collapses
+  `//`, drops `.` components and strips trailing `/`; verified across 11
+  invocation forms against `git ls-files`.
+
+  `..` is deliberately **not** resolved lexically — the walk-up probes with
+  `stat(2)`, so the kernel resolves it symlink-aware. Resolving it here would
+  bind `/a/link/..` to the wrong repository, breaking a case that works today.
+- **`-T --git` mislabelled every tracked file below depth 1.** The git context's
+  prefix is fixed at the tree root, but the recursion passed bare basenames, so
+  `src/deep/c.txt` was looked up as `c.txt`. A `rel_prefix` is now threaded
+  through the recursion. Depth 1 is byte-identical; ignore-pattern matching
+  still uses the basename, so those semantics are unchanged.
+- **`-T -l` printed fabricated permissions, size and mtime** for entries whose
+  `lstat` failed — the long-format prefix was emitted *before* the caller's
+  `rc >= 0` guard, so it read a never-written buffer and rendered a confident
+  `---------- 0 1970-01-01 00:00`. Reproduced on a readable-but-not-searchable
+  directory, where flat `-l` correctly showed `?` placeholders for the same
+  entries. It now matches flat `-l`, sharing its mtime placeholder rather than
+  duplicating the byte pattern.
+- **`format_mtime` emitted non-ASCII bytes for pre-1970 timestamps.** Negative
+  epochs drive `epoch_to_date` negative and `_chrono_w2` writes `48 + n` for a
+  negative `n`; a 1960 mtime rendered as `1970-01-\xD4+ /.:00`, putting 0xD4
+  into the terminal and contracting the fixed 16-byte field. Reachable from
+  restored backups and extracted tarballs. Now degrades to the standard
+  placeholder at exact width; epochs ≥ 0 are byte-identical.
+- **A CRLF-authored `.gitignore` matched nothing** — no ignore rule fired at
+  all. The trailing CR was trimmed and then silently re-admitted by a restore
+  that used the line end (still pointing at the `\n`), so `build/\r` was not a
+  directory pattern and `*.swp\r` matched nothing. Verified against
+  `git status --ignored`; LF inputs byte-identical.
+- **An oversized `.git/index` was silently truncated**, reporting every entry
+  past the 4 MB cutoff as untracked. `_git_slurp` also assumed a single
+  `sys_read` fills its buffer. It now sizes from `stat(2)` and reads to EOF,
+  with the cap as a sanity ceiling (256 MB): a file beyond it yields no git
+  context — the column silently doesn't appear — rather than appearing and
+  lying. Side benefit: a FIFO stats at size 0 and is refused, so `--git` no
+  longer blocks forever on a planted `.git/index` FIFO. (Real `git` does hang
+  on that, so this is an improvement over the reference, not a parity fix.)
+- **A dangling symlink named as an argument aborted the run.** `classify_path`
+  used the follow-stat, so `darshini broken` exited 1 with "no such file or
+  directory" — while the same link listed as a *member* of its directory
+  rendered fine, and `ls -l broken` exits 0. In a multi-path invocation one
+  dangling link forced a non-zero exit for every other path. Now retries with
+  `lstat`; symlink-to-directory arguments still follow to their target, and a
+  genuinely missing path still exits 1.
+
+### Changed
+
+- **`SECURITY.md` documented a control that did not exist** — it claimed
+  darshini sanitized control characters in entry names, and that it refused to
+  parse oversized `.git/` files. Neither was true. Both are true as of this
+  release, and the section now states exactly what happens, including the
+  deliberate TTY/pipe asymmetry.
+- **`docs/adr/README.md`** read "_No ADRs yet_" from v0.1.0 through v1.3.1 while
+  all four ADRs sat beside it. Now indexed with each decision and status.
+- **`docs/architecture/` is populated** — the Items section had been empty since
+  v0.1.0. Three notes, all for invariants that had already cost real bugs:
+  `var buf[N]` is bytes not slots (and what the recurring 144 / 4096 literals
+  are); the four-way agnos FS-ABI split, including why agnos `sys_readdir` must
+  **not** replace the `getdents` enumerator (its 64-byte records cap filenames
+  at 63); and the bump-allocator lifetime model.
+- Removed a dead line-scan in `_git_parse_ignore` — it computed an end-of-line
+  offset nothing ever read, costing a second full scan per line.
+
+### Tests
+
+- **233 → 272 assertions.** New coverage for the sanitizer predicate across the
+  C0 / DEL / printable / high-byte boundaries (including the `load8`-signedness
+  regression guard), `_git_normalize_abs` across nine path shapes plus the
+  `..`-is-preserved contract, CRLF vs LF `.gitignore` parsing, and negative-epoch
+  `format_mtime` with the epoch-0 boundary asserted.
+
+### Known / deferred
+
+Recorded with rationale in the audit's "Deferred" table: `sys_write` return
+values are still unchecked (56 sites — a full filesystem yields exit 0 with
+truncated output); `-l` still stats every entry twice; `tests/darshini.fcyr` is
+still a stub, so `cyrius fuzz` passes while executing zero darshini code; the
+agnos directory enumerator still bump-allocates its scratch. None are
+regressions; all are tracked for 1.4.0.
+
 ## [1.3.1] — v1.3.1: cycc 6.5.35 + darshana 1.0.0
 
 Toolchain + dependency bump. The manifest pin had drifted a full

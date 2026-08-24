@@ -256,6 +256,20 @@ fn main(): i64 {
     # Leap-year boundary: 2000-02-29 00:00:00 UTC = 951782400
     format_mtime(951782400, mb);
     assert_eq(buf_eq_cstr(mb, 16, "2000-02-29 00:00"), 1, "leap day 2000 -> 2000-02-29 00:00");
+    # v1.3.2 (P(-1)): pre-1970 epochs. Before the guard these drove
+    # epoch_to_date negative and _chrono_w2 wrote `48 + n` for a
+    # negative n — emitting bytes below '0', including non-ASCII
+    # (0xD4 observed), and contracting the fixed 16-byte field.
+    # Reachable via `touch -d`, restored backups, extracted tarballs.
+    format_mtime(0 - 1, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "epoch -1 -> placeholder, not garbage");
+    format_mtime(0 - 3600, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "1969-12-31 23:00 -> placeholder");
+    format_mtime(0 - 301233600, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "1960 mtime -> placeholder (was 0xD4 leak)");
+    # The boundary itself must still format normally.
+    format_mtime(0, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "1970-01-01 00:00"), 1, "epoch 0 still formats (boundary)");
 
     # ============================================================
     # M3 — multi-column auto-layout
@@ -359,6 +373,40 @@ fn main(): i64 {
     # ============================================================
     # M4 — color picker (mode bits -> ADR-0001 SGR code)
     # ============================================================
+
+    # ============================================================
+    # v1.3.2 — control-character sanitization (P(-1) security sweep)
+    # ============================================================
+
+    test_group("_is_ctrl_byte");
+    # C0 controls — every one must be caught. These are the bytes a
+    # hostile filename uses to drive the terminal.
+    assert_eq(_is_ctrl_byte(0x00), 1, "NUL -> ctrl");
+    assert_eq(_is_ctrl_byte(0x07), 1, "BEL -> ctrl");
+    assert_eq(_is_ctrl_byte(0x08), 1, "BS -> ctrl");
+    assert_eq(_is_ctrl_byte(0x09), 1, "TAB -> ctrl");
+    assert_eq(_is_ctrl_byte(0x0A), 1, "LF -> ctrl");
+    assert_eq(_is_ctrl_byte(0x0D), 1, "CR -> ctrl (line-overwrite vector)");
+    assert_eq(_is_ctrl_byte(0x1B), 1, "ESC -> ctrl (CSI/OSC introducer)");
+    assert_eq(_is_ctrl_byte(0x1F), 1, "0x1f -> ctrl (top of C0)");
+    assert_eq(_is_ctrl_byte(0x7F), 1, "DEL -> ctrl");
+    # Printable ASCII — must pass through untouched.
+    assert_eq(_is_ctrl_byte(0x20), 0, "space -> safe (bottom of printable)");
+    assert_eq(_is_ctrl_byte(0x41), 0, "'A' -> safe");
+    assert_eq(_is_ctrl_byte(0x7A), 0, "'z' -> safe");
+    assert_eq(_is_ctrl_byte(0x7E), 0, "'~' -> safe (top of printable)");
+    # High bytes — MUST be safe. In UTF-8 these are only ever lead or
+    # continuation bytes; sanitizing them would corrupt CJK / accented
+    # / emoji filenames. This group is the regression guard for the
+    # load8-signedness assumption: if load8 ever sign-extends, `b < 32`
+    # aliases these and every one of them fails.
+    assert_eq(_is_ctrl_byte(0x80), 0, "0x80 -> safe (UTF-8 continuation)");
+    assert_eq(_is_ctrl_byte(0x89), 0, "0x89 -> safe (also PNG magic byte)");
+    assert_eq(_is_ctrl_byte(0xBF), 0, "0xbf -> safe (UTF-8 continuation)");
+    assert_eq(_is_ctrl_byte(0xC3), 0, "0xc3 -> safe (2-byte lead, e.g. e-acute)");
+    assert_eq(_is_ctrl_byte(0xE4), 0, "0xe4 -> safe (3-byte lead, CJK)");
+    assert_eq(_is_ctrl_byte(0xF0), 0, "0xf0 -> safe (4-byte lead, emoji)");
+    assert_eq(_is_ctrl_byte(0xFF), 0, "0xff -> safe (top byte)");
 
     test_group("color_for_mode");
     # Directory (any perms) -> BLUE
@@ -630,6 +678,41 @@ fn main(): i64 {
     assert_eq(_git_match_one(pat_build, make_str("builder"), 1), 0, "build/ doesn't match dir 'builder'");
     # Empty pattern → no match
     assert_eq(_git_match_one(make_str(""), make_str("foo"), 0), 0, "empty pattern -> 0");
+
+    test_group("_git_normalize_abs");
+    # v1.3.2 (P(-1)): bare `darshini --git` in a repo subdirectory
+    # supplies "." as the path, so the listing arrived as "/r/src/."
+    # and every tracked file rendered '?' (untracked).
+    assert_eq(buf_eq_cstr(_git_normalize_abs("/r/src/."), 6, "/r/src"), 1, "trailing /. dropped");
+    assert_eq(buf_eq_cstr(_git_normalize_abs("/r/src/"), 6, "/r/src"), 1, "trailing / stripped");
+    assert_eq(buf_eq_cstr(_git_normalize_abs("/r//src"), 6, "/r/src"), 1, "// collapsed");
+    assert_eq(buf_eq_cstr(_git_normalize_abs("/r/./src"), 6, "/r/src"), 1, "interior /./ dropped");
+    assert_eq(buf_eq_cstr(_git_normalize_abs("/r/src"), 6, "/r/src"), 1, "already-clean path unchanged");
+    assert_eq(buf_eq_cstr(_git_normalize_abs("/"), 1, "/"), 1, "root stays root");
+    assert_eq(buf_eq_cstr(_git_normalize_abs("/."), 1, "/"), 1, "/. -> root");
+    assert_eq(buf_eq_cstr(_git_normalize_abs("///"), 1, "/"), 1, "/// -> root");
+    # `..` is deliberately NOT resolved — the repo-root walk-up probes
+    # with stat(2), so the kernel resolves it symlink-aware. Resolving
+    # it lexically would bind /a/link/.. to the wrong repo.
+    assert_eq(buf_eq_cstr(_git_normalize_abs("/r/src/.."), 9, "/r/src/.."), 1, ".. left for the kernel");
+
+    test_group("_git_parse_ignore (CRLF)");
+    # v1.3.2 (P(-1)): the CR trim was undone by a restore that used
+    # `line_end` (still pointing at the '\n'). Every pattern in a
+    # CRLF-authored .gitignore kept a trailing 0x0D, so none matched.
+    var crlf_pats = vec_new();
+    var crlf_src = "*.swp\r\nbuild/\r\n";
+    _git_parse_ignore(crlf_src, strlen(crlf_src), crlf_pats);
+    assert_eq(vec_len(crlf_pats), 2, "CRLF: two patterns parsed");
+    assert_eq(_git_match_one(vec_get(crlf_pats, 0), make_str("foo.swp"), 0), 1, "CRLF *.swp matches foo.swp");
+    assert_eq(_git_match_one(vec_get(crlf_pats, 1), make_str("build"), 1), 1, "CRLF build/ matches dir build");
+    # LF must be completely unaffected.
+    var lf_pats = vec_new();
+    var lf_src = "*.swp\nbuild/\n";
+    _git_parse_ignore(lf_src, strlen(lf_src), lf_pats);
+    assert_eq(vec_len(lf_pats), 2, "LF: two patterns parsed");
+    assert_eq(_git_match_one(vec_get(lf_pats, 0), make_str("foo.swp"), 0), 1, "LF *.swp still matches");
+    assert_eq(_git_match_one(vec_get(lf_pats, 1), make_str("build"), 1), 1, "LF build/ still matches");
 
     test_group("_git_listing_rel");
     # Equal abs paths → empty rel

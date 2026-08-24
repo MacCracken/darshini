@@ -63,15 +63,36 @@ var PATH_BUF_SIZE = 4096;
 fn _path_join_into(buf, dir_str, name_str): i64 {
     var dlen = str_len(dir_str);
     var dd = str_data(dir_str);
-    memcpy(buf, dd, dlen);
-    var pos = dlen;
-    if (dlen > 0) {
-        if (load8(dd + dlen - 1) != 47) {
-            store8(buf + pos, 47);
-            pos = pos + 1;
-        }
-    }
     var nlen = str_len(name_str);
+    # Separator only when dir is non-empty and doesn't already end
+    # in '/'. Computed before the copy so the bound below is exact.
+    var sep = 0;
+    if (dlen > 0) {
+        if (load8(dd + dlen - 1) != 47) { sep = 1; }
+    }
+    # v1.3.2 (P(-1)): bound BEFORE the first write. Through v1.3.1
+    # this fn memcpy'd dir + '/' + name + NUL into `buf` with no
+    # capacity check at all, while its only caller hands it a fixed
+    # alloc(PATH_BUF_SIZE). A listing path near PATH_MAX holding a
+    # NAME_MAX entry needs 4096 + 1 + 255 + 1 = 4353 bytes, so up to
+    # 257 bytes landed in the next bump allocation. Measured on a
+    # 3915-byte directory holding a 255-byte name: 76 bytes past the
+    # end, argv-reachable, no crash (the bump allocator's slack hides
+    # it) — which is exactly why it survived to v1.3.1.
+    #
+    # Refusing yields an empty cstr and returns 0. The caller's lstat
+    # then fails and the entry renders with `?` placeholders — the
+    # SAME row the unbounded code produced, because a path that long
+    # fails the syscall with ENAMETOOLONG anyway. So this is
+    # output-preserving on every input: it removes the heap write,
+    # not a rendered byte.
+    if (dlen + sep + nlen + 1 > PATH_BUF_SIZE) {
+        store8(buf, 0);
+        return 0;
+    }
+    memcpy(buf, dd, dlen);
+    if (sep == 1) { store8(buf + dlen, 47); }
+    var pos = dlen + sep;
     memcpy(buf + pos, str_data(name_str), nlen);
     store8(buf + pos + nlen, 0);
     return buf;
@@ -166,6 +187,101 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, w
 #
 # All four pad params (color is implicit, others explicit) are
 # 0 when the corresponding decoration is globally disabled.
+# v1.3.2 (P(-1) security sweep): control-character sanitization on
+# TTY output.
+#
+# A filename is attacker-controlled input — an extracted tarball, a
+# cloned repo, a shared downloads dir. Written raw to a terminal, a
+# name containing C0 controls executes them. Demonstrated against
+# v1.3.1: ESC + "[2J" clears the screen, ESC + "]0;...BEL" retitles
+# the window, CR overwrites the line, and ESC "[1A" ESC "[2K" erases
+# the PRECEDING entry — so a hostile archive can hide a sibling file
+# from the listing entirely. A bare ESC + "[0m" resets the SGR state
+# (escape bytes are spelled out here rather than written literally:
+# CI greps src/ for inline ANSI literals, and rightly so)
+# darshini itself set, corrupting every later entry's color.
+# `ls`, `eza` and BSD `ls` all sanitize here; darshini did not.
+#
+# Substitution is `?` per offending BYTE — the shape `ls -q` uses,
+# chosen because it is exactly length-preserving. Every width
+# calculation in the codebase (`_columns_total_width`, `pick_cols`,
+# `_columns_emit`'s padding, long.cyr's alignment pass) measures
+# `str_len(name)`, so byte-for-byte substitution keeps all of that
+# arithmetic correct with no changes anywhere else. It also FIXES
+# alignment for such names, which previously counted escape bytes as
+# display columns.
+#
+# Replaced: C0 (0x00-0x1f), DEL (0x7f), and the UTF-8 encoding of the
+# C1 controls (0xC2 0x80..0x9F) — a terminal decoding UTF-8 acts on
+# those as real C1, which makes U+009B a CSI introducer. The C1 pair
+# becomes two `?`, one per byte, preserving the length invariant.
+#
+# NOT replaced: any other byte >= 0x80. In UTF-8 those are only ever
+# multibyte lead or continuation bytes, so touching them would corrupt
+# CJK, accented and emoji filenames. This relies on `load8` being
+# UNSIGNED — verified by probe on cycc 6.5.35, and guarded by the
+# `_is_ctrl_byte` high-byte assertions in tests/darshini.tcyr, which
+# all fail if that ever changes.
+#
+# TTY-only, matching `ls`: on a pipe the true bytes are written, so
+# `darshini | while read -r f` still yields a name that opens. Set
+# once per run from main.cyr on the same `term_width() > 0` signal
+# that already gates color and icons.
+var _sanitize_names = 0;
+
+fn set_sanitize_names(v): i64 {
+    _sanitize_names = v;
+    return 0;
+}
+
+# 1 if byte `b` must not reach a terminal verbatim.
+fn _is_ctrl_byte(b): i64 {
+    if (b < 32) { return 1; }
+    if (b == 127) { return 1; }
+    return 0;
+}
+
+# Write `n` bytes at `d` to stdout, substituting `?` per byte for
+# control sequences when sanitization is on. Safe runs are emitted
+# whole, so a clean name still costs exactly one `sys_write` — the
+# same syscall count the pre-v1.3.2 path had.
+fn _write_name_bytes(d, n): i64 {
+    if (_sanitize_names == 0) {
+        sys_write(STDOUT_FD, d, n);
+        return 0;
+    }
+    var start = 0;
+    var i = 0;
+    while (i < n) {
+        var bad = 0;
+        var span = 1;
+        var b = load8(d + i);
+        if (_is_ctrl_byte(b) == 1) {
+            bad = 1;
+        } else {
+            if (b == 0xC2) {
+                if (i + 1 < n) {
+                    var b2 = load8(d + i + 1);
+                    if (b2 >= 0x80) {
+                        if (b2 <= 0x9F) { bad = 1; span = 2; }
+                    }
+                }
+            }
+        }
+        if (bad == 1) {
+            if (i > start) { sys_write(STDOUT_FD, d + start, i - start); }
+            if (span == 2) { sys_write(STDOUT_FD, "??", 2); }
+            else { sys_write(STDOUT_FD, "?", 1); }
+            i = i + span;
+            start = i;
+        } else {
+            i = i + 1;
+        }
+    }
+    if (n > start) { sys_write(STDOUT_FD, d + start, n - start); }
+    return 0;
+}
+
 fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad, classify_char, classify_pad): i64 {
     if (color != 0) { tty_sgr(color); }
     if (git_pad > 0) {
@@ -184,7 +300,7 @@ fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad, classify_char,
     } else { if (icon_pad > 0) {
         sys_write(STDOUT_FD, "  ", 2);
     } }
-    sys_write(STDOUT_FD, str_data(name), str_len(name));
+    _write_name_bytes(str_data(name), str_len(name));
     # v1.1 -F classify indicator: trailing 1-char suffix (or
     # space if `-F` is on but the entry's mode has no indicator —
     # keeps column alignment).

@@ -65,6 +65,36 @@ Clean build on all three targets, `cyrius lint` free of non-cosmetic
 warnings, `cyrius vet` 9 deps / 0 untrusted / 0 missing, fuzz harness
 green, and 233/233 assertions passing.
 
+### Fixed
+
+- **CI could not install the pinned toolchain.** Both workflows
+  hand-rolled the install — untar the release asset, `cp` into flat
+  `$HOME/.cyrius/{bin,lib}` — which is the **pre-6.5 layout**. From
+  6.5.x `cyrius deps` resolves the stdlib snapshot from
+  `$HOME/.cyrius/versions/$CYRIUS_VERSION/lib` and hard-fails with
+  `error: cyrius.cyml pins version 6.5.35 but it is not installed`,
+  so every job died at dep resolution the moment the pin crossed
+  6.5.0. Both blocks (`ci.yml` `build-and-test`, `release.yml`
+  `package` — the only two jobs that invoke the toolchain) now pipe
+  the pin to the upstream `scripts/install.sh`, which lays out
+  `versions/<v>/{bin,lib}`, symlinks `bin/` + `lib/` at it, and adds
+  the SHA256 + signature verification the hand-rolled block skipped.
+  Matches darshana / patra / libro. The pin stays the single source
+  of truth, per CLAUDE.md.
+
+  Reproduced and fixed under simulation rather than inferred: the old
+  `cp`-based block rebuilt into a scratch `CYRIUS_HOME` reproduces the
+  reported error verbatim; the installer into a clean scratch
+  `CYRIUS_HOME` yields `versions/6.5.35/lib` (102 files), and a
+  `git ls-files` checkout of this tree run against it takes
+  `cyrius deps` → lint → vet → build → 233/233 → all 14 smoke gates
+  green.
+- A new **Verify toolchain layout** step follows each install and
+  fails loudly if `versions/<pin>/lib` is absent — so a
+  successful-looking install that leaves no snapshot is caught at the
+  install step instead of surfacing as a confusing dep-resolution
+  error several steps later.
+
 ### Changed
 
 - `cyrius.cyml` pin bumped `6.4.24` → `6.5.35`; `lib/` refreshed to

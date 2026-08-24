@@ -65,6 +65,11 @@ cyrius test                               # run tests/*.tcyr
 - Do not emit raw ANSI escape codes inline — always route via darshana
 - Do not call `git` as a subprocess — git-status comes from reading `.git/` files directly (no exec dependency)
 - Do not hardcode toolchain versions in CI YAML — `cyrius = "X.Y.Z"` in `cyrius.cyml` is the source of truth
+- **Do not hand-roll the toolchain install in CI** — read the pin and pipe it to upstream `scripts/install.sh`
+  (`curl -sSf .../cyrius/main/scripts/install.sh | CYRIUS_VERSION="$V" sh`). Untarring the release asset into
+  flat `$HOME/.cyrius/{bin,lib}` is the pre-6.5 layout: from 6.5.x `cyrius deps` resolves the stdlib snapshot
+  from `$HOME/.cyrius/versions/<pin>/lib` and hard-fails without it. The installer also does SHA256 +
+  signature verification. Keep the `Verify toolchain layout` step after it. (Broke CI at v1.3.1.)
 
 ## Process
 

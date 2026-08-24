@@ -5,6 +5,46 @@
 
 ## Version
 
+**1.3.3** — the v1.3.2 deferred backlog, shipped
+2026-08-23. Closes every item the P(-1) sweep confirmed but
+deferred, and one of the six turned out to be **wrong as
+specified**:
+
+- All 66 `sys_write` sites now route through a checked
+  `d_write` (`walk.cyr`) that loops on short writes, retries
+  `-EINTR`, and sets a sticky flag `main()` turns into exit 1.
+  Through v1.3.2 `darshini > out.txt` on a full filesystem
+  wrote nothing and exited **0**. Proven with `/dev/full`;
+  new CI gate.
+- `-l` stats each entry once instead of twice —
+  `compute_decor` hands its stat buffers to `render_long`.
+  **48.3 ms → 40.1 ms (~17%)** on 5,000 entries with
+  `-l --mime`, zero output change.
+- `tests/darshini.fcyr` is a real harness (5 targets, named
+  invariants) instead of a no-op that made `cyrius fuzz`
+  report PASS while running zero darshini code. Both the
+  `.gitignore` and `_path_join_into` targets are
+  **mutation-validated**: re-introducing the corresponding
+  v1.3.2 bug makes them fail.
+- `-T --git` root line `? .` → `. .` (new
+  `git_status_for_root`). **The only behavior change in the
+  release**; every line below the root is byte-identical.
+- The agnos enumerator uses a stack scratch, ending a 4 KB
+  permanent leak per directory visited.
+- **Rejected**: migrating `format_mtime` to chrono's `dt_*`
+  accessors. Each accessor re-runs `epoch_to_date` with a
+  fresh `alloc(48)`, so using all five would cost 5
+  conversions per entry on the `-l` hot path, and they take
+  nanoseconds rather than the epoch seconds `stat` gives us.
+  The offsets are instead **named** (`DT_YEAR`…`DT_SECOND`)
+  and pinned by assertions that cross-check each against its
+  accessor, so a reordered struct fails in the suite rather
+  than silently rendering a wrong date.
+
+272 → **287** assertions. Verified against a v1.3.2
+reference across 45 A/B comparisons (TTY, pipe, agnos,
+aarch64): zero differences outside the root-line change.
+Patch bump. Prior:
 **1.3.2** — P(-1) audit / refactor / hardening / security
 sweep, shipped 2026-08-23. Six independent audit lenses over
 `src/`, `tests/`, `docs/` and CI, every material finding put
@@ -189,6 +229,7 @@ M9+ onward fills:
 | v1.3.0: agnos target support (FS-ABI port) + cycc 6.4.24 + darshana 0.9.0 | v1.3.0 | **shipped** (v1.3.0) |
 | v1.3.1: cycc 6.5.35 + darshana 1.0.0 (upstream API freeze) | v1.3.1 | **shipped** (v1.3.1) |
 | v1.3.2: P(-1) audit sweep — OOB write + terminal-injection + 6 wrong-answer fixes | v1.3.2 | **shipped** (v1.3.2) |
+| v1.3.3: deferred backlog — checked writes, single-lstat `-l`, real fuzz harness | v1.3.3 | **shipped** (v1.3.3) |
 
 ## Tests
 
@@ -258,37 +299,28 @@ Both are non-breaking additions permitted under the M10
 freeze, and both were left out of the v1.3.1 patch cut as
 source changes beyond a dep bump.
 
-**Deferred out of the v1.3.2 P(-1) cut** (confirmed
-findings, accepted with rationale in the audit's "Deferred"
-table — none are regressions, all tracked for 1.4.0):
+**The v1.3.2 P(-1) deferred list is closed** — all six items
+were addressed in v1.3.3 (one by rejecting it on measured
+grounds; see the Version block). Nothing from the sweep
+remains open.
 
-- **`sys_write` returns are never checked** — 56 sites. A
-  full filesystem yields exit 0 with truncated output; a
-  closed stdout the same. Wants a looping `d_write` wrapper
-  plus a sticky failure flag threaded to `main()` — every
-  output path, which does not belong in a patch cut
-  alongside seven other repairs.
-- **`-l` stats every entry twice** — `compute_decor` and
-  `render_long` each `lstat` the whole listing: 2 syscalls
-  per entry where 1 suffices. Pure perf, no wrong output.
-  Needs `compute_decor` to widen its returned struct and
-  hand its stat buffers back.
-- **`tests/darshini.fcyr` is a stub** — `cyrius fuzz`
-  passes while executing zero darshini code, so every
-  attacker-facing byte path (index parser, gitignore
-  matcher, magic bytes, filenames) is unfuzzed. A 512-line
-  replacement was drafted during the sweep; adopting it
-  wants its own review pass.
-- **`-T --git <dir>` root line** shows `?` for the tree root
-  itself — the root's rel should be the listing prefix
-  rather than prefix + name. Pre-existing, unchanged by the
-  v1.3.2 tree fix, cosmetic.
-- The agnos scratch-alloc asymmetry and the chrono
-  `DateTime` raw-offset dependency, both already described
-  under "Known gotchas" below.
+Remaining 1.x backlog is unchanged and small:
 
-Non-roadmap items remain non-breaking additions per the M10
-freeze contract.
+- **mtime localization** — keep UTC default; add an opt-in
+  flag per the M2 notes.
+- **Post-v1 platforms** — aarch64 first (fix `lstat_path`'s
+  bare syscall 6), then macOS / BSD / Windows. cycc corrected
+  the macOS `STAT_*` offsets in the 6.5.x line, removing one
+  blocker.
+- **`vec_sort_by` / `vec_select_nth`** (cycc 6.5.4) could
+  replace the hand-rolled merge sort — cycc's changelog names
+  darshini as a motivating case, and the stdlib introsort is
+  O(1) extra memory against the current per-call scratch vec.
+- **`CYRIUS_PKG_VERSION`** (cycc 6.5.21) would let
+  `_darshini_version_str()` stop being a hand-bumped literal,
+  retiring the lockstep step and the CI grep that guards it.
+
+All four are non-breaking under the M10 freeze.
 
 ## Known gotchas
 
@@ -325,7 +357,17 @@ freeze contract.
   the `Stat` enum or local constants, so the arch-dispatch
   pattern is clear when the time comes.
 
-- **`format_mtime` reads chrono's `DateTime` by raw byte offset.**
+- **`format_mtime` reads chrono's `DateTime` by raw byte offset**
+  — deliberate as of v1.3.3, and now *pinned* rather than
+  merely noted. The offsets are named `DT_YEAR`…`DT_SECOND`
+  in `render.cyr`, and a `chrono DateTime layout pin` group
+  in the suite cross-checks each against its `dt_*` accessor
+  and against known values, so an upstream reorder fails
+  there instead of silently rendering a wrong date. Migrating
+  to the accessors was measured and rejected: each re-runs
+  `epoch_to_date` with a fresh `alloc(48)`, so all five would
+  cost 5 conversions per entry on the `-l` hot path, and they
+  take nanoseconds rather than epoch seconds. Original note:
   `render.cyr:321-330` does `load64(d)`, `load64(d + 8)` … `load64(d
   + 32)` for year/month/day/hour/minute on the struct `epoch_to_date`
   returns. cycc 6.4.67 added public accessors (`dt_year` / `dt_month`
@@ -337,8 +379,11 @@ freeze contract.
   byte-identical. Move to the accessors before the layout moves under
   us.
 
-- **darshini's agnos `dir_list` mirror still bump-allocates its
-  getdents scratch.** cycc 6.5.11 moved the stdlib `dir_list` /
+- ~~**darshini's agnos `dir_list` mirror bump-allocates its
+  getdents scratch.**~~ **Fixed in v1.3.3** — now a stack
+  local, ending a 4 KB permanent leak per directory visited.
+  Kept here because the *reason* still matters for any new
+  scratch buffer: original note follows. cycc 6.5.11 moved the stdlib `dir_list` /
   `is_dir` 4 KB scratch from `alloc()` to a stack local, because the
   default allocator is a *bump* allocator with no free — the upstream
   note measures the old cost at 4104 B **per call**. darshini's Linux

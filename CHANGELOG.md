@@ -4,6 +4,114 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.3] — v1.3.3: the v1.3.2 deferred backlog
+
+Closes every item the [P(-1) sweep](docs/audit/2026-08-23-audit.md)
+confirmed but deferred out of the v1.3.2 patch cut. One of the six turned
+out to be wrong as specified — see *Investigated and rejected* below.
+
+Suite **272 → 287** assertions, and `tests/darshini.fcyr` goes from a
+16-line no-op to a real harness whose targets are **mutation-validated**:
+re-introducing either the v1.3.2 CRLF bug or the v1.3.2 out-of-bounds
+write makes it fail. Verified against a v1.3.2 reference binary across 45
+A/B comparisons — TTY, pipe, and both cross-targets — with **zero**
+differences outside the one intended change below.
+
+### Fixed
+
+- **A failed or truncated stdout write is now an error exit.** All 66
+  `sys_write` call sites discarded their return value, so
+  `darshini > out.txt` on a full filesystem wrote nothing, ignored
+  `-ENOSPC` at every site, and exited **0** — a calling script saw
+  success and an empty file. Same for a closed stdout (`-EBADF`), and a
+  filesystem filling mid-listing produced a short write that was treated
+  as complete, silently truncating a row and misaligning everything
+  after it.
+
+  Every site now goes through `d_write` (`src/walk.cyr`, which is the
+  first include so the definition precedes all uses). It loops on short
+  writes, retries `-EINTR`, and on any other negative return sets a
+  sticky flag that `main()` turns into exit 1 plus one
+  `darshini: write error` line on stderr. Proven with `/dev/full`, which
+  forces `ENOSPC` without privileges: v1.3.2 exits 0, v1.3.3 exits 1.
+  A new CI gate locks this in for the plain, `-l`, `-T` and `--git`
+  paths, and asserts a healthy run still exits 0 with a silent stderr.
+- **`-l` no longer stats every entry twice.** `compute_decor` lstats the
+  whole listing, then `render_long` path-joined and lstat'd all of it
+  again — 2 `lstat(2)` per entry where 1 suffices. `compute_decor` now
+  hands its stat buffers back (a sixth slot in its returned struct) and
+  `render_long` reuses them, keeping its own lstat path for the cases
+  where no decoration pass runs (`-l` on a bare pipe). Measured on 5,000
+  entries with `-l --mime`: **48.3 ms → 40.1 ms, ~17% faster**. Not one
+  output byte changes.
+- **`tests/darshini.fcyr` is a real fuzz harness.** It was a no-op that
+  returned 0 and called itself once with the literal `"test"`, so
+  `cyrius fuzz` reported PASS while executing zero lines of darshini
+  code — every attacker-controlled byte path ran unfuzzed. Five targets
+  now, each asserting a *named invariant* rather than "it didn't crash",
+  which is the only kind of check that could have caught either defect
+  this project actually shipped:
+    - `.git/index` — noise plus a forced-`DIRC`-header corpus with lying
+      entry counts. Return is 0 or −1; emitted paths are shorter than the
+      input; the three parallel vecs never diverge in length.
+    - `.gitignore` — a **differential** target: the same pattern bodies
+      with LF and with CRLF endings must produce identical pattern sets.
+    - magic-byte sniffing — every length 0…16, including truncated.
+    - `_path_join_into` — a canary region past `PATH_BUF_SIZE`, so the
+      v1.3.2 out-of-bounds write cannot return unnoticed.
+    - the sanitizer predicate — total over all 256 bytes, and never
+      claims a byte ≥ 0x80 is a control character.
+- **`-T --git <dir>` reported the tree's own root line as untracked.**
+  The root's repo-relative path is the context's listing prefix itself,
+  not prefix + display-name, so it was looked up as `src/src` and always
+  missed. New `git_status_for_root`, plus `_git_dir_has_tracked` now
+  treats an empty rel as "the listing is the repo root" (it returned 0
+  unconditionally before). **This is the only behavior change in the
+  release**: the root line goes `? .` → `. .`; every line below it is
+  byte-identical.
+- **The agnos directory enumerator no longer leaks 4 KB per directory.**
+  `_d_dir_list_agnos` still `alloc()`d its `getdents` scratch from a bump
+  allocator with no free, so every directory visited burned 4 KB
+  permanently — compounding under `-T` on a deep tree. cycc 6.5.11 made
+  exactly this change to the stdlib `dir_list`, which the Linux path
+  picked up for free when `lib/` was re-vendored at v1.3.1; this mirror
+  was the half left behind. Now a stack local. Re-verified under
+  `mirshi`, plain and `-T`.
+
+### Investigated and rejected
+
+- **Migrating `format_mtime` off `epoch_to_date`'s raw struct offsets.**
+  The v1.3.2 audit flagged reading that layout directly as a latent risk,
+  since cycc 6.4.67 added `dt_year` / `dt_month` / … accessors whose
+  stated purpose is to keep it private. Reading the accessors' actual
+  implementation killed the idea: each one is
+  `load64(epoch_to_date(dt / 1000000000) + K)`, so it re-runs the full
+  civil-date conversion **and a fresh `alloc(48)` per field**. Using all
+  five would turn one conversion per entry into five, on the `-l` hot
+  path, against an allocator that never frees. They also take a
+  nanosecond `DateTime` rather than the epoch seconds `stat` yields, so
+  each call would need a multiply that overflows at the far end of the
+  range.
+
+  Instead the offsets stay but stop being anonymous: they are named
+  (`DT_YEAR` … `DT_SECOND` in `src/render.cyr`) and **pinned** by an
+  assertion group that cross-checks every one against its matching
+  `dt_*` accessor *and* against known values. A reordered struct now
+  fails in the test suite instead of `-l` silently rendering the wrong
+  date — which is the outcome the audit item actually wanted.
+
+### Notes
+
+Two byte-level invariants in the new fuzz harness were wrong before they
+were right, and are recorded in the harness so they are not
+reintroduced. "No pattern contains a CR" fired on `fo\ro` — a CR that is
+not the line terminator is an ordinary pattern byte to git. "No pattern
+ends with a CR" then fired on `*\r\r` — git strips exactly one trailing
+CR, so `*\r` is correct. Both times the parser was right and the
+harness was wrong, confirmed against the parser directly before
+weakening anything. The differential formulation that shipped is immune
+to both.
+
 ## [1.3.2] — v1.3.2: P(-1) audit / hardening / security sweep
 
 A full P(-1) sweep — six independent audit lenses over `src/`, `tests/`,

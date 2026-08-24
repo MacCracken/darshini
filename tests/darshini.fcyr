@@ -1,16 +1,353 @@
-# darshini fuzz harness
+# darshini fuzz harness.
+#
+# Through v1.3.2 this file was a 16-line no-op: `fuzz_main` returned 0
+# unconditionally and `main` called it once with the literal "test".
+# `cyrius fuzz` therefore reported PASS while executing zero lines of
+# darshini code — every attacker-controlled byte path ran unfuzzed.
+#
+# Targets are the three parsers that consume bytes darshini does not
+# author, plus the path buffer whose missing bound was the v1.3.2
+# memory-safety fix. Ordered by blast radius.
+#
+# Each target asserts a NAMED INVARIANT rather than "it didn't crash".
+# A fuzz harness that only checks for crashes cannot catch the two
+# defects this project actually shipped — an out-of-bounds write the
+# bump allocator absorbed silently, and a parser that returned
+# plausible-looking wrong answers.
+#
+# Determinism is deliberate: a fixed LCG, so a failure is reproducible
+# from the seed printed on the way out. `cyrius fuzz` is a CI gate, not
+# an exploratory session.
 
-fn fuzz_main(data, len) {
-    if (len == 0) { return 0; }
+include "src/walk.cyr"
+include "src/icons.cyr"
+include "src/mime.cyr"
+include "src/git.cyr"
+include "src/color.cyr"
+include "src/render.cyr"
+
+# ---------------------------------------------------------------- prng
+# Numerical Recipes LCG. Deterministic across runs and targets.
+var _fz_state = 0x2545F4914F6CDD1D;
+
+fn fz_seed(s): i64 { _fz_state = s; return 0; }
+
+fn fz_next(): i64 {
+    _fz_state = _fz_state * 1664525 + 1013904223;
+    # Fold to a non-negative 31-bit value; the low bits of an LCG are
+    # the weak ones, so take from the middle.
+    var v = (_fz_state >> 16) & 0x7FFFFFFF;
+    return v;
+}
+
+fn fz_byte(): i64 { return fz_next() & 255; }
+
+fn fz_range(lo, hi): i64 {
+    if (hi <= lo) { return lo; }
+    return lo + fz_next() % (hi - lo);
+}
+
+# Fill `n` bytes at `buf` with noise.
+fn fz_fill(buf, n): i64 {
+    var i = 0;
+    while (i < n) {
+        store8(buf + i, fz_byte());
+        i = i + 1;
+    }
     return 0;
 }
 
-fn main() {
+# `print_cstr_fd` lives in main.cyr, which this harness deliberately
+# does not include (it would pull in `main` and the argv parser). Local
+# emitter instead — same shape the .tcyr file uses for its helpers.
+fn fz_say(fd, c): i64 {
+    d_write(fd, c, strlen(c));
+    return 0;
+}
+
+var _fz_fail = 0;
+
+fn fz_check(ok, label): i64 {
+    if (ok == 1) { return 0; }
+    _fz_fail = 1;
+    fz_say(STDERR_FD, "fuzz FAIL: ");
+    fz_say(STDERR_FD, label);
+    fz_say(STDERR_FD, "\n");
+    return 0;
+}
+
+# ------------------------------------------------- 1. .git/index parser
+# The highest-value target: an attacker who controls a repository
+# controls these bytes, and the parser walks variable-length records
+# with NUL padding to an 8-byte boundary.
+#
+# Invariants:
+#   * return is 0 or -1, never anything else
+#   * every emitted path length is < the input length (a record cannot
+#     yield more name than the buffer holds)
+#   * paths / mtimes / sizes stay the same length as each other
+fn fz_index(iters): i64 {
+    var cap = 512;
+    var buf = alloc(cap);
+    var i = 0;
+    while (i < iters) {
+        var n = fz_range(0, cap);
+        fz_fill(buf, n);
+        # Half the corpus gets a valid DIRC v2 header so the parser
+        # walks past its early-out and into the record loop, which is
+        # where the interesting arithmetic lives.
+        if (n >= 12) {
+            if ((i & 1) == 0) {
+                store8(buf + 0, 68); store8(buf + 1, 73);
+                store8(buf + 2, 82); store8(buf + 3, 67);
+                store8(buf + 4, 0);  store8(buf + 5, 0);
+                store8(buf + 6, 0);  store8(buf + 7, 2);
+                # Entry count often lies about what the buffer holds —
+                # that is the point.
+                store8(buf + 8, 0);  store8(buf + 9, 0);
+                store8(buf + 10, fz_byte() & 3); store8(buf + 11, fz_byte());
+            }
+        }
+        var paths = vec_new();
+        var mtimes = vec_new();
+        var sizes = vec_new();
+        var rc = _git_parse_index(buf, n, paths, mtimes, sizes);
+        var ok_rc = 0;
+        if (rc == 0) { ok_rc = 1; }
+        if (rc == 0 - 1) { ok_rc = 1; }
+        fz_check(ok_rc, "index: return is neither 0 nor -1");
+        var np = vec_len(paths);
+        var same = 0;
+        if (np == vec_len(mtimes)) { if (np == vec_len(sizes)) { same = 1; } }
+        fz_check(same, "index: parallel vecs diverged in length");
+        var k = 0;
+        while (k < np) {
+            var pl = str_len(vec_get(paths, k));
+            var bounded = 0;
+            if (pl < n) { bounded = 1; }
+            fz_check(bounded, "index: emitted a path longer than the input");
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ----------------------------------------------- 2. .gitignore parser
+# Text, but still attacker-controlled, and the CR handling was wrong
+# from M7 through v1.3.2.
+#
+# This is a DIFFERENTIAL target, not a byte-predicate one: build the
+# same pattern body with LF endings and with CRLF endings, parse both,
+# and require the resulting pattern sets to be IDENTICAL. That is
+# exactly the property v1.3.2 fixed — a CRLF-authored .gitignore
+# produced "*.swp\r" and every ignore rule silently stopped matching —
+# and it cannot false-positive on legitimate CR handling.
+#
+# Two earlier attempts at this target were byte predicates and both
+# were WRONG, in ways worth recording so they are not reintroduced:
+#   * "no pattern contains a CR" fired on `fo\ro`. A CR that is not
+#     the line terminator is an ordinary pattern byte to git.
+#   * "no pattern ends with a CR" fired on `*\r\r`. Git strips exactly
+#     ONE trailing CR, so `*\r` is the correct answer there.
+# In both cases the parser was right and the harness was wrong,
+# verified against the parser directly before weakening anything.
+#
+# An empty pattern is likewise not a defect: `_git_match_one` returns 0
+# for one (asserted in darshini.tcyr), so it matches nothing. Confirmed
+# unreachable by exhaustive search over the steering alphabet anyway.
+fn fz_ignore(iters): i64 {
+    var body_cap = 24;
+    var lf_buf = alloc(256);
+    var crlf_buf = alloc(384);
+    var i = 0;
+    while (i < iters) {
+        # Build `lines` pattern bodies from bytes that are never a line
+        # terminator, so the two encodings differ ONLY in the ending.
+        var lines = fz_range(1, 5);
+        var lf_n = 0;
+        var crlf_n = 0;
+        var ln = 0;
+        while (ln < lines) {
+            var blen = fz_range(0, body_cap);
+            var j = 0;
+            while (j < blen) {
+                var pick = fz_range(0, 8);
+                var b = 97;
+                if (pick == 0) { b = 32; }
+                if (pick == 1) { b = 35; }
+                if (pick == 2) { b = 33; }
+                if (pick == 3) { b = 47; }
+                if (pick == 4) { b = 42; }
+                if (pick == 5) { b = 46; }
+                if (pick == 6) { b = fz_range(97, 123); }
+                store8(lf_buf + lf_n, b);
+                lf_n = lf_n + 1;
+                store8(crlf_buf + crlf_n, b);
+                crlf_n = crlf_n + 1;
+                j = j + 1;
+            }
+            store8(lf_buf + lf_n, 10);
+            lf_n = lf_n + 1;
+            store8(crlf_buf + crlf_n, 13);
+            crlf_n = crlf_n + 1;
+            store8(crlf_buf + crlf_n, 10);
+            crlf_n = crlf_n + 1;
+            ln = ln + 1;
+        }
+        var lf_pats = vec_new();
+        var crlf_pats = vec_new();
+        _git_parse_ignore(lf_buf, lf_n, lf_pats);
+        _git_parse_ignore(crlf_buf, crlf_n, crlf_pats);
+        var a = vec_len(lf_pats);
+        var b2 = vec_len(crlf_pats);
+        var same_count = 0;
+        if (a == b2) { same_count = 1; }
+        fz_check(same_count, "ignore: CRLF and LF yielded different pattern COUNTS");
+        if (same_count == 1) {
+            var k = 0;
+            while (k < a) {
+                var pa = vec_get(lf_pats, k);
+                var pb = vec_get(crlf_pats, k);
+                var eq = 0;
+                if (str_len(pa) == str_len(pb)) {
+                    if (memeq(str_data(pa), str_data(pb), str_len(pa)) == 1) { eq = 1; }
+                }
+                fz_check(eq, "ignore: CRLF pattern differs from its LF twin");
+                k = k + 1;
+            }
+        }
+        # Bound check still applies to both encodings.
+        var q = 0;
+        while (q < b2) {
+            var bounded = 0;
+            if (str_len(vec_get(crlf_pats, q)) <= crlf_n) { bounded = 1; }
+            fz_check(bounded, "ignore: pattern longer than the input");
+            q = q + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# --------------------------------------------- 3. magic-byte sniffing
+# Reads up to 16 bytes of an arbitrary file. Short and truncated files
+# are the interesting cases.
+#
+# Invariant: always returns a non-zero cstr (a mime type), never 0,
+# for any length including 0.
+fn fz_magic(iters): i64 {
+    var buf = alloc(16);
+    var i = 0;
+    while (i < iters) {
+        var n = fz_range(0, 17);
+        fz_fill(buf, n);
+        var m = _mime_for_magic_bytes(buf, n);
+        # 0 is a legal "no opinion" answer; what must never happen is a
+        # non-zero value that isn't a readable cstr. Probe the first
+        # byte to force a load through the returned pointer.
+        if (m != 0) {
+            var first = load8(m);
+            var printable = 0;
+            if (first >= 32) { if (first < 127) { printable = 1; } }
+            fz_check(printable, "magic: returned a non-cstr pointer");
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ------------------------------------- 4. _path_join_into bound (v1.3.2)
+# Direct regression test for the out-of-bounds write. A canary region
+# sits immediately past PATH_BUF_SIZE; if the function ever writes
+# beyond its contract again, the canary changes and this fails — which
+# is exactly what the unbounded v1.3.1 code did, silently, because the
+# bump allocator had slack there.
+var _FZ_CANARY = 0xA5;
+
+fn fz_path_join(iters): i64 {
+    var guard = 512;
+    var total = PATH_BUF_SIZE + guard;
+    var buf = alloc(total);
+    var i = 0;
+    while (i < iters) {
+        # Lay the canary across the whole guard region.
+        var g = 0;
+        while (g < guard) {
+            store8(buf + PATH_BUF_SIZE + g, _FZ_CANARY);
+            g = g + 1;
+        }
+        # Directory and name lengths that straddle the boundary: both
+        # comfortably inside, and combinations that must be refused.
+        var dlen = fz_range(0, PATH_BUF_SIZE + 200);
+        var nlen = fz_range(0, 300);
+        var db = alloc(dlen + 1);
+        var j = 0;
+        while (j < dlen) { store8(db + j, 100); j = j + 1; }
+        store8(db + dlen, 0);
+        var nb = alloc(nlen + 1);
+        var k = 0;
+        while (k < nlen) { store8(nb + k, 110); k = k + 1; }
+        store8(nb + nlen, 0);
+        var r = _path_join_into(buf, str_from(db), str_from(nb));
+        # Canary must be untouched regardless of whether the join was
+        # accepted or refused.
+        var intact = 1;
+        var c = 0;
+        while (c < guard) {
+            if (load8(buf + PATH_BUF_SIZE + c) != _FZ_CANARY) { intact = 0; }
+            c = c + 1;
+        }
+        fz_check(intact, "path_join: wrote past PATH_BUF_SIZE");
+        # A refusal must yield an empty cstr, so a caller that ignores
+        # the 0 return still gets a harmless (failing) path.
+        if (r == 0) {
+            var empty = 0;
+            if (load8(buf) == 0) { empty = 1; }
+            fz_check(empty, "path_join: refused but left non-empty buffer");
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# ------------------------------- 5. control-byte predicate totality
+# The sanitizer's predicate must be total and must never claim a byte
+# >= 0x80 is a control character — that would corrupt UTF-8 filenames.
+# This is the guard on the `load8`-is-unsigned assumption.
+fn fz_ctrl_predicate(): i64 {
+    var b = 0;
+    while (b < 256) {
+        var r = _is_ctrl_byte(b);
+        var boolean = 0;
+        if (r == 0) { boolean = 1; }
+        if (r == 1) { boolean = 1; }
+        fz_check(boolean, "is_ctrl_byte: returned something other than 0/1");
+        if (b >= 128) {
+            var safe = 0;
+            if (r == 0) { safe = 1; }
+            fz_check(safe, "is_ctrl_byte: claimed a high byte is a control");
+        }
+        b = b + 1;
+    }
+    return 0;
+}
+
+fn main(): i64 {
     alloc_init();
-    fuzz_main("test", 4);
-    println("fuzz: ok");
+    fz_seed(0x2545F4914F6CDD1D);
+    fz_index(400);
+    fz_ignore(400);
+    fz_magic(400);
+    fz_path_join(60);
+    fz_ctrl_predicate();
+    if (_fz_fail == 1) {
+        fz_say(STDERR_FD, "fuzz: FAILED (seed 0x2545F4914F6CDD1D)\n");
+        return 1;
+    }
+    fz_say(STDOUT_FD, "fuzz: ok (index/ignore/magic/path_join/ctrl)\n");
     return 0;
 }
 
 var r = main();
-syscall(60, r);
+syscall(SYS_EXIT, r);

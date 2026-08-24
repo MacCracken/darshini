@@ -598,7 +598,17 @@ fn _git_dir_has_tracked(ctx, dir_rel): i64 {
     var paths = _ctx_paths(ctx);
     var n = vec_len(paths);
     var dlen = str_len(dir_rel);
-    if (dlen == 0) { return 0; }
+    # v1.3.3: an empty rel means "the listing root itself" — asked by
+    # `git_status_for_root` for the `-T` root line when the listing IS
+    # the repo root, so there is no prefix to match against. Any
+    # tracked path at all lives under it. Through v1.3.2 this returned
+    # 0 unconditionally, which is why the tree's own root rendered '?'.
+    # No other caller can reach dlen == 0: `_git_entry_relpath` always
+    # yields either the entry name or listing + "/" + name.
+    if (dlen == 0) {
+        if (n > 0) { return 1; }
+        return 0;
+    }
     var dd = str_data(dir_rel);
     var i = 0;
     while (i < n) {
@@ -645,6 +655,33 @@ fn git_status_for_sub(ctx, sub_rel, basename, is_dir, mtime_sec, size): i64 {
         if (_git_dir_has_tracked(ctx, rel) == 1) { return 46; }
     }
     if (_git_match_any(_ctx_patterns(ctx), basename, is_dir) == 1) { return 33; }   # '!'
+    return 63;                                            # '?'
+}
+
+# v1.3.3: status for the LISTING ROOT itself — the entry `-T` prints
+# on its own first line. Its repo-relative path is the ctx listing
+# prefix directly, not prefix + display-name. Through v1.3.2 the root
+# line went through the ordinary path and was looked up as
+# "src/src" (or "./."), always missed, and always rendered '?' even
+# when the directory was fully tracked.
+#
+# Ignore matching is skipped: a pattern matching the listing root
+# would mean the user explicitly asked to list an ignored directory,
+# and reporting '!' for the thing they named is noise, not
+# information. The tree's own contents still match normally.
+fn git_status_for_root(ctx, is_dir, mtime_sec, size): i64 {
+    var rel = _ctx_listing(ctx);
+    var idx = _git_find_tracked(ctx, rel);
+    if (idx >= 0) {
+        var indexed_mtime = vec_get(_ctx_mtimes(ctx), idx);
+        var indexed_size = vec_get(_ctx_sizes(ctx), idx);
+        if (indexed_mtime != mtime_sec) { return 77; }   # 'M'
+        if (indexed_size != size) { return 77; }
+        return 46;                                        # '.'
+    }
+    if (is_dir == 1) {
+        if (_git_dir_has_tracked(ctx, rel) == 1) { return 46; }
+    }
     return 63;                                            # '?'
 }
 

@@ -223,7 +223,7 @@ fn icon_for_entry(name, mode): i64 {
 # (caller usually wraps the whole `icon + space + name` in the
 # color escape pair so the icon takes the name's color).
 fn emit_icon(icon): i64 {
-    sys_write(STDOUT_FD, icon, strlen(icon));
-    sys_write(STDOUT_FD, " ", 1);
+    d_write(STDOUT_FD, icon, strlen(icon));
+    d_write(STDOUT_FD, " ", 1);
     return 0;
 }

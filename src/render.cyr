@@ -185,7 +185,7 @@ fn print_entries(entries, colors, icons, gitchrs, classifies): i64 {
         var cl = 0;
         if (classifies != 0) { cl = vec_get(classifies, i); }
         emit_decorated(s, c, ic, icon_pad, gc, git_pad, cl, cls_pad);
-        sys_write(STDOUT_FD, "\n", 1);
+        d_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }
     return 0;
@@ -317,6 +317,34 @@ fn format_size_human(size, buf): i64 {
 # (no zone offset) keeps the column stable across machines and
 # crucially makes tests deterministic — the M2 acceptance check
 # fixtures have known epoch values.
+# v1.3.3: named offsets into the struct `epoch_to_date` returns.
+#
+# cycc 6.4.67 added `dt_year` / `dt_month` / ... accessors whose stated
+# purpose is to keep this layout private, and the v1.3.2 audit recorded
+# reading it by raw offset as a latent risk. Migrating to the accessors
+# was investigated and REJECTED: each one is
+# `load64(epoch_to_date(dt / 1000000000) + K)`, so it re-runs the full
+# civil-date conversion and a fresh alloc(48) per field. Using all five
+# would turn one conversion per entry into FIVE — on the `-l` hot path,
+# against a bump allocator that never frees. They also take a
+# nanosecond DateTime, not the epoch seconds `stat` gives us, so every
+# call would need a multiply that can overflow at the far end of the
+# range.
+#
+# So the offsets stay, but they are no longer anonymous magic numbers:
+# they are named here and PINNED by an assertion group in
+# tests/darshini.tcyr that cross-checks each one against the matching
+# `dt_*` accessor. If upstream ever reorders the struct, that group
+# fails loudly instead of `-l` silently rendering the wrong date.
+enum DateTimeField {
+    DT_YEAR = 0;
+    DT_MONTH = 8;
+    DT_DAY = 16;
+    DT_HOUR = 24;
+    DT_MINUTE = 32;
+    DT_SECOND = 40;
+}
+
 fn format_mtime(epoch, buf): i64 {
     # v1.3.2 (P(-1)): pre-1970 mtimes drive `epoch_to_date` into
     # negative month/day/hour/minute components. `_chrono_w2` then
@@ -341,14 +369,14 @@ fn format_mtime(epoch, buf): i64 {
         return 16;
     }
     var d = epoch_to_date(epoch);
-    _chrono_w4(buf, 0, load64(d));            # year
+    _chrono_w4(buf, 0, load64(d + DT_YEAR));
     store8(buf + 4, 45);                       # '-'
-    _chrono_w2(buf, 5, load64(d + 8));        # month
+    _chrono_w2(buf, 5, load64(d + DT_MONTH));
     store8(buf + 7, 45);                       # '-'
-    _chrono_w2(buf, 8, load64(d + 16));       # day
+    _chrono_w2(buf, 8, load64(d + DT_DAY));
     store8(buf + 10, 32);                      # ' '
-    _chrono_w2(buf, 11, load64(d + 24));      # hour
+    _chrono_w2(buf, 11, load64(d + DT_HOUR));
     store8(buf + 13, 58);                      # ':'
-    _chrono_w2(buf, 14, load64(d + 32));      # minute
+    _chrono_w2(buf, 14, load64(d + DT_MINUTE));
     return 16;
 }

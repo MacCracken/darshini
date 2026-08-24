@@ -378,6 +378,66 @@ fn main(): i64 {
     # v1.3.2 — control-character sanitization (P(-1) security sweep)
     # ============================================================
 
+    test_group("chrono DateTime layout pin");
+    # v1.3.3: format_mtime reads epoch_to_date's struct by named offset
+    # (DT_YEAR..DT_SECOND in render.cyr) rather than through the dt_*
+    # accessors, because each accessor re-runs the whole conversion —
+    # using all five would cost 5 civil-date computations and 5
+    # alloc(48)s per entry on the `-l` hot path.
+    #
+    # The price of that choice is a dependency on a layout cycc 6.4.67
+    # declared private. This group is that dependency made loud: each
+    # offset is cross-checked against the matching accessor, so a
+    # reordered struct fails HERE instead of `-l` silently rendering
+    # the wrong date. dt_* take nanoseconds; epoch_to_date takes seconds.
+    var _pin_epoch = 1700000000;
+    var _pin_dt = _pin_epoch * 1000000000;
+    var _pin = epoch_to_date(_pin_epoch);
+    assert_eq(load64(_pin + DT_YEAR),   dt_year(_pin_dt),   "DT_YEAR matches dt_year");
+    assert_eq(load64(_pin + DT_MONTH),  dt_month(_pin_dt),  "DT_MONTH matches dt_month");
+    assert_eq(load64(_pin + DT_DAY),    dt_day(_pin_dt),    "DT_DAY matches dt_day");
+    assert_eq(load64(_pin + DT_HOUR),   dt_hour(_pin_dt),   "DT_HOUR matches dt_hour");
+    assert_eq(load64(_pin + DT_MINUTE), dt_minute(_pin_dt), "DT_MINUTE matches dt_minute");
+    assert_eq(load64(_pin + DT_SECOND), dt_second(_pin_dt), "DT_SECOND matches dt_second");
+    # And the values themselves, so a layout change that happens to
+    # keep the accessors consistent still gets caught.
+    assert_eq(load64(_pin + DT_YEAR),   2023, "pin epoch -> year 2023");
+    assert_eq(load64(_pin + DT_MONTH),  11,   "pin epoch -> month 11");
+    assert_eq(load64(_pin + DT_DAY),    14,   "pin epoch -> day 14");
+    assert_eq(load64(_pin + DT_HOUR),   22,   "pin epoch -> hour 22");
+    assert_eq(load64(_pin + DT_MINUTE), 13,   "pin epoch -> minute 13");
+
+    test_group("git_status_for_root");
+    # v1.3.3: the `-T` root line. Its repo-relative path is the ctx
+    # listing prefix itself, not prefix + display-name, so through
+    # v1.3.2 it was looked up as "src/src" and always rendered '?'.
+    # _git_dir_has_tracked's empty-rel case is what makes the repo-root
+    # form work; it returned 0 unconditionally before.
+    var _root_paths = vec_new();
+    vec_push(_root_paths, make_str("src/a.txt"));
+    vec_push(_root_paths, make_str("top.txt"));
+    var _root_ctx = alloc(48);
+    store64(_root_ctx + 0, _root_paths);
+    store64(_root_ctx + 8, vec_new());
+    store64(_root_ctx + 16, vec_new());
+    store64(_root_ctx + 24, vec_new());
+    store64(_root_ctx + 32, make_str(""));
+    store64(_root_ctx + 40, 0);
+    # Empty rel = "the listing IS the repo root" -> tracked, because
+    # any indexed path at all lives under it.
+    assert_eq(_git_dir_has_tracked(_root_ctx, make_str("")), 1, "empty rel + tracked paths -> 1");
+    assert_eq(_git_dir_has_tracked(_root_ctx, make_str("src")), 1, "'src' has tracked children");
+    assert_eq(_git_dir_has_tracked(_root_ctx, make_str("nope")), 0, "unrelated dir -> 0");
+    # An empty index must NOT report the root as tracked.
+    var _empty_ctx = alloc(48);
+    store64(_empty_ctx + 0, vec_new());
+    store64(_empty_ctx + 8, vec_new());
+    store64(_empty_ctx + 16, vec_new());
+    store64(_empty_ctx + 24, vec_new());
+    store64(_empty_ctx + 32, make_str(""));
+    store64(_empty_ctx + 40, 0);
+    assert_eq(_git_dir_has_tracked(_empty_ctx, make_str("")), 0, "empty rel + empty index -> 0");
+
     test_group("_is_ctrl_byte");
     # C0 controls — every one must be caught. These are the bytes a
     # hostile filename uses to drive the terminal.

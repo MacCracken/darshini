@@ -111,6 +111,13 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, w
     if (want_git == 1)      { gitchrs = vec_new(); }
     if (want_mime == 1)     { mimes = vec_new(); }
     if (want_classify == 1) { classifies = vec_new(); }
+    # v1.3.3: hand the stat buffers back. This pass already lstats
+    # every entry; render_long then path_joined and lstat'd the whole
+    # listing a SECOND time, so `-l` with any decoration issued 2
+    # lstat(2) per entry where 1 suffices. Always built (it costs one
+    # vec and N pointers we already hold) so the caller need not
+    # predict whether it will be wanted.
+    var stats = vec_new();
     var n = vec_len(entries);
     # v1.1.2: one path buffer per listing instead of one per
     # entry. Save N heap allocs per compute_decor call.
@@ -161,14 +168,19 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, w
         if (want_git == 1)      { vec_push(gitchrs, gc); }
         if (want_mime == 1)     { vec_push(mimes, mm); }
         if (want_classify == 1) { vec_push(classifies, cl); }
+        # 0 for a failed stat — the same sentinel render_long already
+        # uses to mean "substitute `?` placeholders for this row".
+        if (rc >= 0) { vec_push(stats, stat_buf); }
+        else         { vec_push(stats, 0); }
         i = i + 1;
     }
-    var r = alloc(40);
+    var r = alloc(48);
     store64(r + 0, colors);
     store64(r + 8, icons);
     store64(r + 16, gitchrs);
     store64(r + 24, mimes);
     store64(r + 32, classifies);
+    store64(r + 40, stats);
     return r;
 }
 
@@ -247,7 +259,7 @@ fn _is_ctrl_byte(b): i64 {
 # same syscall count the pre-v1.3.2 path had.
 fn _write_name_bytes(d, n): i64 {
     if (_sanitize_names == 0) {
-        sys_write(STDOUT_FD, d, n);
+        d_write(STDOUT_FD, d, n);
         return 0;
     }
     var start = 0;
@@ -269,16 +281,16 @@ fn _write_name_bytes(d, n): i64 {
             }
         }
         if (bad == 1) {
-            if (i > start) { sys_write(STDOUT_FD, d + start, i - start); }
-            if (span == 2) { sys_write(STDOUT_FD, "??", 2); }
-            else { sys_write(STDOUT_FD, "?", 1); }
+            if (i > start) { d_write(STDOUT_FD, d + start, i - start); }
+            if (span == 2) { d_write(STDOUT_FD, "??", 2); }
+            else { d_write(STDOUT_FD, "?", 1); }
             i = i + span;
             start = i;
         } else {
             i = i + 1;
         }
     }
-    if (n > start) { sys_write(STDOUT_FD, d + start, n - start); }
+    if (n > start) { d_write(STDOUT_FD, d + start, n - start); }
     return 0;
 }
 
@@ -288,17 +300,17 @@ fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad, classify_char,
         if (git_char != 0) {
             var cb[1];
             store8(&cb, git_char);
-            sys_write(STDOUT_FD, &cb, 1);
-            sys_write(STDOUT_FD, " ", 1);
+            d_write(STDOUT_FD, &cb, 1);
+            d_write(STDOUT_FD, " ", 1);
         } else {
-            sys_write(STDOUT_FD, "  ", 2);
+            d_write(STDOUT_FD, "  ", 2);
         }
     }
     if (icon != 0) {
-        sys_write(STDOUT_FD, icon, strlen(icon));
-        sys_write(STDOUT_FD, " ", 1);
+        d_write(STDOUT_FD, icon, strlen(icon));
+        d_write(STDOUT_FD, " ", 1);
     } else { if (icon_pad > 0) {
-        sys_write(STDOUT_FD, "  ", 2);
+        d_write(STDOUT_FD, "  ", 2);
     } }
     _write_name_bytes(str_data(name), str_len(name));
     # v1.1 -F classify indicator: trailing 1-char suffix (or
@@ -308,9 +320,9 @@ fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad, classify_char,
         if (classify_char != 0) {
             var cb2[1];
             store8(&cb2, classify_char);
-            sys_write(STDOUT_FD, &cb2, 1);
+            d_write(STDOUT_FD, &cb2, 1);
         } else {
-            sys_write(STDOUT_FD, " ", 1);
+            d_write(STDOUT_FD, " ", 1);
         }
     }
     if (color != 0) { tty_sgr_reset(); }

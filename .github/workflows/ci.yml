@@ -127,6 +127,35 @@ jobs:
           test "$rc" -eq 1 || { echo "expected exit 1 on missing path, got $rc"; echo "stderr: $out"; exit 1; }
           echo "$out" | grep -q "no such file or directory" || { echo "missing-path message not surfaced; got: $out"; exit 1; }
 
+      - name: Smoke — write errors produce a non-zero exit
+        # v1.3.3 contract. Through v1.3.2 every sys_write return was
+        # discarded, so `darshini > out.txt` on a full filesystem
+        # wrote nothing and still exited 0 — a calling script saw
+        # success. /dev/full always fails writes with ENOSPC and needs
+        # no privileges, so it is the exact reproduction. Also checks a
+        # closed stdout (EBADF), and that a healthy run is unaffected.
+        run: |
+          set -e
+          B=./build/${{ github.event.repository.name }}
+          for mode in "" "-l" "-T" "--git"; do
+            set +e
+            $B $mode src > /dev/full 2>/tmp/werr
+            rc=$?
+            set -e
+            test "$rc" -ne 0 || { echo "ENOSPC with '$mode' exited 0, expected non-zero"; exit 1; }
+            grep -q "write error" /tmp/werr \
+              || { echo "no write-error diagnostic for '$mode': $(cat /tmp/werr)"; exit 1; }
+          done
+          set +e
+          $B src >&- 2>/tmp/werr2
+          rc=$?
+          set -e
+          test "$rc" -ne 0 || { echo "closed stdout exited 0, expected non-zero"; exit 1; }
+          # A healthy run must still be exit 0 with no diagnostic.
+          $B src > /tmp/ok.txt 2>/tmp/noerr
+          test -s /tmp/ok.txt || { echo "healthy run wrote nothing"; exit 1; }
+          test ! -s /tmp/noerr || { echo "healthy run emitted stderr: $(cat /tmp/noerr)"; exit 1; }
+
       - name: "Smoke — multi-path: dirs get headers + blanks between"
         # v1.1.1 contract. Two-dir invocation produces a
         # `src:` header, blank line, then `tests:` header.

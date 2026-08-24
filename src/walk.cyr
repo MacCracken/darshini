@@ -8,6 +8,59 @@
 #
 # Pure walk — no sorting, no rendering. Composes with render.cyr
 # and long.cyr.
+#
+# Also hosts `d_write` — the checked stdout/stderr wrapper every
+# other module writes through. It lives here because walk.cyr is the
+# FIRST include in main.cyr, so this definition precedes every use;
+# a helper defined in main.cyr would be invisible to the modules
+# main.cyr includes above itself.
+
+# v1.3.3: checked write.
+#
+# Through v1.3.2 all 66 `sys_write` call sites discarded their return
+# value. Consequences, none of them theoretical:
+#   * `darshini src > out.txt` on a full filesystem wrote nothing,
+#     ignored -ENOSPC at every site, and exited **0** — so a calling
+#     script saw success and an empty listing.
+#   * `darshini src >&-` (closed stdout, -EBADF) likewise exited 0.
+#   * A filesystem filling MID-listing produces a short write; the
+#     unchecked code treated it as complete and silently truncated a
+#     row, corrupting the alignment of everything after it.
+#
+# This wrapper loops on short writes, retries -EINTR (interrupted
+# before transferring anything), and on any other negative return
+# sets a sticky module flag and stops trying. `main()` reads the flag
+# and exits non-zero, which is what a pipeline actually needs.
+#
+# Returns the number of bytes written, which callers are free to keep
+# ignoring — the flag is the contract, not the return.
+var _d_write_failed = 0;
+
+fn d_write_failed(): i64 { return _d_write_failed; }
+
+fn d_write(fd, buf, n): i64 {
+    if (n <= 0) { return 0; }
+    var off = 0;
+    var going = 1;
+    while (going == 1) {
+        var w = sys_write(fd, buf + off, n - off);
+        if (w > 0) {
+            off = off + w;
+            if (off >= n) { going = 0; }
+        } else {
+            # -EINTR: nothing transferred, safe to reissue. Any other
+            # negative — and a 0 return for n > 0, which would
+            # otherwise spin forever — is terminal.
+            if (w == 0 - 4) {
+                going = 1;
+            } else {
+                _d_write_failed = 1;
+                going = 0;
+            }
+        }
+    }
+    return off;
+}
 
 # POSIX mode bits. Cyrius stdlib doesn't define these (yet) — we
 # carry them locally rather than guess at the right shared home.
@@ -170,7 +223,17 @@ fn _d_dir_list_agnos(path): i64 {
     var entries = vec_new();
     var fd = sys_open(str_data(path), str_len(path), AO_DIRECTORY);
     if (fd < 0) { return entries; }
-    var buf = alloc(4096);
+    # v1.3.3: STACK scratch, not alloc(). The getdents buffer is dead
+    # the moment this fn returns, but the default allocator is a BUMP
+    # allocator with no free — so every directory visited permanently
+    # burned 4 KB, compounding under `-T` on a deep tree. cycc 6.5.11
+    # made exactly this change to the stdlib `dir_list`, which the
+    # Linux path picked up for free when lib/ was re-vendored at
+    # v1.3.1; this agnos mirror was the half left behind. 4096 here is
+    # BYTES (see docs/architecture/001-var-buf-is-bytes.md) and must
+    # stay in step with the sys_getdents length argument below.
+    var sbuf[4096];
+    var buf = &sbuf;
     var rgo = 1;
     while (rgo == 1) {
         var n = sys_getdents(fd, buf, 4096);

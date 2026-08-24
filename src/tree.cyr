@@ -26,8 +26,8 @@ fn _tree_emit_prefix(depth_stack): i64 {
     var n = vec_len(depth_stack);
     while (i < n) {
         var more = vec_get(depth_stack, i);
-        if (more == 1) { sys_write(STDOUT_FD, "│   ", 6); }
-        else           { sys_write(STDOUT_FD, "    ", 4); }
+        if (more == 1) { d_write(STDOUT_FD, "│   ", 6); }
+        else           { d_write(STDOUT_FD, "    ", 4); }
         i = i + 1;
     }
     return 0;
@@ -36,8 +36,8 @@ fn _tree_emit_prefix(depth_stack): i64 {
 # Emit the per-entry connector. `is_last == 1` → "└── ";
 # otherwise "├── ". 4 display cells, 10 bytes either way.
 fn _tree_emit_connector(is_last): i64 {
-    if (is_last == 1) { sys_write(STDOUT_FD, "└── ", 10); }
-    else              { sys_write(STDOUT_FD, "├── ", 10); }
+    if (is_last == 1) { d_write(STDOUT_FD, "└── ", 10); }
+    else              { d_write(STDOUT_FD, "├── ", 10); }
     return 0;
 }
 
@@ -108,32 +108,32 @@ fn _tree_emit_long_prefix(stat_buf, want_long, want_human, stat_ok): i64 {
         var ph = alloc(10);
         var k = 0;
         while (k < 10) { store8(ph + k, 63); k = k + 1; }
-        sys_write(STDOUT_FD, ph, 10);
-        sys_write(STDOUT_FD, " ", 1);
-        sys_write(STDOUT_FD, "?", 1);
-        sys_write(STDOUT_FD, " ", 1);
+        d_write(STDOUT_FD, ph, 10);
+        d_write(STDOUT_FD, " ", 1);
+        d_write(STDOUT_FD, "?", 1);
+        d_write(STDOUT_FD, " ", 1);
         var ph_m = alloc(16);
         format_mtime(0 - 1, ph_m);
-        sys_write(STDOUT_FD, ph_m, 16);
-        sys_write(STDOUT_FD, " ", 1);
+        d_write(STDOUT_FD, ph_m, 16);
+        d_write(STDOUT_FD, " ", 1);
         return 0;
     }
     var mode = load32(stat_buf + STAT_MODE);
     var perm_buf = alloc(10);
     format_perms(mode, perm_buf);
-    sys_write(STDOUT_FD, perm_buf, 10);
-    sys_write(STDOUT_FD, " ", 1);
+    d_write(STDOUT_FD, perm_buf, 10);
+    d_write(STDOUT_FD, " ", 1);
     var size = load64(stat_buf + STAT_SIZE);
     var size_buf = alloc(32);
     var size_len = 0;
     if (want_human == 1) { size_len = format_size_human(size, size_buf); }
     else                 { size_len = format_size_decimal(size, size_buf); }
-    sys_write(STDOUT_FD, size_buf, size_len);
-    sys_write(STDOUT_FD, " ", 1);
+    d_write(STDOUT_FD, size_buf, size_len);
+    d_write(STDOUT_FD, " ", 1);
     var mtime_buf = alloc(16);
     format_mtime(load64(stat_buf + STAT_MTIME), mtime_buf);
-    sys_write(STDOUT_FD, mtime_buf, 16);
-    sys_write(STDOUT_FD, " ", 1);
+    d_write(STDOUT_FD, mtime_buf, 16);
+    d_write(STDOUT_FD, " ", 1);
     return 0;
 }
 
@@ -181,9 +181,21 @@ fn _tree_decor(stat_buf, full_path_cstr, name_str,
     if (git_ctx != 0) {
         var is_dir = 0;
         if (fmt == S_IFDIR) { is_dir = 1; }
-        gc = git_status_for_sub(git_ctx, _tree_rel_join(rel_prefix, name_str), name_str, is_dir,
-                                load64(stat_buf + STAT_MTIME),
-                                load64(stat_buf + STAT_SIZE));
+        # v1.3.3: `rel_prefix == 0` is the sentinel for "this entry IS
+        # the listing root" — only render_tree's own root line passes
+        # it. Its repo-relative path is the ctx listing prefix itself,
+        # so joining the display name would look up "src/src". An
+        # empty-Str prefix (the root's CHILDREN) is a different thing
+        # and must keep using bare basenames.
+        if (rel_prefix == 0) {
+            gc = git_status_for_root(git_ctx, is_dir,
+                                     load64(stat_buf + STAT_MTIME),
+                                     load64(stat_buf + STAT_SIZE));
+        } else {
+            gc = git_status_for_sub(git_ctx, _tree_rel_join(rel_prefix, name_str), name_str, is_dir,
+                                    load64(stat_buf + STAT_MTIME),
+                                    load64(stat_buf + STAT_SIZE));
+        }
     }
     if (want_classify == 1) { cl = classify_indicator(mode); }
     store64(out_color, col);
@@ -238,7 +250,7 @@ fn _tree_recurse(dir_str, depth, max_depth, depth_stack,
         if (want_classify == 1) { cls_pad = classify_display_width(); }
         emit_decorated(name, load64(&col_slot), load64(&ic_slot), icon_pad,
                        load64(&gc_slot), git_pad, load64(&cl_slot), cls_pad);
-        sys_write(STDOUT_FD, "\n", 1);
+        d_write(STDOUT_FD, "\n", 1);
         if (rc >= 0) {
             var mode = load32(stat_buf + STAT_MODE);
             var fmt = mode & S_IFMT;
@@ -270,8 +282,11 @@ fn render_tree(root_cstr, max_depth, want_long, want_human, want_color, want_ico
     store64(&cl_slot, 0);
     if (rc >= 0) {
         var root_name = str_from(root_cstr);
+        # rel_prefix = 0 marks this as the listing root itself (see
+        # _tree_decor). The recursion below passes an empty Str, not 0,
+        # because the root's children DO use bare basenames.
         _tree_decor(stat_buf, root_cstr, root_name, want_color, want_icons, git_ctx, want_classify,
-                    &col_slot, &ic_slot, &gc_slot, &cl_slot, str_from(""));
+                    &col_slot, &ic_slot, &gc_slot, &cl_slot, 0);
     }
     var icon_pad = 0;
     if (want_icons == 1)    { icon_pad = icon_display_width(); }
@@ -281,7 +296,7 @@ fn render_tree(root_cstr, max_depth, want_long, want_human, want_color, want_ico
     if (want_classify == 1) { cls_pad = classify_display_width(); }
     emit_decorated(str_from(root_cstr), load64(&col_slot), load64(&ic_slot), icon_pad,
                    load64(&gc_slot), git_pad, load64(&cl_slot), cls_pad);
-    sys_write(STDOUT_FD, "\n", 1);
+    d_write(STDOUT_FD, "\n", 1);
     var depth_stack = vec_new();
     _tree_recurse(str_from(root_cstr), 0, max_depth, depth_stack,
                   want_long, want_human, want_color, want_icons, git_ctx, want_classify,

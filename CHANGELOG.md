@@ -4,6 +4,112 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.1] — v1.3.1: cycc 6.5.35 + darshana 1.0.0
+
+Toolchain + dependency bump. The manifest pin had drifted a full
+minor behind the installed wrapper (`6.4.24` vs `6.5.35` — 111
+releases, warning on every build); this catches it up. darshana is
+bumped `0.9.0` → **`1.0.0`**, its **API freeze** — the 29-function /
+37-constant surface is now contract, so a future break costs upstream
+a major bump plus its own ADR. Both symbols darshini calls
+(`tty_sgr` / `tty_sgr_reset`) are inside the frozen set, so darshini's
+sole external dep is now a stable target.
+
+Patch bump: no darshini behavior change on any target, and no
+call-site repair. The 0.9.3 pre-freeze breaks
+(`tty_sgr_reset_buf` / `tty_dec_buf` gained a `-1` return, and the
+four `AGNOS_*` constants were privatized to `_AGNOS_*`) touch zero
+darshini call sites — verified by grep, not assumed. The same cut
+refactored `tty_sgr` into a wrapper over `tty_sgr_buf` and collapsed
+three copies of the decimal emitter into one `_ansi_emit_u8`; the
+emitted bytes are unchanged, verified here at the wire rather than
+taken from upstream's changelog.
+
+Only functional source change is the lockstep `--version` string.
+
+**Verified byte-for-byte.** A reference binary built from the v1.3.0
+tree with cycc 6.4.24 + darshana 0.9.0 was diffed against the new
+build across **77 comparisons on four build targets**: 26 listing
+modes on a pipe, 27 under a real 80×24 pseudo-terminal (which is what
+actually exercises the darshana escape path — the pipe runs never
+emit a single SGR byte), 12 on the agnos target under `mirshi
+--root`, and 12 on the aarch64 build under `qemu-aarch64`. Output is
+identical in every one, escape sequences included. Fixture covers
+dirs, symlinks, a broken link, a FIFO, an unreadable dir, a
+magic-bytes ELF and PNG, a `.gitignore`d path, and modified /
+untracked git states.
+
+A 10-agent audit then swept the delta the A/B could not reach: the
+111-release cycc changelog, the vendored-source diff at darshini's
+call sites, and several hundred further probes covering filename
+lengths to 255, CJK / combining / RTL / zero-width names, embedded
+ESC and CSI bytes, 20k- and 120k-entry directories, 4,000-level
+nesting, symlink loops, sizes to i64max, mtimes from epoch 0 to year
+9999, setuid/setgid/sticky, terminal widths 0 to 65535, malformed
+`.git` indexes (truncated, v3, v4, entry-count liars), and SIGPIPE
+mid-listing. 60 candidate findings were raised and put through
+adversarial refutation; **11 of the 12 material ones were killed**,
+and the survivor was a stale sentence in
+`docs/guides/getting-started.md`, fixed below. No defect in the
+shipped binary.
+
+The aarch64 row is a **no-regression** check, not a support claim.
+That build still degrades to `?` placeholders for every stat-derived
+column (`-l`, `-F`, `-T`, `--git`) because `walk.cyr`'s `lstat_path`
+issues bare syscall 6, which is not `lstat` on aarch64 — the gotcha
+state.md has carried since M1. It is byte-for-byte as broken after
+this bump as before it, so the toolchain move neither fixed nor
+worsened it. Linux x86_64 and agnos remain the supported targets.
+
+Clean build on all three targets, `cyrius lint` free of non-cosmetic
+warnings, `cyrius vet` 9 deps / 0 untrusted / 0 missing, fuzz harness
+green, and 233/233 assertions passing.
+
+### Changed
+
+- `cyrius.cyml` pin bumped `6.4.24` → `6.5.35`; `lib/` refreshed to
+  the 6.5.35 snapshot (`cyrius lib sync --full`, 108 files). Traced
+  to darshini's actual call sites rather than read off the diffstat:
+  of the 10 vendored modules it pulls in, exactly **three** changed
+  functions darshini calls.
+  - `path_join` (2 sites — `tree.cyr:170`, `long.cyr:80`):
+    signature-only, untyped params became `: Str`. Body unchanged;
+    the untyped call sites still type-check.
+  - `dir_list` (1 site — `walk.cyr`): same `: Str` annotation, plus
+    cycc 6.5.11 moved its 4 KB `getdents` scratch from `alloc()` to a
+    stack local. Since the default allocator is a bump allocator with
+    no free, darshini's Linux listing path stops burning ~4 KB per
+    directory — a free win.
+  - `lib/string.cyr`'s `print_num` i64::MIN fix and `lib/args.cyr`'s
+    comment edit affect nothing: darshini has no call site for either
+    (it formats its own sizes and timestamps), and DCE drops them.
+
+  Everything else in the range is additive or has zero darshini call
+  sites — including `dir_walk`'s v6.5.12 symlink-descend loop guard
+  and the two `_cfo` const-fold miscompile fixes, both real changes
+  that darshini's source contains no instance of.
+- `[deps.darshana]` tag bumped `0.9.0` → `1.0.0` — the upstream API
+  freeze. Dep-bump-only for darshini.
+- `--version` string → `darshini 1.3.1`.
+- `docs/guides/getting-started.md` no longer tells readers that
+  `cyrius bench` cannot auto-discover `tests/*.bcyr`. cycc **6.4.78**
+  — inside this pin's range — made it walk `tests/` too, so bare
+  `cyrius bench` now finds `tests/darshini.bcyr`. Verified in both
+  directions: 6.4.24 reports "No benchmarks found", 6.5.35 discovers
+  and runs all 13 cases. The explicit-path form still works and is
+  what `docs/benchmarks.md` captured.
+- `docs/development/state.md` records three findings the sweep
+  verified but which are **not** defects introduced here: `-l`'s
+  `format_mtime` reads chrono's `DateTime` by raw byte offset, a
+  layout cycc 6.4.67 explicitly made private behind new accessors
+  (additive this bump, so mtimes are byte-identical); darshini's
+  agnos `_d_dir_list_agnos` still bump-allocates the 4 KB getdents
+  scratch that cycc 6.5.11 moved to the stack for the Linux path it
+  mirrors — an asymmetry this bump introduces; and agnos
+  `sys_readdir` (#81, new in 6.4.44) must *not* replace darshini's
+  `sys_getdents` (#29) enumerator, because its fixed 64-byte records
+  cap filenames at 63 bytes. All three are left for their own cuts.
+
 ## [1.3.0] — 2026-07-08: agnos target support + cycc 6.4.24 / darshana 0.9.0
 
 darshini now builds `cyrius build --agnos src/main.cyr` and **runs on

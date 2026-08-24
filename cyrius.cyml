@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "darshini — eza-equivalent pretty file listing (colors, icons, git-status, tree view, mime-type recognition). Sanskrit दर्शिनी: she who shows. Sibling-not-competitor to kriya's minimal ls."
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.4.24"
+cyrius = "6.5.35"
 
 [build]
 entry = "src/main.cyr"
@@ -16,16 +16,18 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "args", "fs"
 
 # darshana — TTY/ANSI/cursor primitives. Per CLAUDE.md's hard rule
 # (no raw ANSI inline), every color escape darshini emits routes
-# through darshana's tty_sgr / tty_sgr_reset. Pinned at 0.9.0 (was
-# 0.7.1). darshini's entire darshana surface is tty_sgr /
-# tty_sgr_reset, both unchanged across the 0.7→0.9 line — the 0.8/0.9
-# additions (agnos TTY peers: signalfd/epoll/getdents for full-screen
-# TUI consumers) are ones darshini never calls, so this is a
-# dep-bump-only upgrade for us. Roadmap M4 dep gate is "≥ 0.3.0";
-# we're well past that.
+# through darshana's tty_sgr / tty_sgr_reset. Pinned at 1.0.0 (was
+# 0.9.0) — darshana's **API freeze**: the 29-fn / 37-const surface is
+# now contract, so a break costs upstream a major bump plus an ADR.
+# Both symbols darshini calls are in the frozen set. The 0.9.3
+# pre-freeze breaks (`tty_sgr_reset_buf` / `tty_dec_buf` gained a -1
+# return; `AGNOS_*` → `_AGNOS_*`) touch zero darshini call sites, and
+# 0.9.3's `tty_sgr` → wrapper-over-`tty_sgr_buf` refactor is
+# byte-identical on the wire. Dep-bump-only for us. Roadmap M4 dep
+# gate is "≥ 0.3.0"; we're well past that.
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
-tag = "0.9.0"
+tag = "1.0.0"
 modules = ["dist/darshana.cyr"]
 
 # Future: possibly [deps.chakshu] later for AI-augmented mime-

@@ -5,6 +5,32 @@
 
 ## Version
 
+**1.3.1** — cycc 6.5.35 + darshana 1.0.0, shipped
+2026-08-23. Toolchain + dep bump, no darshini behavior
+change on any target. The manifest pin had drifted a full
+minor behind the installed wrapper (`6.4.24` vs `6.5.35`,
+111 releases); this catches it up and `lib/` is re-synced
+to the 6.5.35 snapshot (108 files). darshana `0.9.0` →
+**`1.0.0`** is the upstream **API freeze**: the 29-fn /
+37-const surface is now contract, and both symbols darshini
+calls (`tty_sgr` / `tty_sgr_reset`) sit inside it — so
+darshini's sole external dep is now a stable target. The
+0.9.3 pre-freeze breaks (`tty_sgr_reset_buf` / `tty_dec_buf`
+`-1` return; `AGNOS_*` → `_AGNOS_*`) touch zero darshini
+call sites, and 0.9.3's `tty_sgr`-as-wrapper refactor is
+byte-identical on the wire — verified here at the wire, not
+taken from the upstream changelog. Verified byte-for-byte
+against a v1.3.0 reference binary (cycc 6.4.24 + darshana
+0.9.0) across **77 comparisons on four targets**: 26 modes
+on a pipe, 27 under a real 80×24 PTY (the only runs that
+actually emit SGR bytes), 12 on agnos under `mirshi --root`,
+12 on the aarch64 build under `qemu-aarch64` — identical in
+every one. The aarch64 row is a **no-regression** check, not
+a support claim: that build still shows `?` for every
+stat-derived column (the bare-syscall-6 `lstat_path` gotcha
+below), byte-for-byte as before the bump. Supported targets
+stay Linux x86_64 + agnos. 233/233 green, lint clean, fuzz
+green. Patch bump. Prior:
 **1.3.0** — agnos target support + cycc 6.4.24 +
 darshana 0.9.0, shipped 2026-07-08. darshini now builds
 `cyrius build --agnos` and **runs on AGNOS under mirshi** —
@@ -56,7 +82,7 @@ darshini`. Non-breaking under the M10 freeze.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.4.24` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.5.35` (in `cyrius.cyml [package].cyrius`)
 
 ## Shape
 
@@ -117,6 +143,7 @@ M9+ onward fills:
 | v1.2.0: darshana 0.7.0 (breaking, no repair) + cycc 6.1.26 | v1.2.0 | **shipped** (v1.2.0) |
 | v1.2.1: cycc 6.2.22 + darshana 0.7.1 (toolchain-only) | v1.2.1 | **shipped** (v1.2.1) |
 | v1.3.0: agnos target support (FS-ABI port) + cycc 6.4.24 + darshana 0.9.0 | v1.3.0 | **shipped** (v1.3.0) |
+| v1.3.1: cycc 6.5.35 + darshana 1.0.0 (upstream API freeze) | v1.3.1 | **shipped** (v1.3.1) |
 
 ## Tests
 
@@ -136,13 +163,18 @@ M9+ onward fills:
 Direct (declared in `cyrius.cyml`):
 
 - stdlib — string, fmt, alloc, io, vec, str, syscalls, args, fs,
-  chrono, assert, bench. `args` + `fs` added at M1 (argv access
-  + getdents64-backed dir_list); `chrono` added at M2 for
-  `epoch_to_date` + the 2-digit / 4-digit formatting helpers.
-- `[deps.darshana]` (git, tag 0.9.0) — TTY/ANSI/cursor primitives.
+  chrono, hashmap, assert, bench. `args` + `fs` added at M1 (argv
+  access + getdents64-backed dir_list); `chrono` added at M2 for
+  `epoch_to_date` + the 2-digit / 4-digit formatting helpers;
+  `hashmap` added at v1.1.0 for the `--git` status map. (This list
+  had omitted `hashmap` since v1.1.0 — corrected at v1.3.1; the
+  manifest was always right.)
+- `[deps.darshana]` (git, tag 1.0.0) — TTY/ANSI/cursor primitives.
   First external dep; landed at M4 for the color escapes. All
   raw ANSI routes through darshana's `tty_sgr` / `tty_sgr_reset`
-  per CLAUDE.md.
+  per CLAUDE.md. **Frozen upstream as of 1.0.0** — both symbols
+  darshini calls are inside the 29-fn / 37-const contract, so a
+  future break there costs upstream a major bump plus an ADR.
 
 ## Consumers
 
@@ -161,7 +193,25 @@ v1.2 backlog (per user direction post-v1.1.1):
 
 Hot-path optimization candidates from
 [`docs/benchmarks.md`](../benchmarks.md) all shipped in
-v1.1.2. No remaining performance backlog.
+v1.1.2. Two new candidates were surfaced by the v1.3.1
+toolchain sweep — both are additions the 6.5.35 stdlib made
+available, neither is a defect:
+
+- **`vec_sort_by` / `vec_select_nth`** (cycc 6.5.4) could
+  replace `render.cyr`'s hand-rolled merge sort. cycc's own
+  changelog names darshini's sort as one of the two motivating
+  cases. `sort_entries` allocates an N-slot scratch vec per
+  call that the bump allocator never reclaims; the stdlib
+  introsort is O(1) extra memory.
+- **`CYRIUS_PKG_VERSION`** (cycc 6.5.21) now resolves from
+  included files, which would let `_darshini_version_str()`
+  stop being a hand-bumped literal and read `VERSION`
+  directly — retiring the lockstep-bump step in CLAUDE.md's
+  Work Loop and the CI grep that guards it.
+
+Both are non-breaking additions permitted under the M10
+freeze, and both were left out of the v1.3.1 patch cut as
+source changes beyond a dep bump.
 
 Non-roadmap items remain non-breaking additions per the M10
 freeze contract.
@@ -179,13 +229,59 @@ freeze contract.
   picks locale-free + stable over matching `ls -l`'s local-time
   default; users comparing the two side-by-side will see their
   UTC-offset as a discrepancy. Documented in the M2 CHANGELOG.
-- **Linux x86_64 only through v1.0.** Per roadmap "Out of scope":
-  non-x86 / non-Linux is **post-v1**. Specific x86_64 dependencies
-  to revisit when platform work opens: (a) `walk.cyr`'s
-  `lstat_path` uses bare syscall 6 — aarch64 needs an at-family
-  detour through `newfstatat`; (b) `columns.cyr`'s
+- **Supported targets are Linux x86_64 and agnos** (agnos since
+  v1.3.0). `cyrius build --aarch64` *compiles and runs*, but the
+  binary is not usable: measured at v1.3.1 under `qemu-aarch64`,
+  every stat-derived column renders as `?` placeholders —
+  `?????????? ? ????-??-?? ??:??` under `-l`, no `/` or `@`
+  classification under `-F`, no recursion under `-T`, and
+  misclassified `--git` status. Plain listing, `-1`, `-d` and
+  `--mime` (which does not need stat for the filename/ext arms)
+  are correct. It degrades rather than crashing, and is
+  byte-for-byte identical pre- and post-v1.3.1, so the toolchain
+  bump neither fixed nor worsened it. Per roadmap "Out of scope",
+  non-x86 Linux is **post-v1**. The three x86_64 dependencies to
+  fix when platform work opens: (a) `walk.cyr`'s `lstat_path`
+  uses bare syscall 6 — on aarch64 that is not `lstat`, and this
+  is the cause of the `?` columns above; aarch64 needs an
+  at-family detour through `newfstatat`; (b) `columns.cyr`'s
   `TIOCGWINSZ_LINUX = 0x5413` is Linux-only (BSDs use a
   different request number); (c) `walk.cyr` reads `st_mode` at
   offset 24 per the x86_64 stat layout. All three already use
   the `Stat` enum or local constants, so the arch-dispatch
   pattern is clear when the time comes.
+
+- **`format_mtime` reads chrono's `DateTime` by raw byte offset.**
+  `render.cyr:321-330` does `load64(d)`, `load64(d + 8)` … `load64(d
+  + 32)` for year/month/day/hour/minute on the struct `epoch_to_date`
+  returns. cycc 6.4.67 added public accessors (`dt_year` / `dt_month`
+  / `dt_day` / `dt_hour` / `dt_minute` / `dt_second`) whose stated
+  purpose is to *keep that layout private* — so darshini now depends
+  on an explicitly-unsupported detail. Verified safe at v1.3.1: the
+  `lib/chrono.cyr` delta is purely additive (+307/-0) and
+  `epoch_to_date`'s body is unchanged, so `-l` mtimes are
+  byte-identical. Move to the accessors before the layout moves under
+  us.
+
+- **darshini's agnos `dir_list` mirror still bump-allocates its
+  getdents scratch.** cycc 6.5.11 moved the stdlib `dir_list` /
+  `is_dir` 4 KB scratch from `alloc()` to a stack local, because the
+  default allocator is a *bump* allocator with no free — the upstream
+  note measures the old cost at 4104 B **per call**. darshini's Linux
+  path uses the stdlib and so picked the fix up for free at v1.3.1;
+  its agnos peer `_d_dir_list_agnos` (`walk.cyr:154`) still reads
+  `var buf = alloc(4096)`. So the bump *introduced an asymmetry*: on
+  agnos, every directory visited still burns 4 KB that is never
+  returned, which compounds under `-T` on a deep tree. One-line fix
+  (`var sbuf[4096]; var buf = &sbuf;`), deliberately **not** taken in
+  the v1.3.1 patch cut — it is an agnos behavior change and wants its
+  own test pass.
+
+- **Do not "simplify" `_d_dir_list_agnos` onto agnos `sys_readdir`.**
+  cycc 6.4.44 added a `sys_readdir` (#81) wrapper that looks like it
+  obsoletes darshini's hand-rolled `sys_getdents` (#29) enumerator.
+  It does not: its records are a fixed 64 bytes with the name at +0
+  and the type at +63, which **caps filenames at 63 bytes**. Adopting
+  it would silently truncate or drop longer names. The #29 constants
+  darshini depends on (`DIRENT_RECLEN` / `_TYPE` / `_NAMELEN` /
+  `_NAME`, `AO_DIRECTORY`) are unchanged across this bump. Keep #29.

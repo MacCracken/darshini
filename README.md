@@ -118,7 +118,7 @@ toolchain on PATH; the version is pinned in `cyrius.cyml`.
 
 ```sh
 cp build/darshini ~/.local/bin/                       # or wherever your PATH points
-darshini --version                                     # → "darshini 1.3.0"
+darshini --version                                     # → "darshini 1.3.1"
 ```
 
 Suggested zsh aliases (the maintainer's

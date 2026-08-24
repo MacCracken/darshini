@@ -7,11 +7,15 @@ cyrius deps                                  # resolve stdlib + darshana
 cyrius build src/main.cyr build/darshini     # compile
 ./build/darshini                              # list the current directory
 cyrius test                                   # run tests/*.tcyr
-cyrius bench tests/darshini.bcyr              # run perf benches
+cyrius bench                                 # run perf benches
 ```
 
-Note `cyrius bench` won't auto-discover `tests/*.bcyr` — pass
-the explicit path.
+`cyrius bench` auto-discovers `tests/darshini.bcyr` as of cycc
+**6.4.78** (darshini picked this up at v1.3.1 with the 6.5.35 pin).
+Before that it looked only in `benches/` and `tests/bcyr/` and
+reported "No benchmarks found", which is why the older docs pass
+`tests/darshini.bcyr` explicitly. The explicit form still works and
+is what [`docs/benchmarks.md`](../benchmarks.md) captured.
 
 ## Install for daily use
 

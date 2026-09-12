@@ -310,8 +310,8 @@ fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad, classify_char,
         d_write(STDOUT_FD, icon, strlen(icon));
         d_write(STDOUT_FD, " ", 1);
     } else { if (icon_pad > 0) {
-        d_write(STDOUT_FD, "  ", 2);
-    } }
+            d_write(STDOUT_FD, "  ", 2);
+        } }
     _write_name_bytes(str_data(name), str_len(name));
     # v1.1 -F classify indicator: trailing 1-char suffix (or
     # space if `-F` is on but the entry's mode has no indicator —

@@ -121,7 +121,7 @@ fn _git_normalize_abs(p): i64 {
 # and see `_git_normalize_abs` for why `..` must stay lexical.
 fn _git_make_absolute(p): i64 {
     if (load8(p) == 47) { return _git_normalize_abs(p); }
-#ifdef CYRIUS_TARGET_AGNOS
+    #ifdef CYRIUS_TARGET_AGNOS
     # agnos has no getcwd (no per-process cwd in the userland ABI —
     # "CWD is userland-owned, absolute paths"). A relative listing
     # path therefore can't be anchored to a repo root, so `--git` is
@@ -130,7 +130,7 @@ fn _git_make_absolute(p): i64 {
     # anchor) → git_open returns 0 → the column silently doesn't
     # appear, exactly as the M7 out-of-repo acceptance criterion.
     return p;
-#else
+    #else
     var cwd_buf = alloc(4096);
     var n = syscall(SYS_GETCWD, cwd_buf, 4096);
     if (n <= 0) { return p; }
@@ -144,7 +144,7 @@ fn _git_make_absolute(p): i64 {
     # cwd + "/" + "." is the bare-`darshini --git` case; normalize
     # before find_root sees it.
     return _git_normalize_abs(out);
-#endif
+    #endif
 }
 
 # Walk up from `dir_abs` (must be an absolute cstr), checking
@@ -168,9 +168,9 @@ fn _git_find_root(dir_abs): i64 {
             store8(probe + pos, 47);
             pos = pos + 1;
         } else { if (load8(buf + cur_len - 1) != 47) {
-            store8(probe + pos, 47);
-            pos = pos + 1;
-        } }
+                store8(probe + pos, 47);
+                pos = pos + 1;
+            } }
         store8(probe + pos + 0, 46);
         store8(probe + pos + 1, 103);
         store8(probe + pos + 2, 105);
@@ -193,7 +193,7 @@ fn _git_find_root(dir_abs): i64 {
                     found = i;
                     scanning = 0;
                 } else { if (i == 0) { scanning = 0; }
-                else { i = i - 1; } }
+                    else { i = i - 1; } }
             }
             if (found <= 0) { done = 1; }
             else { store8(buf + found, 0); }
@@ -296,7 +296,7 @@ fn _git_parse_ignore(buf, len, patterns): i64 {
         while (scanning == 1) {
             if (line_end >= len) { scanning = 0; }
             else { if (load8(buf + line_end) == 10) { scanning = 0; }
-            else { line_end = line_end + 1; } }
+                else { line_end = line_end + 1; } }
         }
         var line_len = line_end - pos;
         # Trim trailing CR
@@ -325,16 +325,16 @@ fn _git_parse_ignore(buf, len, patterns): i64 {
         if (l > 0) {
             var first = load8(buf + s);
             if (first != 35) { if (first != 33) {
-                # Not comment, not negation — keep it.
-                # Strip leading '/' (root-anchor; we match basename only).
-                if (first == 47) { s = s + 1; l = l - 1; }
-                if (l > 0) {
-                    var pat = alloc(l + 1);
-                    memcpy(pat, buf + s, l);
-                    store8(pat + l, 0);
-                    vec_push(patterns, str_clone(str_from(pat)));
-                }
-            } }
+                    # Not comment, not negation — keep it.
+                    # Strip leading '/' (root-anchor; we match basename only).
+                    if (first == 47) { s = s + 1; l = l - 1; }
+                    if (l > 0) {
+                        var pat = alloc(l + 1);
+                        memcpy(pat, buf + s, l);
+                        store8(pat + l, 0);
+                        vec_push(patterns, str_clone(str_from(pat)));
+                    }
+                } }
         }
         pos = line_end + 1;
     }

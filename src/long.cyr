@@ -247,8 +247,8 @@ fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx, want_
         var is_dir = 0;
         if ((mode & S_IFMT) == S_IFDIR) { is_dir = 1; }
         gc = git_status_for(git_ctx, path_str, is_dir,
-                            load64(stat_buf + STAT_MTIME),
-                            load64(stat_buf + STAT_SIZE));
+          load64(stat_buf + STAT_MTIME),
+          load64(stat_buf + STAT_SIZE));
     }
     var cl = 0;
     var cls_pad = 0;

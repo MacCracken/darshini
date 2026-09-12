@@ -122,21 +122,21 @@ var EACCES = 13;
 # darshini stays a single Linux-shaped code path. On Linux each is a
 # transparent forward; on agnos each supplies the explicit length.
 fn d_stat(cpath, buf): i64 {
-#ifdef CYRIUS_TARGET_AGNOS
+    #ifdef CYRIUS_TARGET_AGNOS
     return sys_stat(cpath, strlen(cpath), buf);
-#else
+    #else
     return sys_stat(cpath, buf);
-#endif
+    #endif
 }
 
 # Open `cpath` read-only. Linux passes (path, O_RDONLY, mode); agnos
 # passes (name, namelen, flags). O_RDONLY is 0 on both.
 fn d_open_ro(cpath): i64 {
-#ifdef CYRIUS_TARGET_AGNOS
+    #ifdef CYRIUS_TARGET_AGNOS
     return sys_open(cpath, strlen(cpath), O_RDONLY);
-#else
+    #else
     return sys_open(cpath, O_RDONLY, 0);
-#endif
+    #endif
 }
 
 # lstat `cpath` into `buf`. Linux has a dedicated lstat (syscall 6,
@@ -145,11 +145,11 @@ fn d_open_ro(cpath): i64 {
 # target's metadata there, an accepted degradation until agnos grows an
 # lstat. Returns 0 / negative on failure, same as d_stat.
 fn d_lstat(cpath, buf): i64 {
-#ifdef CYRIUS_TARGET_AGNOS
+    #ifdef CYRIUS_TARGET_AGNOS
     return sys_stat(cpath, strlen(cpath), buf);
-#else
+    #else
     return syscall(SYS_LSTAT_X86, cpath, buf);
-#endif
+    #endif
 }
 
 # Stat a null-terminated path and classify the result:
@@ -272,11 +272,11 @@ fn _d_dir_list_agnos(path): i64 {
 # pass can grow the return shape without breaking M1 callers. `.` and
 # `..` are filtered by the underlying enumerator.
 fn list_dir(path: Str): i64 {
-#ifdef CYRIUS_TARGET_AGNOS
+    #ifdef CYRIUS_TARGET_AGNOS
     return _d_dir_list_agnos(path);
-#else
+    #else
     return dir_list(path);
-#endif
+    #endif
 }
 
 # Classify-indicator (POSIX `-F`) for a stat mode. Returns the

@@ -864,23 +864,23 @@ fn main(): i64 {
     # Directory mode → inode/directory regardless of name.
     var dir_mode = 0x41ED;
     assert_eq(streq(mime_for_entry("/tmp", make_str("foo.md"), dir_mode), "inode/directory"), 1,
-              "dir mode beats ext");
+      "dir mode beats ext");
     # Regular file with known extension → extension lookup.
     var reg_mode = 0x81A4;
     assert_eq(streq(mime_for_entry("/nonexistent", make_str("README.md"), reg_mode), "text/markdown"), 1,
-              "README.md ext lookup");
+      "README.md ext lookup");
     assert_eq(streq(mime_for_entry("/nonexistent", make_str("main.cyr"), reg_mode), "application/x-cyrius"), 1,
-              "main.cyr ext lookup");
+      "main.cyr ext lookup");
     # Exact filename match wins over (missing) ext lookup.
     assert_eq(streq(mime_for_entry("/nonexistent", make_str("Makefile"), reg_mode), "text/x-makefile"), 1,
-              "Makefile exact-filename");
+      "Makefile exact-filename");
     # Executable bit on regular file with no known extension → x-executable.
     var exec_mode = 0x81ED;       # 0755 regular
     assert_eq(streq(mime_for_entry("/nonexistent", make_str("randomtool"), exec_mode), "application/x-executable"), 1,
-              "executable bit set + no ext -> x-executable");
+      "executable bit set + no ext -> x-executable");
     # Regular non-executable + unknown ext + path doesn't exist (magic open fails) → octet-stream
     assert_eq(streq(mime_for_entry("/nonexistent", make_str("foo.xyzunknown"), reg_mode), "application/octet-stream"), 1,
-              "unknown ext + magic-open-fails -> octet-stream");
+      "unknown ext + magic-open-fails -> octet-stream");
 
     return assert_summary();
 }

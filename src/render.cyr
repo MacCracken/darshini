@@ -63,18 +63,18 @@ fn _merge(v, lo, mid, hi, scratch): i64 {
             vec_set(scratch, k, vec_get(v, j));
             j = j + 1;
         } else { if (j >= hi) {
-            vec_set(scratch, k, vec_get(v, i));
-            i = i + 1;
-        } else {
-            # Stable: take left unless right is strictly less.
-            if (str_lt_ci(vec_get(v, j), vec_get(v, i)) == 1) {
-                vec_set(scratch, k, vec_get(v, j));
-                j = j + 1;
-            } else {
                 vec_set(scratch, k, vec_get(v, i));
                 i = i + 1;
-            }
-        } }
+            } else {
+                # Stable: take left unless right is strictly less.
+                if (str_lt_ci(vec_get(v, j), vec_get(v, i)) == 1) {
+                    vec_set(scratch, k, vec_get(v, j));
+                    j = j + 1;
+                } else {
+                    vec_set(scratch, k, vec_get(v, i));
+                    i = i + 1;
+                }
+            } }
         k = k + 1;
     }
     var c = lo;

@@ -4,6 +4,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-09-11
+
+### Changed
+
+- **Toolchain `6.5.35` → `6.6.2`.** No source change; the value form needed none.
+  Build, tests, and any bench/fuzz/distlib target the repo ships re-verified at the new pin.
+
+
 ## [1.3.3] — v1.3.3: the v1.3.2 deferred backlog
 
 Closes every item the [P(-1) sweep](docs/audit/2026-08-23-audit.md)

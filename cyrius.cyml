@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "darshini — eza-equivalent pretty file listing (colors, icons, git-status, tree view, mime-type recognition). Sanskrit दर्शिनी: she who shows. Sibling-not-competitor to kriya's minimal ls."
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.5.35"
+cyrius = "6.6.2"
 
 [build]
 entry = "src/main.cyr"

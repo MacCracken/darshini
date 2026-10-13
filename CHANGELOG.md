@@ -4,6 +4,198 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-12
+
+Toolchain `6.6.2` → **`6.7.9`** (the cyrius 6.7 language minor), darshana
+`1.0.0` → **`1.3.0`**, darshini's terminal code moved onto darshana's
+primitives, and a security fix: untrusted names still reached the terminal
+raw through four output paths the v1.3.2 sanitizer never covered.
+
+Minor bump. No CLI flag, exit code or pipe-output byte changes; what a
+terminal shows changes only for hostile or malformed names (below). Not
+`Breaking` under CLAUDE.md's rule — no flag changed, and the pipe bytes,
+the machine-readable contract, are identical — but it is a change in TTY
+rendering, made as a security fix, as v1.3.2's was.
+
+**Verified.** Every step was A/B-diffed across 52 invocation modes on a
+fixture holding dirs, live / broken / dir symlinks, a FIFO, a socket, an
+unreadable and an unsearchable dir, setuid / setgid / sticky bits, ELF and
+PNG magic, 5 GB sparse and 1023 / 1024-byte files, a 1960 mtime, a CRLF
+`.gitignore`, git modified / untracked / ignored states, a 200-byte name,
+UTF-8 / Latin-1 / truncated-UTF-8 names and nine control-byte names — on a
+pipe, under a real PTY at 100, 53 and 0 columns, on the agnos build under
+`mirshi --root`, and on the aarch64 build under `qemu-aarch64` (pipe and PTY).
+
+- Toolchain alone (darshana still 1.0.0): **0 differences** on x86_64 (pipe
+  and PTY) and agnos. aarch64 changed in 26 / 36 modes — see *Fixed*.
+- darshana 1.3.0 on top: **0 differences** on every target.
+- The source changes on top: on a pipe, only `--help` / `--version` differ
+  (the version string), on x86_64 and aarch64 alike. Under a PTY and on
+  agnos, every changed line is one of the fixture's control-byte or
+  malformed-UTF-8 names (checked line by line, not eyeballed).
+- `CYRIUS_DCE=1` (the release build) against the normal build: 0
+  differences in 156 comparisons.
+
+### Security
+
+- **Untrusted paths reached the terminal raw outside the listing itself.**
+  v1.3.2 sanitized entry names inside a listing, but four other output
+  paths wrote their bytes with the raw writer:
+    1. a non-directory argument echoed as-is — `darshini *` sends every
+       non-directory name in the directory down this path;
+    2. `-d`'s echo of its argument (the README's own `ldir='darshini -d */'`
+       alias goes through it);
+    3. the multi-path `<dir>:` header — where `darshini *` sends every
+       directory name whenever it expands to more than one argument;
+    4. the path quoted in every error message, and the argument quoted in
+       `unknown flag` — on stderr, which is the terminal even when stdout is
+       redirected.
+
+  Repro, in an empty directory, on a terminal: `touch "$(printf 'a\033[2Jx')";
+  darshini *` — v1.3.4 writes the raw `ESC [2J` (clear screen), v1.4.0
+  prints `a?[2Jx`. And `mkdir "$(printf 'd\033[1A\033[2Kx')"; chmod 000
+  d*; darshini d* > /dev/null` — v1.3.4's error message writes a raw
+  cursor-up + erase-line to the terminal, v1.4.0's shows `d?[1A?[2Kx`.
+  (Bytes captured under a PTY with `script`.) All four now go through
+  the sanitizer, and the decision is made once per run **per stream** in
+  `main()` — stdout for names, stderr for diagnostics — before the first
+  byte goes out, instead of inside `run()` on stdout's state alone. On a
+  pipe or file the true bytes are still written, as before.
+- **Raw C1 controls and malformed UTF-8 passed the listing sanitizer.** The
+  v1.3.2 rule replaced C0, DEL and the UTF-8 encoding of C1 (`C2 80`–`C2
+  9F`), and passed every other byte ≥ 0x80 — including a raw `0x9B`, the
+  8-bit CSI, to a terminal that honors 8-bit controls. Names now go through
+  darshana's `tty_sanitize_buf` in `TTY_SANITIZE_UTF8` mode (darshana ADR
+  0004, the rule the rest of the AGNOS stack shares), which also neutralizes
+  every byte that is not well-formed UTF-8 — what GNU `ls -q` does in a
+  UTF-8 locale, except that `ls` collapses a truncated tail to one `?`.
+  Well-formed UTF-8 (accents, CJK, emoji) is untouched. UTF-8 mode is right
+  for darshini specifically because it already assumes a UTF-8 terminal:
+  its icons and tree connectors are UTF-8 on every TTY.
+
+  What a terminal shows changes for exactly these names: a raw C1 byte, a
+  stray continuation or invalid lead byte, or a truncated sequence is now
+  one `?` per byte (`caf\xe9` shows as `caf?`); an encoded C1 control is now
+  **one** `?` (it was `??`). Multi-column alignment is unaffected — the
+  layout now measures a name by the bytes actually written
+  (`_name_display_len`) rather than `str_len`, so a row holding a
+  shortened name stays aligned (checked on a 30-entry grid at 80 columns,
+  with and without icons / `-F`). Well-formed multibyte names still
+  misalign the grid, exactly as before: widths are bytes, not cells
+  (now a roadmap item).
+- **AGNOS never sanitized at all.** Sanitization was keyed on
+  `term_width() > 0`, and `term_width()` is always 0 on agnos, so on the
+  agnos console every control byte in every name went out raw. It is now
+  keyed on darshana's `tty_isatty`. On agnos that answers whether the
+  console is up — there is no per-fd terminal property — so names are
+  sanitized whenever it is, **including in a redirected or piped listing**.
+  That is the deliberate fail-safe direction for a terminal-safety control;
+  on agnos a script consuming darshini output sees `?` for control bytes in
+  names. Linux is unaffected: there `tty_isatty` is per-fd.
+
+### Changed
+
+- **Toolchain `6.6.2` → `6.7.9`.** The 6.7 language changes needed **no
+  source repair**: no lone `!`, no identifier spelled `const` / `true` /
+  `false` / `do` / `dyn` / `trait`, no compound assignment, no unary `-` /
+  `~` on a constant, no typed narrow pointer (audited by grep, then
+  confirmed by the A/B above). Zero compile errors and zero new warnings on
+  x86_64, agnos and aarch64. `lib/` re-vendored with `rm -rf lib/ && cyrius
+  deps`: **120 → 33 files** — the old tree was a whole-stdlib copy (it even
+  held modules the 6.7.9 snapshot no longer ships, such as `json` / `csv` /
+  `toml`); the new one is exactly the declared `[deps].stdlib` footprint's
+  closed graph.
+  `cyrius.lock` regenerated (see *Notes*).
+- **darshana `1.0.0` → `1.3.0`**, which needs cyrius ≥ 6.7.2 (its bundle
+  declares constants with `const`) — the reason the pin moved first. The
+  bump alone is byte-identical on every target.
+- **`term_width` uses darshana's `tty_winsize`** instead of re-implementing
+  its Linux half (the same `TIOCGWINSZ` ioctl). Not `tty_winsize_or`: it
+  writes its defaults when the query *fails* too, so it cannot tell "not a
+  terminal" (pipe → plain) from "a terminal of unknown size" (→ 80), and
+  that distinction is darshini's pipe-awareness. Linux output unchanged.
+- **AGNOS stays single-column and undecorated — now for the right reason.**
+  The roadmap's *stale AGNOS width claim* item was correct that agnos *can*
+  report the console size (darshana's `tty_winsize` reads winsize#60), and
+  `columns.cyr` no longer claims otherwise. But winsize#60 describes the
+  framebuffer, not fd 1, so it answers for a pipe or a file too, and agnsh
+  implements `>` and `|`. A probe build that used `tty_winsize` on agnos,
+  run under mirshi with stdout redirected to a file, wrote Nerd Font
+  glyphs, SGR escapes and an 8-column grid into it. Decoration stays off on
+  agnos until agnos exposes a per-fd terminal property; the Linux arm is
+  then the whole function.
+- **Escapes are composed, and checked.** Color now comes from darshana's
+  `tty_sgr_buf` / `tty_sgr_reset_buf` composed into one buffer and written
+  through `d_write`. Through v1.3.4 `tty_sgr` / `tty_sgr_reset` issued their
+  own unchecked `write(2)`, the only stdout bytes outside v1.3.3's
+  checked-write contract. A decorated entry is now at most three writes
+  (prefix, name, suffix) where it was up to eight: measured **129 → 91**
+  `write(2)` calls for `-1` on a 30-entry directory on a TTY, **304 → 226**
+  for `-l --git -F` on this repo's root. Same bytes, same order.
+- **Linux `lstat` is the stdlib's `sys_lstat`**, not `syscall(6, ...)` — an
+  x86_64 syscall number written bare. Identical call on x86_64.
+
+### Fixed
+
+- **The aarch64 build renders real metadata.** Built with cyrius 6.6.2 its
+  `lstat` was syscall 6 issued as-is — `lsetxattr` on aarch64 — so every
+  stat-derived column was `?` (`-l` on a single file even exited 1). 6.7.9's
+  backend happens to translate that number to
+  `newfstatat(AT_SYMLINK_NOFOLLOW)`; with `sys_lstat` the build no longer
+  depends on it. Measured: the aarch64 build's output is **byte-identical
+  to x86_64's in all 52 modes**, on a pipe and under a PTY. Whether aarch64
+  becomes a *supported* target is an owner decision, not made here.
+- **`tests/darshini.bcyr` warned on every build** — `undefined function
+  'git_status_for'` and `'git_display_width'`: it included `color.cyr` and
+  `columns.cyr` without `git.cyr`. Harmless only because no benchmark
+  reached those paths. Present since at least v1.3.4; now includes it.
+
+### Tests
+
+- **287 → 301 assertions.** The 20 `_is_ctrl_byte` assertions go with the
+  function. New: 19 pinning the sanitizer rule through darshini's wrapper
+  (ESC, OSC/BEL, encoded and raw C1, TAB / LF / CR / DEL / NUL, invalid and
+  truncated UTF-8, Latin-1 — and well-formed é / CJK / emoji / U+00A0
+  unchanged, which is also the `load8`-is-unsigned guard); 5 for
+  `_name_display_len` (pipe vs TTY, the >4096-byte heap path); 9 for the
+  widths-aware column math; 1 pinning `term_width() > 0` ⇔
+  `tty_isatty(stdout)` (on agnos: `term_width() == 0`).
+- The suite and the fuzz harness also run on the cross-targets: aarch64
+  under `qemu-aarch64` **301 / 301**, fuzz ok; agnos under `mirshi`
+  **299 / 301**, fuzz ok. The two agnos failures are the pre-existing
+  `-ENOENT` assertions — agnos reports a flat `-1` (see
+  `docs/architecture/002-agnos-fs-abi-split.md`) — and fail identically
+  on v1.3.4 (285 / 287). CI runs neither cross-target.
+- **Fuzz target 5 is the sanitizer** (2,000 inputs, biased toward ESC, C0,
+  DEL, `C2`, 0x80–0x9F and UTF-8 leads), replacing the retired predicate's
+  totality check. Invariants: output length within 0..len and nothing
+  written past it (canary); no C0 / DEL survives and darshana's own
+  `tty_has_ctl` finds nothing in the output; idempotent; clean input
+  unchanged; and `_name_display_len` equals the bytes actually written.
+  **Mutation-validated**: making `_name_display_len` ignore sanitization,
+  or switching the mode to `TTY_SANITIZE_LATIN1`, fails both the suite and
+  the fuzz target; making the column math ignore the widths fails the
+  suite.
+- **New CI gate** — *untrusted names are neutralized on a TTY, raw on a
+  pipe*: every path above (listing, `-1` / `-l` / `-T` / `-F`, argv echo,
+  `-d`, `-l` of an argument, the `-T` root, the multi-path header, an error
+  message with and without stdout redirected) must put no `0x1b` or `0x9b`
+  byte on the terminal, and the pipe must carry the true bytes. The v1.3.4
+  binary fails it.
+- `pick_cols`: within ~1 % of the pre-change code in interleaved bench runs
+  (1k entries at 80 columns: 197.0 / 198.6 µs before, 198.8 / 200.3 µs
+  after). The widths branch is hoisted out of the hot loop; inside it, it
+  cost ~5 %.
+
+### Notes
+
+- `cyrius deps` / `cyrius deps --lock` (6.7.9) kept the superseded
+  `darshana … 1.0.0` commit row in `cyrius.lock` after the tag moved to
+  1.3.0, and `cyrius deps --locked` accepted the file. Regenerated from
+  scratch instead (`cyrius.lock` removed, `cyrius deps`): one commit row,
+  every hash row identical to the stale file's. A cyrius defect, not fixed
+  here (this release touches no other repository).
+
 ## [1.3.4] - 2026-09-11
 
 ### Changed

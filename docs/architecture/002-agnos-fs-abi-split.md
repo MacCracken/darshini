@@ -1,6 +1,6 @@
 # 002 — the agnos filesystem ABI differs from Linux in four ways, and `walk.cyr` hides all of them
 
-**Applies to**: `src/walk.cyr`, `src/columns.cyr`, `src/git.cyr`.
+**Applies to**: `src/walk.cyr`, `src/columns.cyr`, `src/git.cyr`, `src/color.cyr`.
 **Landed**: v1.3.0.
 
 darshini builds for Linux x86_64 and for AGNOS from the same source. The
@@ -13,11 +13,16 @@ byte-identical.
 NUL-terminated cstr. The wrappers `d_stat` / `d_open_ro` / `d_lstat` in
 `walk.cyr` exist solely to hide this; call them rather than the raw syscalls.
 
-**2. There is no `lstat` on agnos** — syscall 6 is `close` there, not `lstat`.
+**2. There was no `lstat` on agnos** — syscall 6 is `close` there, not `lstat`.
 `d_lstat` falls back to `d_stat`, so on agnos a symlink reports its target.
-(The same literal 6 is why the `--aarch64` build renders `?` for every
-stat-derived column: on aarch64, 6 is not `lstat` either, and nothing there is
-gated. aarch64 is not a supported target.)
+agnos has since grown `lstat#102` (agnos 1.56.53), which the stdlib wraps as
+`sys_lstat(path, len, buf)`; adopting it changes how agnos renders symlinks and
+is tracked in the roadmap, not done.
+(Through v1.3.4 the Linux arm issued the literal 6 too, which is why the
+`--aarch64` build rendered `?` for every stat-derived column — 6 is
+`lsetxattr` there. Since v1.4.0 it calls the stdlib's arch-aware `sys_lstat`,
+and the aarch64 build's output is byte-identical to x86_64's. aarch64 is still
+not a declared supported target.)
 
 **3. The directory-read ABI is a different call with a different record
 layout.** The stdlib `dir_list` is Linux `getdents64` (#217) only. agnos uses
@@ -34,8 +39,16 @@ longer names.
 `--git` on agnos works only when given an absolute path: `_git_make_absolute`
 returns a relative path unchanged, the repo-root walk-up finds no anchor, and
 the column silently does not appear — the same degradation as the
-out-of-a-repo case. There is also no `ioctl`/`TIOCGWINSZ`, so `term_width`
-returns 0, which the pipe path already treats as "no terminal".
+out-of-a-repo case.
+
+**Terminal detection is console-wide, not per-fd.** There is no
+`ioctl`/`TIOCGWINSZ`; agnos reports the console grid through `winsize#60`,
+which darshana's `tty_winsize` / `tty_isatty` read. It describes the
+framebuffer, not fd 1, so it answers the same for a pipe or a file. Hence two
+deliberate, opposite defaults (v1.4.0): `term_width` returns 0 on agnos, so
+decoration and multi-column layout never reach a redirected listing; and name
+sanitization keys on `tty_isatty`, so it is on whenever the console is up,
+redirected or not. Each fails safe in its own direction.
 
 **Consequence for error handling**: agnos reports a flat `-1` rather than a
 specific errno, so the fine-grained `ENOENT` / `EACCES` branches simply fall

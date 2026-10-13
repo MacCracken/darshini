@@ -32,10 +32,14 @@ fn print_cstr_fd(fd, c): i64 {
     return 0;
 }
 
+# v1.4.0: the quoted path is untrusted — it is often a shell glob's
+# expansion, so `darshini *` hands us every name in the directory. On a
+# terminal it goes through the sanitizer like a listing name does
+# (color.cyr); through v1.3.4 it was written raw.
 fn emit_error(prog_path, path_cstr, msg): i64 {
     print_cstr_fd(STDERR_FD, prog_path);
     print_cstr_fd(STDERR_FD, ": ");
-    print_cstr_fd(STDERR_FD, path_cstr);
+    _write_err_bytes(path_cstr, strlen(path_cstr));
     print_cstr_fd(STDERR_FD, ": ");
     print_cstr_fd(STDERR_FD, msg);
     d_write(STDERR_FD, "\n", 1);
@@ -44,7 +48,7 @@ fn emit_error(prog_path, path_cstr, msg): i64 {
 
 fn emit_unknown_flag(arg): i64 {
     print_cstr_fd(STDERR_FD, "darshini: unknown flag: ");
-    print_cstr_fd(STDERR_FD, arg);
+    _write_err_bytes(arg, strlen(arg));          # untrusted: a glob can expand to "-<anything>"
     d_write(STDERR_FD, "\n", 1);
     print_cstr_fd(STDERR_FD, "usage: darshini [-l] [-h] [-1] [-T] [-F] [-d] [--level N] [--git] [--mime] [--no-color] [--no-icons] [--help] [--version] [path]\n");  #skip-lint
     return 0;
@@ -54,7 +58,7 @@ fn emit_unknown_flag(arg): i64 {
 # in lockstep with VERSION on every release. Pure cstr —
 # `--version` writes this then a newline.
 fn _darshini_version_str(): i64 {
-    return "darshini 1.3.4";
+    return "darshini 1.4.0";
 }
 
 fn emit_help(): i64 {
@@ -241,14 +245,8 @@ fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_ico
     if (tw > 0) { want_icons = 1; }
     if (want_no_color == 1) { want_color = 0; }
     if (want_no_icons == 1) { want_icons = 0; }
-    # v1.3.2 (P(-1) security): sanitize control characters in entry
-    # names whenever stdout is a terminal. Deliberately keyed on `tw`
-    # and NOT on want_color — `--no-color` disables decoration, not
-    # the terminal, and a hostile name is just as dangerous on a
-    # monochrome TTY. On a pipe `tw` is 0 and names are written raw,
-    # so script consumers still receive an openable filename.
-    set_sanitize_names(0);
-    if (tw > 0) { set_sanitize_names(1); }
+    # Name sanitization is NOT decided here: main() sets it once per
+    # run, per stream, before anything is written (v1.4.0 — see main).
     # Optional git context. When --git was passed but no
     # enclosing `.git/` is found, git_open returns 0 and the
     # column silently doesn't appear (per the M7 acceptance
@@ -263,8 +261,9 @@ fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_ico
                 return render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx, want_classify);
             }
             # Short-form -d: echo the path with optional classify
-            # indicator (matches `ls -d` shape).
-            print_cstr_fd(STDOUT_FD, path_cstr);
+            # indicator (matches `ls -d` shape). The path is untrusted
+            # (a glob expansion) and sanitized on a terminal (v1.4.0).
+            _write_name_bytes(path_cstr, strlen(path_cstr));
             if (want_classify == 1) {
                 # Path is a directory (c == 1) → trailing slash.
                 d_write(STDOUT_FD, "/", 1);
@@ -329,7 +328,10 @@ fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_ico
     if (want_long == 1) {
         return render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx, want_classify);
     }
-    print_cstr_fd(STDOUT_FD, path_cstr);
+    # A non-directory argument echoed as-is — `darshini *` lands here
+    # for every file in the directory, so it is sanitized on a terminal
+    # exactly like a listing name (v1.4.0; it was written raw).
+    _write_name_bytes(path_cstr, strlen(path_cstr));
     d_write(STDOUT_FD, "\n", 1);
     return 0;
 }
@@ -422,7 +424,7 @@ fn run_all(paths, want_long, want_human, want_single, want_no_color, want_no_ico
             else { if (pass1_emitted == 1) { d_write(STDOUT_FD, "\n", 1); } }
             first_dir = 0;
             if (need_dir_headers == 1) {
-                print_cstr_fd(STDOUT_FD, p);
+                _write_name_bytes(p, strlen(p));     # untrusted, as in run() (v1.4.0)
                 d_write(STDOUT_FD, ":\n", 2);
             }
             var rc = run(p, want_long, want_human, want_single, want_no_color, want_no_icons,
@@ -437,6 +439,21 @@ fn run_all(paths, want_long, want_human, want_single, want_no_color, want_no_ico
 fn main(): i64 {
     alloc_init();
     args_init();
+    # v1.4.0: decide untrusted-text sanitization once, per stream, before
+    # the first byte goes out — before parse_cli too, whose unknown-flag
+    # diagnostic quotes an argument. Through v1.3.4 it was set inside
+    # run() and applied to listing names only: the multi-path `<dir>:`
+    # header, every argv path echoed by `-d` or as a non-directory, and
+    # every path in an error message went out through the raw writer
+    # and reached the terminal unsanitized. Keyed on the terminal, NOT
+    # on want_color:
+    # `--no-color` disables decoration, not the terminal, and a hostile
+    # name is just as dangerous on a monochrome TTY. On a pipe or file
+    # the true bytes are written, so scripts still receive an openable
+    # name. darshana's tty_isatty is the same TIOCGWINSZ probe on Linux
+    # that term_width makes; for AGNOS see color.cyr.
+    set_sanitize_names(tty_isatty(STDOUT_FD));
+    set_sanitize_errs(tty_isatty(STDERR_FD));
     var want_long = 0;
     var want_human = 0;
     var want_single = 0;

@@ -1,17 +1,20 @@
 # darshini — per-entry color (M4).
 #
 # Maps stat-derived file types to darshana SGR codes per ADR 0001.
-# All ANSI escapes route through darshana's `tty_sgr` /
-# `tty_sgr_reset` per the CLAUDE.md hard rule (no raw ANSI inline).
+# All ANSI escapes are composed by darshana's `tty_sgr_buf` /
+# `tty_sgr_reset_buf` per the CLAUDE.md hard rule (no raw ANSI
+# inline), and on a terminal every untrusted name goes through
+# darshana's `tty_sanitize_buf`.
 #
-# Two-tier surface:
+# Surface:
 #   color_for_mode(mode)       — pure: mode bits → SGR code (no I/O)
-#   compute_colors(entries, dir_str)
+#   compute_decor(entries, dir_str, ...)
 #                              — fs side: lstat + follow-stat per
-#                                entry, returns parallel vec<i64>
-#                                of SGR codes (0 = no color)
-#   emit_colored(name, color)  — write the name bytes optionally
-#                                wrapped in SGR + reset
+#                                entry, returns parallel vecs of SGR
+#                                codes / icons / git / mime / classify
+#   emit_decorated(name, ...)  — write one decorated name
+#   _write_name_bytes / _write_err_bytes / _name_display_len
+#                              — the untrusted-text writers
 
 # Map a stat mode (lstat-flavored) to the SGR foreground code per
 # ADR 0001. Returns 0 when the entry should render uncolored
@@ -199,133 +202,191 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, w
 #
 # All four pad params (color is implicit, others explicit) are
 # 0 when the corresponding decoration is globally disabled.
-# v1.3.2 (P(-1) security sweep): control-character sanitization on
-# TTY output.
+#
+# ----------------------------------------------------------------
+# Untrusted-name sanitization (v1.3.2; darshana's rule since v1.4.0)
+# ----------------------------------------------------------------
 #
 # A filename is attacker-controlled input — an extracted tarball, a
 # cloned repo, a shared downloads dir. Written raw to a terminal, a
-# name containing C0 controls executes them. Demonstrated against
+# name containing control bytes executes them. Demonstrated against
 # v1.3.1: ESC + "[2J" clears the screen, ESC + "]0;...BEL" retitles
 # the window, CR overwrites the line, and ESC "[1A" ESC "[2K" erases
 # the PRECEDING entry — so a hostile archive can hide a sibling file
 # from the listing entirely. A bare ESC + "[0m" resets the SGR state
-# (escape bytes are spelled out here rather than written literally:
-# CI greps src/ for inline ANSI literals, and rightly so)
-# darshini itself set, corrupting every later entry's color.
-# `ls`, `eza` and BSD `ls` all sanitize here; darshini did not.
+# darshini itself set, corrupting every later entry's color. (Escape
+# bytes are spelled out here rather than written literally: CI greps
+# src/ for inline ANSI literals, and rightly so.) `ls`, `eza` and BSD
+# `ls` all sanitize here.
 #
-# Substitution is `?` per offending BYTE — the shape `ls -q` uses,
-# chosen because it is exactly length-preserving. Every width
-# calculation in the codebase (`_columns_total_width`, `pick_cols`,
-# `_columns_emit`'s padding, long.cyr's alignment pass) measures
-# `str_len(name)`, so byte-for-byte substitution keeps all of that
-# arithmetic correct with no changes anywhere else. It also FIXES
-# alignment for such names, which previously counted escape bytes as
-# display columns.
+# The rule is darshana's `tty_sanitize_buf(..., TTY_SANITIZE_UTF8, 0)`
+# (darshana ADR 0004), shared with every other AGNOS tool that prints
+# text it did not write. It neutralizes, as one `?` each:
+#   * every C0 byte (0x00-0x1f) and DEL (0x7f);
+#   * every C1 control written as UTF-8 (C2 80 .. C2 9F), which a
+#     UTF-8 terminal acts on — U+009B is a CSI introducer;
+#   * every byte that is not part of well-formed UTF-8: a raw 0x80-0x9F
+#     byte (an 8-bit C1 control to a terminal that honors them), a stray
+#     continuation byte, an invalid lead, a sequence cut off by the end
+#     of the name. GNU `ls -q` in a UTF-8 locale does nearly the same
+#     (it differs only in collapsing a truncated tail to one `?`).
+# Well-formed UTF-8 (accents, CJK, emoji) is copied byte-for-byte.
 #
-# Replaced: C0 (0x00-0x1f), DEL (0x7f), and the UTF-8 encoding of the
-# C1 controls (0xC2 0x80..0x9F) — a terminal decoding UTF-8 acts on
-# those as real C1, which makes U+009B a CSI introducer. The C1 pair
-# becomes two `?`, one per byte, preserving the length invariant.
+# v1.3.2..v1.3.4 ran darshini's own scrubber, which caught C0 / DEL /
+# encoded C1 but passed every other byte >= 0x80 through — including a
+# raw 0x9B. UTF-8 is the right mode for darshini specifically because
+# it already assumes a UTF-8 terminal: its icons and tree connectors
+# are UTF-8 on every TTY.
 #
-# NOT replaced: any other byte >= 0x80. In UTF-8 those are only ever
-# multibyte lead or continuation bytes, so touching them would corrupt
-# CJK, accented and emoji filenames. This relies on `load8` being
-# UNSIGNED — verified by probe on cycc 6.5.35, and guarded by the
-# `_is_ctrl_byte` high-byte assertions in tests/darshini.tcyr, which
-# all fail if that ever changes.
+# Encoded C1 is the one case where the output is SHORTER than the input
+# (two bytes in, one `?` out); everything else is one byte in, one byte
+# out. The multi-column layout therefore measures a name by
+# `_name_display_len` — the byte count actually written — rather than
+# by `str_len`, so a row holding such a name stays aligned. Long, tree
+# and single-column output put nothing after the name, so they need no
+# width at all.
 #
-# TTY-only, matching `ls`: on a pipe the true bytes are written, so
-# `darshini | while read -r f` still yields a name that opens. Set
-# once per run from main.cyr on the same `term_width() > 0` signal
-# that already gates color and icons.
+# Terminal-only, matching `ls`: on a pipe the true bytes are written,
+# so `darshini | while read -r f` still yields a name that opens. Set
+# ONCE per run by main() from darshana's `tty_isatty` — per stream:
+# stdout gates names in the listing, stderr gates the paths quoted in
+# error messages, because `darshini * > out.txt` still prints its
+# errors on the terminal. On Linux `tty_isatty` is the same TIOCGWINSZ
+# probe `term_width` makes. On AGNOS it answers whether the CONSOLE is
+# up, not whether this fd is it (there is no per-fd terminal property
+# there), so a listing piped to a file on AGNOS is sanitized too: the
+# safe failure for a terminal-safety control. See term_width for why
+# decoration takes the opposite default.
 var _sanitize_names = 0;
+var _sanitize_errs = 0;
 
 fn set_sanitize_names(v): i64 {
     _sanitize_names = v;
     return 0;
 }
 
-# 1 if byte `b` must not reach a terminal verbatim.
-fn _is_ctrl_byte(b): i64 {
-    if (b < 32) { return 1; }
-    if (b == 127) { return 1; }
+fn set_sanitize_errs(v): i64 {
+    _sanitize_errs = v;
     return 0;
 }
 
-# Write `n` bytes at `d` to stdout, substituting `?` per byte for
-# control sequences when sanitization is on. Safe runs are emitted
-# whole, so a clean name still costs exactly one `sys_write` — the
-# same syscall count the pre-v1.3.2 path had.
+# Write darshana's sanitized copy of the `n` bytes at `d` into `out`,
+# which must hold at least `n` bytes (the output is never longer than
+# the input). Returns the sanitized length, 0..n.
+fn _sanitize_into(out, d, n): i64 {
+    if (n <= 0) { return 0; }
+    var m = tty_sanitize_buf(out, 0, d, n, TTY_SANITIZE_UTF8, 0);
+    if (m < 0) { return 0; }   # only for a negative len or a bad mode — neither reachable here
+    return m;
+}
+
+# Write the `n` bytes at `d` to `fd`, sanitized. A name with nothing to
+# neutralize — nearly all of them — is written straight from its own
+# storage in one write, with no copy. Otherwise it is sanitized into a
+# stack scratch (heap only past 4096 bytes, which no directory entry
+# reaches: NAME_MAX is 255) and that copy is written, also once.
+fn _write_sanitized(fd, d, n): i64 {
+    if (n <= 0) { return 0; }
+    if (tty_has_ctl(d, n, TTY_SANITIZE_UTF8, 0) == 0) {
+        d_write(fd, d, n);
+        return 0;
+    }
+    var sbuf[4096];
+    var buf = &sbuf;
+    if (n > 4096) { buf = alloc(n); }
+    var m = _sanitize_into(buf, d, n);
+    d_write(fd, buf, m);
+    return 0;
+}
+
+# Untrusted bytes bound for stdout: a listing name or an argv path.
 fn _write_name_bytes(d, n): i64 {
     if (_sanitize_names == 0) {
         d_write(STDOUT_FD, d, n);
         return 0;
     }
-    var start = 0;
-    var i = 0;
-    while (i < n) {
-        var bad = 0;
-        var span = 1;
-        var b = load8(d + i);
-        if (_is_ctrl_byte(b) == 1) {
-            bad = 1;
-        } else {
-            if (b == 0xC2) {
-                if (i + 1 < n) {
-                    var b2 = load8(d + i + 1);
-                    if (b2 >= 0x80) {
-                        if (b2 <= 0x9F) { bad = 1; span = 2; }
-                    }
-                }
-            }
-        }
-        if (bad == 1) {
-            if (i > start) { d_write(STDOUT_FD, d + start, i - start); }
-            if (span == 2) { d_write(STDOUT_FD, "??", 2); }
-            else { d_write(STDOUT_FD, "?", 1); }
-            i = i + span;
-            start = i;
-        } else {
-            i = i + 1;
-        }
-    }
-    if (n > start) { d_write(STDOUT_FD, d + start, n - start); }
-    return 0;
+    return _write_sanitized(STDOUT_FD, d, n);
 }
 
+# Untrusted bytes bound for stderr: a path or flag quoted in a diagnostic.
+fn _write_err_bytes(d, n): i64 {
+    if (_sanitize_errs == 0) {
+        d_write(STDERR_FD, d, n);
+        return 0;
+    }
+    return _write_sanitized(STDERR_FD, d, n);
+}
+
+# Bytes `_write_name_bytes` will emit for `name` — `str_len(name)`
+# unless sanitization is on AND the name holds an encoded C1 control.
+# The column layout's width math (columns.cyr) measures names with this.
+fn _name_display_len(name): i64 {
+    var n = str_len(name);
+    if (_sanitize_names == 0) { return n; }
+    var d = str_data(name);
+    if (tty_has_ctl(d, n, TTY_SANITIZE_UTF8, 0) == 0) { return n; }
+    var sbuf[4096];
+    var buf = &sbuf;
+    if (n > 4096) { buf = alloc(n); }
+    return _sanitize_into(buf, d, n);
+}
+
+# v1.4.0: the escapes come from darshana's `_buf` composers and every
+# byte goes through `d_write`. Through v1.3.4 `tty_sgr` / `tty_sgr_reset`
+# wrote each escape with their own unchecked write(2), so they were the
+# only stdout bytes outside v1.3.3's checked-write contract, and a
+# decorated entry cost up to eight writes. It is now three — prefix,
+# name, suffix — with the same bytes in the same order.
 fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad, classify_char, classify_pad): i64 {
-    if (color != 0) { tty_sgr(color); }
+    # Prefix: SGR (at most 6 bytes, tty_sgr_buf's budget) + git column
+    # (2) + icon glyph and its space. Shipped glyphs are 3-4 bytes, so 64
+    # is ample; a longer one is flushed rather than overrun.
+    var pre[64];
+    var p = 0;
+    if (color != 0) {
+        var q = tty_sgr_buf(&pre, 0, color);
+        if (q > 0) { p = q; }      # -1 = code outside [0, 999]: no escape, as tty_sgr did
+    }
     if (git_pad > 0) {
-        if (git_char != 0) {
-            var cb[1];
-            store8(&cb, git_char);
-            d_write(STDOUT_FD, &cb, 1);
-            d_write(STDOUT_FD, " ", 1);
-        } else {
-            d_write(STDOUT_FD, "  ", 2);
-        }
+        if (git_char != 0) { store8(&pre + p, git_char); }
+        else { store8(&pre + p, 32); }
+        store8(&pre + p + 1, 32);
+        p = p + 2;
     }
     if (icon != 0) {
-        d_write(STDOUT_FD, icon, strlen(icon));
-        d_write(STDOUT_FD, " ", 1);
-    } else { if (icon_pad > 0) {
-            d_write(STDOUT_FD, "  ", 2);
-        } }
-    _write_name_bytes(str_data(name), str_len(name));
-    # v1.1 -F classify indicator: trailing 1-char suffix (or
-    # space if `-F` is on but the entry's mode has no indicator —
-    # keeps column alignment).
-    if (classify_pad > 0) {
-        if (classify_char != 0) {
-            var cb2[1];
-            store8(&cb2, classify_char);
-            d_write(STDOUT_FD, &cb2, 1);
+        var ilen = strlen(icon);
+        if (p + ilen + 1 > 64) {
+            if (p > 0) { d_write(STDOUT_FD, &pre, p); }
+            d_write(STDOUT_FD, icon, ilen);
+            p = 0;
         } else {
-            d_write(STDOUT_FD, " ", 1);
+            memcpy(&pre + p, icon, ilen);
+            p = p + ilen;
         }
+        store8(&pre + p, 32);
+        p = p + 1;
+    } else { if (icon_pad > 0) {
+            store8(&pre + p, 32);
+            store8(&pre + p + 1, 32);
+            p = p + 2;
+        } }
+    if (p > 0) { d_write(STDOUT_FD, &pre, p); }
+    _write_name_bytes(str_data(name), str_len(name));
+    # Suffix: the v1.1 -F classify indicator — a 1-char suffix, or a
+    # space when `-F` is on but the mode has none, keeping the column
+    # aligned — then the SGR reset (exactly 4 bytes).
+    var suf[8];
+    var s = 0;
+    if (classify_pad > 0) {
+        if (classify_char != 0) { store8(&suf, classify_char); }
+        else { store8(&suf, 32); }
+        s = 1;
     }
-    if (color != 0) { tty_sgr_reset(); }
+    if (color != 0) {
+        var r = tty_sgr_reset_buf(&suf, s);
+        if (r > 0) { s = r; }
+    }
+    if (s > 0) { d_write(STDOUT_FD, &suf, s); }
     return 0;
 }
 

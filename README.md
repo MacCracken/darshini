@@ -45,7 +45,8 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-**v1.1.2 stable.** v1.0 contract frozen
+**v1.4.0 stable** (current state, version by version, in
+[state.md](docs/development/state.md)). v1.0 contract frozen
 ([ADR 0001](docs/adr/0001-color-scheme.md) /
 [0002](docs/adr/0002-icon-format.md) /
 [0003](docs/adr/0003-mime-detection.md) /
@@ -56,8 +57,11 @@ plus merge-sort + git-hashmap upgrades; v1.1.1 adds
 multi-path argv; v1.1.2 ships the hot-path optimizations
 from the [bench baseline](docs/benchmarks.md) (hybrid sort
 + pick_cols early-out + path_join buf reuse). All v1.1.x
-additions non-breaking under the M10 freeze. Linux x86_64
-only through 1.x.
+additions non-breaking under the M10 freeze. Targets: Linux
+x86_64 and AGNOS (since v1.3.0); the aarch64 build's output has
+matched x86_64's byte-for-byte since v1.4.0 but it is not yet a
+declared target. On a terminal, untrusted names are sanitized
+through darshana (see [SECURITY.md](SECURITY.md)).
 
 Feature surface:
 
@@ -97,7 +101,7 @@ Feature surface:
   format flags.
 - **`--help` / `--version`** — standard meta flags.
 
-v1.2+ candidates: mtime localization, post-v1 platforms
+Next candidates: mtime localization, post-v1 platforms
 (aarch64 Linux then macOS / BSD / Windows). See
 [state.md → Next](docs/development/state.md).
 
@@ -107,7 +111,7 @@ v1.2+ candidates: mtime localization, post-v1 platforms
 cyrius deps                                  # resolve stdlib + darshana
 cyrius build src/main.cyr build/darshini     # compile
 ./build/darshini                              # list the current directory
-cyrius test                                   # run tests/*.tcyr (233 assertions)
+cyrius test                                   # run tests/*.tcyr (count: see state.md)
 cyrius bench tests/darshini.bcyr              # run perf benches
 ```
 
@@ -118,7 +122,7 @@ toolchain on PATH; the version is pinned in `cyrius.cyml`.
 
 ```sh
 cp build/darshini ~/.local/bin/                       # or wherever your PATH points
-darshini --version                                     # → "darshini 1.3.1"
+darshini --version                                     # → "darshini 1.4.0"
 ```
 
 Suggested zsh aliases (the maintainer's

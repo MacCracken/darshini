@@ -5,6 +5,35 @@
 
 ## Version
 
+**1.4.0** — cyrius 6.7.9 + darshana 1.3.0, darshini's terminal
+code on darshana's primitives, and a sanitization fix, shipped
+2026-10-12. Minor bump; no CLI flag, exit code or pipe byte
+changes.
+
+- **Security**: v1.3.2's sanitizer covered only the listing writer.
+  Argv paths echoed as non-directories (`darshini *`) or by `-d`,
+  the multi-path `<dir>:` header and paths in error messages
+  (stderr) went to the terminal raw; raw C1 / malformed UTF-8
+  passed even in a listing; and on AGNOS nothing was ever
+  sanitized. All closed: names go through darshana's
+  `tty_sanitize_buf` (UTF-8 mode), decided once per run per
+  stream from `tty_isatty`.
+- `term_width` is darshana's `tty_winsize`; escapes are composed
+  with `tty_sgr_buf` / `tty_sgr_reset_buf` and written through the
+  checked `d_write` (129 → 91 writes for a 30-entry `-1` on a TTY).
+- AGNOS stays single-column / undecorated **by decision**: its
+  `winsize#60` cannot tell fd 1 from the console, so it would
+  decorate `darshini > file` (shown with a probe build under
+  mirshi).
+- Linux `lstat` is the stdlib `sys_lstat`; the aarch64 build's
+  output is now byte-identical to x86_64's (52 modes, pipe + PTY).
+- Toolchain migration: no source repair needed; `lib/` re-vendored
+  (120 → 33 files).
+
+287 → **301** assertions; fuzz target 5 is now the sanitizer,
+mutation-validated; new CI gate for every name-to-terminal path.
+Prior: **1.3.4** — toolchain `6.5.35` → `6.6.2`, no source change
+(2026-09-11). Prior:
 **1.3.3** — the v1.3.2 deferred backlog, shipped
 2026-08-23. Closes every item the P(-1) sweep confirmed but
 deferred, and one of the six turned out to be **wrong as
@@ -166,7 +195,9 @@ darshini`. Non-breaking under the M10 freeze.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.35` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`)
+- `lib/` is generated: `rm -rf lib/ && cyrius deps` (33 files at
+  6.7.9 — the declared `[deps].stdlib` footprint, closed).
 
 ## Shape
 
@@ -176,18 +207,23 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 ## Source
 
 - `src/main.cyr` — entry point + argv flag parser + dispatch
-- `src/walk.cyr` — `classify_path`, `check_dir_readable`, `list_dir`,
-  `lstat_path`, `ModeBit` enum (POSIX S_IF*/S_I* constants)
+- `src/walk.cyr` — `d_write` (checked writer), `classify_path`,
+  `check_dir_readable`, `list_dir`, `lstat_path` (stdlib `sys_lstat`
+  on Linux), `ModeBit` enum (POSIX S_IF*/S_I* constants)
 - `src/render.cyr` — `lower_byte`, `str_lt_ci`, `sort_entries`,
   `print_entries`, `format_perms`, `format_size_decimal`,
   `format_size_human`, `format_mtime`
 - `src/long.cyr` — long-format orchestrator (two-pass:
   collect-stat-then-emit-aligned)
-- `src/columns.cyr` — `term_width` (ioctl TIOCGWINSZ),
-  `pick_cols`, `render_columns` (vertical-then-horizontal)
+- `src/columns.cyr` — `term_width` (darshana `tty_winsize`; 0 on
+  agnos by decision), `pick_cols` / `_pick_cols_w`,
+  `_display_widths`, `render_columns` (vertical-then-horizontal)
 - `src/color.cyr` — `color_for_mode` picker, `compute_decor`
   fs-side parallel-vec builder (colors + icons in one lstat
-  pass), `emit_decorated` write wrap
+  pass), `emit_decorated` (darshana `tty_sgr_buf` /
+  `tty_sgr_reset_buf`, three checked writes per entry), and the
+  untrusted-text writers `_write_name_bytes` / `_write_err_bytes`
+  / `_name_display_len` over darshana's `tty_sanitize_buf`
 - `src/icons.cyr` — compile-baked icon picker (`icon_for_entry`,
   `icon_display_width`) mirroring `icons/default.cyml`
 - `src/tree.cyr` — `render_tree` + the depth-stack recursion;
@@ -230,19 +266,32 @@ M9+ onward fills:
 | v1.3.1: cycc 6.5.35 + darshana 1.0.0 (upstream API freeze) | v1.3.1 | **shipped** (v1.3.1) |
 | v1.3.2: P(-1) audit sweep — OOB write + terminal-injection + 6 wrong-answer fixes | v1.3.2 | **shipped** (v1.3.2) |
 | v1.3.3: deferred backlog — checked writes, single-lstat `-l`, real fuzz harness | v1.3.3 | **shipped** (v1.3.3) |
+| v1.3.4: cycc 6.6.2 (toolchain-only) | v1.3.4 | **shipped** (v1.3.4) |
+| v1.4.0: cycc 6.7.9 + darshana 1.3.0; darshana primitives; sanitization on every path + AGNOS | v1.4.0 | **shipped** (v1.4.0) |
 
 ## Tests
 
-- `tests/darshini.tcyr` — 233 assertions across M1 (lower_byte,
-  str_lt_ci, sort_entries, classify_path, check_dir_readable),
-  M2 (format_perms, format_size_decimal, format_size_human,
-  format_mtime), M3 (pick_cols, _columns_total_width), M4
-  (color_for_mode), M5 (icon_display_width, icon_for_entry,
-  pick_cols + icon_width), M6 (_tree_connector_buf,
-  _tree_prefix_buf, _parse_pos_int), and M7 (_be_u32 / _be_u16,
-  _git_parse_index header, _git_match_one, _git_listing_rel)
-- `tests/darshini.bcyr` — benchmark stub
-- `tests/darshini.fcyr` — fuzz stub
+- `tests/darshini.tcyr` — **301** assertions (v1.4.0) across M1
+  (lower_byte, str_lt_ci, sort_entries, classify_path,
+  check_dir_readable), M2 (format_perms, format_size_*,
+  format_mtime + the chrono layout pin), M3 (pick_cols,
+  _columns_total_width), M4 (color_for_mode), M5 (icons), M6
+  (tree byte helpers, _parse_pos_int), M7 (git index / ignore /
+  normalize / listing-rel), M8 (mime), and since v1.4.0 the
+  sanitizer rule (`_sanitize_into`), `_name_display_len`, the
+  widths-aware column math and the `term_width` ⇔ `tty_isatty`
+  contract. Also builds for the cross-targets: aarch64 under
+  `qemu-aarch64` 301 / 301; agnos under `mirshi` 299 / 301 — the
+  two `-ENOENT` assertions fail by agnos's flat `-1` design, as on
+  v1.3.4 (285 / 287). Not run in CI.
+- `tests/darshini.bcyr` — benches: sort, pick_cols, path join,
+  color / icon / mime picks (`cyrius bench`)
+- `tests/darshini.fcyr` — 5 fuzz targets with named invariants:
+  `.git/index`, `.gitignore` (CRLF differential), magic bytes,
+  `_path_join_into` (canary), the name sanitizer (v1.4.0);
+  mutation-validated
+- CI (`.github/workflows/ci.yml`) — 17 smoke gates, DCE parity,
+  security scan, docs / version consistency
 
 ## Dependencies
 
@@ -255,12 +304,14 @@ Direct (declared in `cyrius.cyml`):
   `hashmap` added at v1.1.0 for the `--git` status map. (This list
   had omitted `hashmap` since v1.1.0 — corrected at v1.3.1; the
   manifest was always right.)
-- `[deps.darshana]` (git, tag 1.0.0) — TTY/ANSI/cursor primitives.
-  First external dep; landed at M4 for the color escapes. All
-  raw ANSI routes through darshana's `tty_sgr` / `tty_sgr_reset`
-  per CLAUDE.md. **Frozen upstream as of 1.0.0** — both symbols
-  darshini calls are inside the 29-fn / 37-const contract, so a
-  future break there costs upstream a major bump plus an ADR.
+- `[deps.darshana]` (git, tag **1.3.0**; needs cyrius ≥ 6.7.2) —
+  TTY/ANSI primitives. First external dep; landed at M4 for the
+  color escapes. Used since v1.4.0: `tty_sgr_buf` /
+  `tty_sgr_reset_buf` + `TTY_FG_*` (color), `tty_winsize` (width),
+  `tty_isatty` (per-stream terminal test), `tty_sanitize_buf` /
+  `tty_has_ctl` + `TTY_SANITIZE_UTF8` (untrusted names). darshana's
+  API is frozen since 1.0.0 (additive only), so a break there costs
+  upstream a major bump plus an ADR.
 
 ## Consumers
 
@@ -269,58 +320,26 @@ shell sessions and the maintainer's `ls` alias.
 
 ## Next
 
-v1.2 backlog (per user direction post-v1.1.1):
+The 1.x backlog lives in [`roadmap.md`](roadmap.md) "1.x backlog":
+mtime localization; platforms (aarch64 output now matches x86_64 —
+declaring it supported is an owner call — then macOS / BSD /
+Windows); AGNOS decoration once agnos has a per-fd terminal test;
+agnos `lstat#102`; byte-vs-cell column widths for multibyte names.
 
-- **mtime localization** — keep UTC default; add an opt-in
-  flag for local time per the M2 notes.
-- **Platform support** — aarch64 Linux first, then macOS /
-  BSD / Windows. Arch-specific sites enumerated below in
-  "Known gotchas".
-
-Hot-path optimization candidates from
-[`docs/benchmarks.md`](../benchmarks.md) all shipped in
-v1.1.2. Two new candidates were surfaced by the v1.3.1
-toolchain sweep — both are additions the 6.5.35 stdlib made
-available, neither is a defect:
+Two stdlib-enabled candidates carried from the v1.3.1 sweep,
+neither a defect, both non-breaking:
 
 - **`vec_sort_by` / `vec_select_nth`** (cycc 6.5.4) could
-  replace `render.cyr`'s hand-rolled merge sort. cycc's own
-  changelog names darshini's sort as one of the two motivating
-  cases. `sort_entries` allocates an N-slot scratch vec per
-  call that the bump allocator never reclaims; the stdlib
-  introsort is O(1) extra memory.
-- **`CYRIUS_PKG_VERSION`** (cycc 6.5.21) now resolves from
-  included files, which would let `_darshini_version_str()`
-  stop being a hand-bumped literal and read `VERSION`
-  directly — retiring the lockstep-bump step in CLAUDE.md's
-  Work Loop and the CI grep that guards it.
-
-Both are non-breaking additions permitted under the M10
-freeze, and both were left out of the v1.3.1 patch cut as
-source changes beyond a dep bump.
-
-**The v1.3.2 P(-1) deferred list is closed** — all six items
-were addressed in v1.3.3 (one by rejecting it on measured
-grounds; see the Version block). Nothing from the sweep
-remains open.
-
-Remaining 1.x backlog is unchanged and small:
-
-- **mtime localization** — keep UTC default; add an opt-in
-  flag per the M2 notes.
-- **Post-v1 platforms** — aarch64 first (fix `lstat_path`'s
-  bare syscall 6), then macOS / BSD / Windows. cycc corrected
-  the macOS `STAT_*` offsets in the 6.5.x line, removing one
-  blocker.
-- **`vec_sort_by` / `vec_select_nth`** (cycc 6.5.4) could
-  replace the hand-rolled merge sort — cycc's changelog names
-  darshini as a motivating case, and the stdlib introsort is
-  O(1) extra memory against the current per-call scratch vec.
+  replace `render.cyr`'s hand-rolled merge sort — cycc's
+  changelog names darshini's sort as a motivating case, and the
+  stdlib introsort is O(1) extra memory against the current
+  per-call scratch vec the bump allocator never reclaims.
 - **`CYRIUS_PKG_VERSION`** (cycc 6.5.21) would let
   `_darshini_version_str()` stop being a hand-bumped literal,
   retiring the lockstep step and the CI grep that guards it.
 
-All four are non-breaking under the M10 freeze.
+Both were left out of v1.4.0, which already carried a language
+minor and a dep bump.
 
 ## Known gotchas
 
@@ -336,26 +355,31 @@ All four are non-breaking under the M10 freeze.
   default; users comparing the two side-by-side will see their
   UTC-offset as a discrepancy. Documented in the M2 CHANGELOG.
 - **Supported targets are Linux x86_64 and agnos** (agnos since
-  v1.3.0). `cyrius build --aarch64` *compiles and runs*, but the
-  binary is not usable: measured at v1.3.1 under `qemu-aarch64`,
-  every stat-derived column renders as `?` placeholders —
-  `?????????? ? ????-??-?? ??:??` under `-l`, no `/` or `@`
-  classification under `-F`, no recursion under `-T`, and
-  misclassified `--git` status. Plain listing, `-1`, `-d` and
-  `--mime` (which does not need stat for the filename/ext arms)
-  are correct. It degrades rather than crashing, and is
-  byte-for-byte identical pre- and post-v1.3.1, so the toolchain
-  bump neither fixed nor worsened it. Per roadmap "Out of scope",
-  non-x86 Linux is **post-v1**. The three x86_64 dependencies to
-  fix when platform work opens: (a) `walk.cyr`'s `lstat_path`
-  uses bare syscall 6 — on aarch64 that is not `lstat`, and this
-  is the cause of the `?` columns above; aarch64 needs an
-  at-family detour through `newfstatat`; (b) `columns.cyr`'s
-  `TIOCGWINSZ_LINUX = 0x5413` is Linux-only (BSDs use a
-  different request number); (c) `walk.cyr` reads `st_mode` at
-  offset 24 per the x86_64 stat layout. All three already use
-  the `Stat` enum or local constants, so the arch-dispatch
-  pattern is clear when the time comes.
+  v1.3.0). The aarch64 build is **not** declared supported, but
+  since v1.4.0 its output is byte-identical to x86_64's across the
+  52-mode A/B matrix (pipe and PTY, under `qemu-aarch64`). Through
+  v1.3.4 every stat-derived column rendered `?` there: `lstat_path`
+  issued x86_64's syscall 6 bare, which is `lsetxattr` on aarch64.
+  v1.4.0 calls the stdlib's arch-aware `sys_lstat`. The other two
+  x86-isms the v1.3.1 note listed are gone too: the window-size
+  ioctl is darshana's `tty_winsize` (darshana covers Linux + AGNOS
+  only — a macOS / BSD port needs a darshana arm or its own), and
+  `st_mode` is read through the stdlib's per-target `STAT_MODE`.
+- **AGNOS terminal detection is console-wide.** darshana's
+  `tty_winsize` / `tty_isatty` on agnos read `winsize#60`, a
+  framebuffer property: they answer the same whether fd 1 is the
+  console, a pipe or a file. So `term_width` returns 0 on agnos
+  (no decoration, single column — otherwise `darshini > file`
+  gets escapes and icons), while name sanitization keys on
+  `tty_isatty` and is on whenever the console is up, even in a
+  redirected listing. Opposite defaults, each failing safe. See
+  `docs/architecture/002-agnos-fs-abi-split.md`.
+- **Terminal output of untrusted text has exactly two writers**:
+  `_write_name_bytes` (stdout) and `_write_err_bytes` (stderr) in
+  `color.cyr`. Anything darshini prints that it did not author —
+  a name, an argv path, a path in a diagnostic — must use one of
+  them; the CI gate *untrusted names are neutralized on a TTY*
+  exercises every current call path.
 
 - **`format_mtime` reads chrono's `DateTime` by raw byte offset**
   — deliberate as of v1.3.3, and now *pinned* rather than

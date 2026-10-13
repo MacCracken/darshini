@@ -362,6 +362,60 @@ jobs:
             exit 1
           fi
 
+      - name: Smoke — untrusted names are neutralized on a TTY, raw on a pipe
+        # v1.4.0 security contract. A filename is attacker-controlled, and
+        # written raw to a terminal it executes control sequences. Covers
+        # every way a name reaches the terminal: a listing (plain, -1, -l,
+        # -T, -F), argv paths echoed as non-directories (`darshini *`),
+        # `-d`, the multi-path `<dir>:` header, and a path quoted in an
+        # error message (also with stdout redirected, so the TTY is stderr
+        # alone). Through v1.3.4 the last four went out raw, and a raw
+        # 8-bit CSI (0x9b) got through even in a listing. With
+        # `--no-color --no-icons` darshini emits no ESC of its own, so ANY
+        # 0x1b or 0x9b byte in the output is an injection. On a pipe the
+        # true bytes must still arrive, so a script gets a name that opens.
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d)"
+          cd "$T"
+          touch "$(printf 'a\033[2Jx')" "$(printf 'c1\302\233x')" "$(printf 'r\233x')" "$(printf 'b\033]0;t\007')"
+          mkdir "$(printf 'd\033[1A\033[2Kx')" "$(printf 'n\033[1Ax')"
+          chmod 000 "$(printf 'n\033[1Ax')"
+          inject() {   # $1 = label, $2 = captured output
+            if od -An -tx1 "$2" | grep -qE ' (1b|9b)( |$)'; then
+              echo "terminal-control byte reached the TTY ($1):"; od -c "$2"; exit 1
+            fi
+          }
+          for mode in "" "-1" "-l" "-T" "-F" "-lF"; do
+            script -qec "$B --no-color --no-icons $mode" /dev/null > out
+            inject "listing '$mode'" out
+          done
+          script -qec "$B --no-color --no-icons ./a* ./c1* ./r*" /dev/null > out
+          inject "argv paths echoed as non-directories" out
+          script -qec "$B --no-color --no-icons -d ./*" /dev/null > out
+          inject "-d echo" out
+          script -qec "$B --no-color --no-icons -l ./a* ./c1* ./r*" /dev/null > out
+          inject "-l of argv paths" out
+          script -qec "$B --no-color --no-icons -T ./d*" /dev/null > out
+          inject "-T root line" out
+          script -qec "$B --no-color --no-icons ./d* ./a*" /dev/null > out
+          inject "multi-path header" out
+          script -qec "$B --no-color --no-icons ./n*" /dev/null > out || true   # exits 1: permission denied
+          inject "error message" out
+          script -qec "$B --no-color --no-icons ./n* > /dev/null" /dev/null > out || true
+          inject "error message, stdout redirected" out
+          grep -q 'permission denied' out || { echo "error path not exercised:"; od -c out; exit 1; }
+          # What the user sees: one `?` per neutralized byte or sequence.
+          script -qec "$B --no-color --no-icons -1" /dev/null | tr -d '\r' > out
+          grep -qx 'a?\[2Jx' out || { echo "ESC not shown as ?"; od -c out; exit 1; }
+          grep -qx 'c1?x' out    || { echo "encoded C1 not shown as one ?"; od -c out; exit 1; }
+          grep -qx 'r?x' out     || { echo "raw 0x9b not shown as ?"; od -c out; exit 1; }
+          # Pipe: the true bytes, unchanged.
+          "$B" -1 > out
+          grep -qx "$(printf 'a\033\\[2Jx')" out || { echo "pipe altered a name"; od -c out; exit 1; }
+          chmod 755 "$(printf 'n\033[1Ax')"
+
       - name: Smoke — pipe is single column
         # M3 contract: stdout-not-a-TTY → one entry per line.
         # `wc -l` on the listing should equal the entry count;

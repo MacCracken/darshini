@@ -160,12 +160,43 @@ multiple columns based on terminal width.
   sort (insertion-cutoff at merge-sort leaves),
   `pick_cols` widest-aware short-circuit, `_path_join_into`
   buffer reuse in `compute_decor`.
+- v1.1.3 – v1.3.4 — toolchain / darshana bumps, agnos
+  support (v1.3.0), the v1.3.2 P(-1) sweep and its v1.3.3
+  backlog; see the [CHANGELOG](../../CHANGELOG.md).
+- **v1.4.0** (2026-10-12) — cyrius 6.7.9 + darshana 1.3.0;
+  terminal code on darshana's primitives (`tty_winsize`,
+  `tty_isatty`, `tty_sgr_buf`, `tty_sanitize_buf`); untrusted
+  names sanitized on every output path, and on AGNOS.
 
 1.x backlog:
 - **mtime localization** — opt-in flag; keep UTC default.
 - **Platform support** — aarch64 Linux → macOS / BSD /
-  Windows. Arch-specific sites enumerated in
-  [`state.md`](state.md) "Known gotchas".
+  Windows. aarch64: since v1.4.0 the build's output is
+  byte-identical to x86_64's across the 52-mode A/B matrix
+  under `qemu-aarch64`; what remains is the owner's call to
+  declare it supported, plus a CI cross-build gate.
+  Arch-specific sites enumerated in [`state.md`](state.md)
+  "Known gotchas".
+- **AGNOS decoration needs a per-fd terminal test** (agnos-side).
+  `term_width` returns 0 on agnos by decision (v1.4.0): its
+  `winsize#60` describes the console, not fd 1, so using it would
+  put escapes, icons and a multi-column grid into
+  `darshini > file`. When agnos exposes whether an fd is the
+  console, the Linux arm of `term_width` (darshana's
+  `tty_winsize`) becomes the whole function and agnos gets the
+  real console width.
+- **agnos `lstat`** — `d_lstat` still falls back to `stat` on
+  agnos, so a symlink reports its target there. agnos 1.56.53
+  added `lstat#102` and the stdlib wraps it as
+  `sys_lstat(path, len, buf)`. Adopting it changes agnos output
+  for every symlink and needs a mirshi run to confirm #102 is
+  emulated there.
+- **Column widths count bytes, not cells.** The multi-column
+  layout measures a name by the bytes it writes, so a
+  well-formed multibyte UTF-8 name (`é` is 2 bytes / 1 cell, CJK
+  3 bytes / 2 cells) misaligns the columns to its right.
+  Pre-existing since M3; measured at v1.4.0 on a 30-entry grid.
+  Needs a display-width rule (code points, East Asian width).
 
 ## Out of scope (for v1.0)
 

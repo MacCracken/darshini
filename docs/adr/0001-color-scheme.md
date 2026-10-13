@@ -49,6 +49,15 @@ Both escape pairs route through `tty_sgr(code)` and
 at typical directory sizes (< 1k entries); revisit at M9 (P(-1)
 benchmark pass) if it shows up as a hot path.
 
+*Amended v1.4.0 (mechanism only — palette, wrap shape and bytes
+unchanged):* the escapes are now composed with darshana's
+`tty_sgr_buf` / `tty_sgr_reset_buf` into the entry's prefix and
+suffix buffers and written through darshini's checked `d_write`, so
+a colored entry costs three writes in all (prefix, name, suffix)
+and its escape bytes are covered by the write-error exit. The TTY
+test below is darshana's `tty_winsize` on fd 1 — the same
+`TIOCGWINSZ` probe.
+
 ### When color is on
 
 - **TTY default**: stdout is a TTY (`ioctl(TIOCGWINSZ)` succeeds)

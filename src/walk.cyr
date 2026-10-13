@@ -88,13 +88,6 @@ enum ModeBit {
     S_IXOTH = 0x0001;
 }
 
-# x86_64 lstat(2) — syscall 6 — does NOT follow symlinks (unlike
-# SYS_STAT which the stdlib wraps as sys_stat). For `ls -l` we
-# want lstat semantics so a symlink shows as `l...` with its own
-# size rather than the target's. Bare number until stdlib exposes
-# a portable sys_lstat wrapper.
-var SYS_LSTAT_X86 = 6;
-
 # errno values the caller discriminates on (main.cyr's per-path
 # error messages). On Linux these come from the stdlib syscalls
 # enum. agnos's frozen syscall floor reports a flat -1 on failure
@@ -139,16 +132,29 @@ fn d_open_ro(cpath): i64 {
     #endif
 }
 
-# lstat `cpath` into `buf`. Linux has a dedicated lstat (syscall 6,
-# no-symlink-follow). agnos's frozen floor has no lstat (and #6 is
-# close!), so fall back to its single stat — symlinks resolve to their
-# target's metadata there, an accepted degradation until agnos grows an
-# lstat. Returns 0 / negative on failure, same as d_stat.
+# lstat `cpath` into `buf` — no-symlink-follow, so `-l` shows a link
+# as `l...` with its own size rather than its target's. Returns 0 /
+# negative on failure, same as d_stat.
+#
+# Linux: the stdlib's arch-aware `sys_lstat` (v1.4.0). Through v1.3.4
+# this was `syscall(6, ...)` — x86_64's lstat number, written bare.
+# Built with cyrius 6.6.2 the aarch64 binary issued syscall 6 as-is,
+# which is lsetxattr there, so every stat-derived column on aarch64
+# rendered `?` (measured under qemu-aarch64 -strace); built with 6.7.9
+# the backend happens to translate it to newfstatat(AT_SYMLINK_NOFOLLOW).
+# `sys_lstat` is the same call on x86_64 and the documented at-family
+# call on aarch64, so the build no longer depends on the backend
+# translating a foreign number.
+#
+# agnos: its single stat — symlinks resolve to their target's metadata
+# there. The agnos stdlib now carries `sys_lstat` (lstat#102, agnos
+# 1.56.53); adopting it is an agnos behavior change tracked in the
+# roadmap, not part of this fix.
 fn d_lstat(cpath, buf): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return sys_stat(cpath, strlen(cpath), buf);
     #else
-    return syscall(SYS_LSTAT_X86, cpath, buf);
+    return sys_lstat(cpath, buf);
     #endif
 }
 
@@ -160,11 +166,10 @@ fn d_lstat(cpath, buf): i64 {
 #
 # Buf is stack-local — sized in **bytes** (Cyrius 6.0.1 `var
 # buf[N]` is N bytes, not N i64 slots — the language guide is
-# wrong; see feedback memory). STAT_BUFSZ matches the x86_64
-# struct stat size in syscalls_x86_64_linux.cyr (144 bytes). M1
-# is Linux x86_64 only; the aarch64 layout differs and gets
-# handled in a follow-up via the Stat enum, which already
-# abstracts the st_mode offset arch-cleanly.
+# wrong; see feedback memory). 144 is the stdlib's STAT_BUFSZ — the
+# x86_64 struct stat size, and the max over every target (aarch64's
+# is 128). Field offsets come from the stdlib's per-target Stat enum
+# (STAT_MODE etc.), so the same reads are correct on each arch.
 fn classify_path(cpath): i64 {
     var buf[144];
     var rc = d_stat(cpath, &buf);

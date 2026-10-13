@@ -12,29 +12,81 @@
 # the caller (main.cyr) falls back to single-column emit via
 # print_entries — keeps `darshini | cat` script-safe.
 
-# TIOCGWINSZ ioctl request number on Linux. Same value on every
-# Linux arch (it's a tty-layer constant, not arch-specific like
-# the SNDRV_* ones in vani.cyr).
-var TIOCGWINSZ_LINUX = 0x5413;
-
-# struct winsize is 8 bytes: ws_row(u16) ws_col(u16) ws_xpixel(u16) ws_ypixel(u16).
-# var buf[N] is N **bytes** per the project's confirmed gotcha,
-# so `var ws[8]` is exactly one winsize.
+# Terminal width of stdout, or 0 when stdout is not a terminal — the
+# one signal that gates every decoration: color, icons, multi-column.
+# 0 on a pipe / non-TTY is what makes `darshini | cat` script-safe.
+#
+# v1.4.0: the size comes from darshana's `tty_winsize`. Through v1.3.4
+# this re-implemented its Linux half (the same TIOCGWINSZ ioctl on fd
+# 1); the bytes darshini emits are unchanged.
+#
+# Not `tty_winsize_or`: it writes its defaults when the query FAILS as
+# well as when it answers 0 x 0, so it cannot tell "not a terminal"
+# (pipe → plain) from "a terminal of unknown size" (→ 80 columns), and
+# that distinction is darshini's whole pipe-awareness. A pty whose size
+# was never set (common under `script` and CI) answers 0 columns; it is
+# still a terminal, so it gets the classic 80.
 fn term_width(): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    # agnos's frozen syscall floor has no ioctl / TIOCGWINSZ — there's
-    # no way to query the terminal size. Return 0, the same sentinel
-    # term_width() yields on a pipe / non-TTY, so the caller falls back
-    # to single-column, decoration-free output (pipe-safe path).
+    # AGNOS: 0, deliberately — single-column, decoration-free output,
+    # the pipe-safe path. Not because the size is unknowable (through
+    # v1.3.4 this comment said agnos had "no way to query the terminal
+    # size", which was wrong: darshana's `tty_winsize` reads it from
+    # winsize#60). The reason is that agnos cannot say whether fd 1 IS
+    # the console. winsize#60 is a property of the framebuffer, not of
+    # the fd, so with the console up it answers for a pipe or a file
+    # too (darshana documents the same for its agnos `tty_isatty`).
+    # agnsh implements `>` and `|` (redirect syscall #62), so taking the
+    # console width here puts SGR escapes, Nerd Font glyphs and a
+    # multi-column grid into `darshini > out.txt` and `darshini | ...` —
+    # measured at v1.4.0 under mirshi with a probe build that called
+    # tty_winsize here — the script-consumer surprise CLAUDE.md calls a
+    # bug. Revisit when agnos exposes a per-fd terminal property; the
+    # Linux arm below is then the whole function.
     return 0;
     #else
-    var ws[8];
-    var rc = syscall(SYS_IOCTL, STDOUT_FD, TIOCGWINSZ_LINUX, &ws);
-    if (rc < 0) { return 0; }
-    var cols = load16(&ws + 2);
+    var rows = 0;
+    var cols = 0;
+    if (tty_winsize(STDOUT_FD, &rows, &cols) != 0) { return 0; }
     if (cols == 0) { return 80; }
     return cols;
     #endif
+}
+
+# v1.4.0: per-entry display widths for the column layout, or 0 when
+# every entry's width is just its `str_len`. Names are measured by the
+# bytes actually written (`_name_display_len`, color.cyr), which differs
+# from `str_len` only on a terminal and only for a name holding an
+# encoded C1 control, which sanitizes two bytes to one `?`. Returning 0
+# for the normal case keeps the layout math exactly as cheap as before:
+# one `tty_has_ctl` scan per entry per listing, no vec.
+fn _display_widths(entries): i64 {
+    if (_sanitize_names == 0) { return 0; }
+    var n = vec_len(entries);
+    var differs = 0;
+    var i = 0;
+    while (i < n) {
+        var name = vec_get(entries, i);
+        if (differs == 0) {
+            if (_name_display_len(name) != str_len(name)) { differs = 1; }
+        }
+        i = i + 1;
+    }
+    if (differs == 0) { return 0; }
+    var w = vec_new();
+    i = 0;
+    while (i < n) {
+        vec_push(w, _name_display_len(vec_get(entries, i)));
+        i = i + 1;
+    }
+    return w;
+}
+
+# Width of entry `idx`: `widths[idx]` when a widths vec is present (see
+# `_display_widths`), else the name's `str_len`.
+fn _entry_width(entries, widths, idx): i64 {
+    if (widths != 0) { return vec_get(widths, idx); }
+    return str_len(vec_get(entries, idx));
 }
 
 # Compute the total horizontal width that would be consumed by
@@ -45,19 +97,38 @@ fn term_width(): i64 {
 # icons are enabled (`icon_display_width()` returns 2). Pass 0
 # to ignore.
 fn _columns_total_width(entries, n, cols, rows, icon_width): i64 {
+    return _columns_total_width_w(entries, 0, n, cols, rows, icon_width);
+}
+
+# `_columns_total_width` over explicit display widths (0 = `str_len`).
+fn _columns_total_width_w(entries, widths, n, cols, rows, icon_width): i64 {
     var sep = 2;
     var total = 0;
     var c = 0;
     while (c < cols) {
         var max_w = 0;
         var r = 0;
-        while (r < rows) {
-            var idx = c * rows + r;
-            if (idx < n) {
-                var w = str_len(vec_get(entries, idx));
-                if (w > max_w) { max_w = w; }
+        # `_entry_width`, inlined and hoisted out of the loop: this is
+        # pick_cols' hot loop, and the common case (no widths vec) must
+        # cost what it did before v1.4.0.
+        if (widths == 0) {
+            while (r < rows) {
+                var idx = c * rows + r;
+                if (idx < n) {
+                    var w = str_len(vec_get(entries, idx));
+                    if (w > max_w) { max_w = w; }
+                }
+                r = r + 1;
             }
-            r = r + 1;
+        } else {
+            while (r < rows) {
+                var idx2 = c * rows + r;
+                if (idx2 < n) {
+                    var w2 = vec_get(widths, idx2);
+                    if (w2 > max_w) { max_w = w2; }
+                }
+                r = r + 1;
+            }
         }
         total = total + max_w;
         if (c < cols - 1) { total = total + sep; }
@@ -74,6 +145,11 @@ fn _columns_total_width(entries, n, cols, rows, icon_width): i64 {
 # `icon_width` (M5): per-entry display-cell prefix when icons
 # enabled (typically 2). Pass 0 when icons are off.
 fn pick_cols(entries, term_width, icon_width): i64 {
+    return _pick_cols_w(entries, 0, term_width, icon_width);
+}
+
+# `pick_cols` over explicit display widths (0 = `str_len`).
+fn _pick_cols_w(entries, widths, term_width, icon_width): i64 {
     var n = vec_len(entries);
     if (n <= 1) { return 1; }
     if (term_width <= 0) { return 1; }
@@ -91,7 +167,9 @@ fn pick_cols(entries, term_width, icon_width): i64 {
     var widest = 0;
     var wi = 0;
     while (wi < n) {
-        var w = str_len(vec_get(entries, wi));
+        var w = 0;
+        if (widths != 0) { w = vec_get(widths, wi); }
+        else { w = str_len(vec_get(entries, wi)); }
         if (w > widest) { widest = w; }
         wi = wi + 1;
     }
@@ -117,7 +195,7 @@ fn pick_cols(entries, term_width, icon_width): i64 {
             if (effective != cols) {
                 cols = cols - 1;
             } else {
-                var total = _columns_total_width(entries, n, cols, rows, icon_width);
+                var total = _columns_total_width_w(entries, widths, n, cols, rows, icon_width);
                 if (total <= term_width) {
                     picked = cols;
                     searching = 0;
@@ -132,11 +210,12 @@ fn pick_cols(entries, term_width, icon_width): i64 {
 
 # Emit `entries` in a `cols`-column, `rows`-row grid, vertically-
 # then-horizontally (idx = c*rows + r). `col_widths[c]` gives the
-# per-column max NAME length. Padding math uses `str_len(name)`
-# (visible name width) + `icon_width` + `git_width` (both
+# per-column max NAME length. Padding math uses the name's
+# written width (`_entry_width`: `str_len`, or the sanitized
+# length from `widths`) + `icon_width` + `git_width` (both
 # uniform per cell) so escapes + multi-byte glyphs don't
 # disturb alignment.
-fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, classifies,
+fn _columns_emit(entries, widths, n, cols, rows, col_widths, colors, icons, gitchrs, classifies,
   icon_width, git_width, classify_width): i64 {
     var sep = 2;
     var r = 0;
@@ -151,7 +230,7 @@ fn _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, cla
         while (c <= last_c) {
             var idx = c * rows + r;
             var name = vec_get(entries, idx);
-            var nlen = str_len(name);
+            var nlen = _entry_width(entries, widths, idx);
             var col_code = 0;
             if (colors != 0)     { col_code = vec_get(colors, idx); }
             var ic = 0;
@@ -192,7 +271,8 @@ fn render_columns(entries, term_width, colors, icons, gitchrs, classifies): i64 
     var cls_w = 0;
     if (classifies != 0) { cls_w = classify_display_width(); }
     var prefix_w = icon_w + git_w + cls_w;
-    var cols = pick_cols(entries, term_width, prefix_w);
+    var widths = _display_widths(entries);
+    var cols = _pick_cols_w(entries, widths, term_width, prefix_w);
     if (cols <= 1) { return print_entries(entries, colors, icons, gitchrs, classifies); }
     var rows = (n + cols - 1) / cols;
     var col_widths = alloc(cols * 8);
@@ -203,7 +283,7 @@ fn render_columns(entries, term_width, colors, icons, gitchrs, classifies): i64 
         while (r < rows) {
             var idx = c * rows + r;
             if (idx < n) {
-                var w = str_len(vec_get(entries, idx));
+                var w = _entry_width(entries, widths, idx);
                 if (w > max_w) { max_w = w; }
             }
             r = r + 1;
@@ -211,5 +291,6 @@ fn render_columns(entries, term_width, colors, icons, gitchrs, classifies): i64 
         store64(col_widths + c * 8, max_w);
         c = c + 1;
     }
-    return _columns_emit(entries, n, cols, rows, col_widths, colors, icons, gitchrs, classifies, icon_w, git_w, cls_w);
+    return _columns_emit(entries, widths, n, cols, rows, col_widths, colors, icons, gitchrs, classifies,
+      icon_w, git_w, cls_w);
 }

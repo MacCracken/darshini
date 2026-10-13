@@ -34,10 +34,10 @@ See the README for the recommended zsh alias set
 | `src/main.cyr`    | Entry, argv parsing, multi-path dispatch (`run_all`), per-path orchestration (`run`) |
 | `src/walk.cyr`    | `classify_path`, `check_dir_readable`, `list_dir`, `lstat_path`, `ModeBit` enum, `-F` classify indicator |
 | `src/render.cyr`  | Pure formatters: `lower_byte`, `str_lt_ci`, hybrid merge-sort `sort_entries`, `print_entries`, `format_perms`/`size_*`/`mtime` |
-| `src/columns.cyr` | TTY width probe, column-fit picker, `_columns_emit` (vertical-then-horizontal) |
+| `src/columns.cyr` | TTY width probe (darshana `tty_winsize`), column-fit picker over written widths, `_columns_emit` (vertical-then-horizontal) |
 | `src/long.cyr`    | Long-format orchestrator (two-pass for size + mime alignment), `render_long_one` for `-l <file>` |
 | `src/tree.cyr`    | Recursive box-drawn rendering + depth-stack bookkeeping |
-| `src/color.cyr`   | Color picker, `compute_decor` (single lstat pass → colors / icons / git / mime / classify vecs), `_path_join_into`, `emit_decorated` |
+| `src/color.cyr`   | Color picker, `compute_decor` (single lstat pass → colors / icons / git / mime / classify vecs), `_path_join_into`, `emit_decorated`, the untrusted-text writers (`_write_name_bytes` / `_write_err_bytes` / `_name_display_len`) |
 | `src/icons.cyr`   | Compile-baked icon lookup chain mirroring `icons/default.cyml` |
 | `src/mime.cyr`    | Inode → filename → ext → exec → magic precedence chain mirroring `mime/default.cyml` |
 | `src/git.cyr`     | `.git/index` v2 parser, minimal `.gitignore` matcher, hashmap-backed `git_status_for` |
@@ -71,8 +71,13 @@ existing flag is a 2.x change.
    you added. Filesystem effects are covered by CI smokes
    (see `.github/workflows/ci.yml`).
 5. If the feature touches color or cursor positioning, route
-   through darshana's `tty_sgr` / `tty_sgr_reset`. **No raw
-   ANSI in darshini source.** Per CLAUDE.md hard rule.
+   through darshana — color is composed with `tty_sgr_buf` /
+   `tty_sgr_reset_buf` inside `emit_decorated` (`src/color.cyr`).
+   **No raw ANSI in darshini source.** Per CLAUDE.md hard rule.
+   Anything you print that darshini did not write — a filename, a
+   path argument, a path in an error message — goes through
+   `_write_name_bytes` (stdout) or `_write_err_bytes` (stderr),
+   which apply darshana's `tty_sanitize_buf` on a terminal.
 6. CHANGELOG entry. Add a `Breaking` section only if you're
    doing a 2.x change.
 

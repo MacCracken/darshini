@@ -11,19 +11,35 @@ filesystem beyond standard output. The realistic threats:
   bounds and symlink-loop detection so a crafted directory tree
   can't infinite-loop the walker.
 - **ANSI injection via filenames** — a filename containing raw
-  escape sequences can alter terminal state when displayed.
-  **On a TTY**, darshini substitutes `?` for every C0 control byte
-  (0x00–0x1f), DEL (0x7f), and the UTF-8 encoding of the C1 controls
-  (0xC2 0x80–0x9F) — one `?` per byte, the shape `ls -q` uses. Bytes
-  ≥ 0x80 are left alone, so UTF-8 filenames render intact.
-  **On a pipe, entry names are written byte-for-byte**, matching
+  escape sequences can alter terminal state when displayed, and so can
+  a path argument (`darshini *` turns every name in a directory into
+  one). **On a terminal**, every untrusted name or path darshini writes
+  — listing entries, argv paths echoed as non-directories or by `-d`,
+  the multi-path `<dir>:` header, the `-T` root, and paths quoted in
+  error messages on stderr — goes through darshana's
+  `tty_sanitize_buf` in `TTY_SANITIZE_UTF8` mode: each C0 control
+  (0x00–0x1f), DEL (0x7f), C1 control written as UTF-8 (0xC2 0x80–0x9F),
+  and byte that is not part of well-formed UTF-8 (including a raw
+  0x80–0x9F, the 8-bit C1 range) becomes one `?`. Well-formed UTF-8
+  renders intact. stdout and stderr are judged separately, so
+  `darshini * > out.txt` still sanitizes the errors that reach the
+  terminal.
+  **On a pipe or file, names are written byte-for-byte**, matching
   `ls --quoting-style=literal`, so a script consumer receives a name
   it can actually open. A pipeline that renders untrusted names to a
   terminal is responsible for its own sanitization.
+  **On AGNOS** there is no per-fd terminal test — darshana's
+  `tty_isatty` there reports whether the console is up — so names are
+  sanitized whenever the console is up, piped or not.
 
-  This was **not** true before v1.3.2 — through v1.3.1 names went to
-  the terminal raw in both cases, and this section claimed otherwise.
-  See [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md).
+  History: before v1.3.2 names went to the terminal raw in every case
+  (and this section claimed otherwise; see
+  [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md)).
+  v1.3.2–v1.3.4 sanitized only what went through the listing writer
+  (entries, the `-T` root, `-l` of a single path) — argv echoes, `-d`,
+  the `<dir>:` header and error messages went out raw — passed raw C1
+  and malformed UTF-8, and never sanitized on AGNOS. v1.4.0 closed all
+  three.
 - **`.git/`-parsing safety** — when `--git` is enabled, darshini
   reads files under `.git/`. The index parser validates the header
   and bounds every entry against the buffer length. Reads are sized

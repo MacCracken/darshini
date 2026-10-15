@@ -32,7 +32,8 @@ See the README for the recommended zsh alias set
 | Module            | Owns |
 |-------------------|------|
 | `src/main.cyr`    | Entry, argv parsing, multi-path dispatch (`run_all`), per-path orchestration (`run`) |
-| `src/walk.cyr`    | `classify_path`, `check_dir_readable`, `list_dir`, `lstat_path`, `ModeBit` enum, `-F` classify indicator |
+| `src/cli.cyr`     | Pure argv helpers (`_arg_eq`, `_parse_pos_int`, `_long_flag_code`) — includable by the test suite |
+| `src/walk.cyr`    | Buffered checked writer (`d_write` / `d_flush`), stat / open wrappers, `classify_path`, `check_dir_readable`, `list_dir_checked`, `d_basename`, `ModeBit` enum, `-F` classify indicator |
 | `src/render.cyr`  | Pure formatters: `lower_byte`, `str_lt_ci`, hybrid merge-sort `sort_entries`, `print_entries`, `format_perms`/`size_*`/`mtime` |
 | `src/columns.cyr` | TTY width probe (darshana `tty_winsize`), column-fit picker over written widths, `_columns_emit` (vertical-then-horizontal) |
 | `src/long.cyr`    | Long-format orchestrator (two-pass for size + mime alignment), `render_long_one` for `-l <file>` |
@@ -40,10 +41,11 @@ See the README for the recommended zsh alias set
 | `src/color.cyr`   | Color picker, `compute_decor` (single lstat pass → colors / icons / git / mime / classify vecs), `_path_join_into`, `emit_decorated`, the untrusted-text writers (`_write_name_bytes` / `_write_err_bytes` / `_name_display_len`) |
 | `src/icons.cyr`   | Compile-baked icon lookup chain mirroring `icons/default.cyml` |
 | `src/mime.cyr`    | Inode → filename → ext → exec → magic precedence chain mirroring `mime/default.cyml` |
-| `src/git.cyr`     | `.git/index` v2 parser, minimal `.gitignore` matcher, hashmap-backed `git_status_for` |
+| `src/git.cyr`     | Physical-path repo discovery, `.git/index` v2–v4 (SHA-1 / SHA-256) parser, minimal `.gitignore` matcher, hashmap-backed `git_status_for*` |
 
-Include order in `main.cyr` matters for clean LSP:
-`walk → icons → mime → git → color → render → columns → long → tree`.
+Include order in `main.cyr` is dependency order, kept for the reader
+(cycc resolves later definitions):
+`walk → cli → icons → mime → git → color → render → columns → long → tree`.
 
 ## Adding a feature (v1.x non-breaking additions)
 
@@ -64,9 +66,10 @@ existing flag is a 2.x change.
    public fn signature, walk every caller AND every test that
    calls it — Cyrius leaves unfilled arg slots as register
    garbage, so under-passing silently corrupts state.
-3. Update `--version` string in `src/main.cyr`'s
-   `_darshini_version_str()` in lockstep with `VERSION`. CI
-   smoke pins the exact string.
+3. Bump `VERSION` (and the CHANGELOG header). Since v1.4.1
+   `--version` prints `CYRIUS_PKG_VERSION`, which `cyrius build`
+   takes from `cyrius.cyml` → `VERSION`; there is no literal to
+   keep in step, and CI fails if one comes back.
 4. Update tests in `tests/darshini.tcyr` for any pure helper
    you added. Filesystem effects are covered by CI smokes
    (see `.github/workflows/ci.yml`).

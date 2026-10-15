@@ -7,8 +7,10 @@
 #
 # Targets are the three parsers that consume bytes darshini does not
 # author, the path buffer whose missing bound was the v1.3.2
-# memory-safety fix, and the sanitizer that stands between untrusted
-# names and the terminal. Ordered by blast radius.
+# memory-safety fix, the sanitizer that stands between untrusted
+# names and the terminal, and (v1.4.1) the mtime formatter, whose
+# missing upper bound let a file's timestamp do what v1.3.2 stopped
+# its name from doing. Ordered by blast radius.
 #
 # Each target asserts a NAMED INVARIANT rather than "it didn't crash".
 # A fuzz harness that only checks for crashes cannot catch the two
@@ -58,9 +60,8 @@ fn fz_fill(buf, n): i64 {
     return 0;
 }
 
-# `print_cstr_fd` lives in main.cyr, which this harness deliberately
-# does not include (it would pull in `main` and the argv parser). Local
-# emitter instead — same shape the .tcyr file uses for its helpers.
+# Local emitter (color.cyr's `print_cstr_fd` would do; this predates
+# its move there at v1.4.1 and keeps the harness self-describing).
 fn fz_say(fd, c): i64 {
     d_write(fd, c, strlen(c));
     return 0;
@@ -94,15 +95,19 @@ fn fz_index(iters): i64 {
     while (i < iters) {
         var n = fz_range(0, cap);
         fz_fill(buf, n);
-        # Half the corpus gets a valid DIRC v2 header so the parser
-        # walks past its early-out and into the record loop, which is
-        # where the interesting arithmetic lives.
+        # Half the corpus gets a valid DIRC header so the parser walks
+        # past its early-out and into the record loop, which is where
+        # the interesting arithmetic lives. v1.4.1: versions 2, 3 and 4
+        # in turn (v4's varint prefix compression is the new surface),
+        # and SHA-256 framing (oid_len 32) on every other pass.
+        var ver = 2;
         if (n >= 12) {
             if ((i & 1) == 0) {
+                ver = 2 + (i / 2) % 3;
                 store8(buf + 0, 68); store8(buf + 1, 73);
                 store8(buf + 2, 82); store8(buf + 3, 67);
                 store8(buf + 4, 0);  store8(buf + 5, 0);
-                store8(buf + 6, 0);  store8(buf + 7, 2);
+                store8(buf + 6, 0);  store8(buf + 7, ver);
                 # Entry count often lies about what the buffer holds —
                 # that is the point.
                 store8(buf + 8, 0);  store8(buf + 9, 0);
@@ -112,7 +117,9 @@ fn fz_index(iters): i64 {
         var paths = vec_new();
         var mtimes = vec_new();
         var sizes = vec_new();
-        var rc = _git_parse_index(buf, n, paths, mtimes, sizes);
+        var oid_len = 20;
+        if ((i & 2) != 0) { oid_len = 32; }
+        var rc = _git_parse_index_oid(buf, n, oid_len, paths, mtimes, sizes);
         var ok_rc = 0;
         if (rc == 0) { ok_rc = 1; }
         if (rc == 0 - 1) { ok_rc = 1; }
@@ -411,6 +418,58 @@ fn fz_sanitize(iters): i64 {
     return 0;
 }
 
+# ------------------------------------------------ 6. mtime formatter
+# v1.4.1. A file's mtime is attacker-controlled (a hostile tar keeps
+# it), and through v1.4.0 a year past 9999 made `_chrono_w4` emit
+# arbitrary bytes — ESC 7 / ESC 8 among them — straight to the terminal,
+# and `epoch_to_date` looped once per year (a 9e18 mtime: ~19 minutes).
+#
+# Invariants, over the whole i64 range:
+#   * the shape is fixed: '-' at 4 and 7, ' ' at 10, ':' at 13
+#   * every other byte is a digit, or '?' (the placeholder)
+# The first quarter of the run stays near year 10000 and the exact
+# 9999-12-31 boundary, and the target stops at its first failure: with
+# the bound removed, a full-range epoch never returns, so the cases
+# that FAIL fast must come first (mutation-checked).
+fn fz_mtime(iters): i64 {
+    var mb[16];
+    var i = 0;
+    while (i < iters) {
+        var e = (fz_byte() << 56) | (fz_byte() << 48) | (fz_byte() << 40) | (fz_byte() << 32)
+          | (fz_byte() << 24) | (fz_byte() << 16) | (fz_byte() << 8) | fz_byte();
+        if (i < iters / 4) {
+            if ((i & 1) == 0) { e = 253402300799 + (e & 0xFFFFFF) - 8388608; }   # the boundary
+            else { e = 253402300800 + (e & 0xFFFFFFFF); }                       # just past it
+        } else {
+            if ((i % 3) == 1) { e = e & 0xFFFFFFFF; }                           # ordinary range
+        }
+        format_mtime(e, &mb);
+        var k = 0;
+        var bad = 0;
+        while (k < 16) {
+            var c = load8(&mb + k);
+            var want = 0;
+            if (k == 4) { want = 45; }
+            if (k == 7) { want = 45; }
+            if (k == 10) { want = 32; }
+            if (k == 13) { want = 58; }
+            if (want != 0) {
+                if (c != want) { bad = 1; }
+            } else {
+                var digit = 0;
+                if (c >= 48) { if (c <= 57) { digit = 1; } }
+                if (c == 63) { digit = 1; }
+                if (digit == 0) { bad = 1; }
+            }
+            k = k + 1;
+        }
+        fz_check(1 - bad, "mtime: byte outside the fixed YYYY-MM-DD HH:MM shape");
+        if (bad == 1) { i = iters; }
+        i = i + 1;
+    }
+    return 0;
+}
+
 fn main(): i64 {
     alloc_init();
     fz_seed(0x2545F4914F6CDD1D);
@@ -419,11 +478,13 @@ fn main(): i64 {
     fz_magic(400);
     fz_path_join(60);
     fz_sanitize(2000);
+    fz_mtime(4000);
     if (_fz_fail == 1) {
         fz_say(STDERR_FD, "fuzz: FAILED (seed 0x2545F4914F6CDD1D)\n");
         return 1;
     }
-    fz_say(STDOUT_FD, "fuzz: ok (index/ignore/magic/path_join/sanitize)\n");
+    fz_say(STDOUT_FD, "fuzz: ok (index/ignore/magic/path_join/sanitize/mtime)\n");
+    d_flush();                    # stdout is buffered since v1.4.1 (walk.cyr)
     return 0;
 }
 

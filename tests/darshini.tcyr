@@ -55,6 +55,7 @@
 #   * term_width <-> tty_isatty pipe-awareness contract
 
 include "src/walk.cyr"
+include "src/cli.cyr"
 include "src/icons.cyr"
 include "src/mime.cyr"
 include "src/git.cyr"
@@ -63,23 +64,96 @@ include "src/render.cyr"
 include "src/columns.cyr"
 include "src/long.cyr"
 include "src/tree.cyr"
-# main.cyr defines _parse_pos_int but pulling main.cyr also
-# pulls its `var r = main(); syscall(SYS_EXIT, r);` top-level
-# which would fire from the test harness — so we copy the
-# parser into the test file (small, self-contained).
-fn _test_parse_pos_int(cstr): i64 {
-    if (load8(cstr) == 0) { return 0 - 1; }
-    var v = 0;
+# v1.4.1: the argv helpers live in src/cli.cyr, included above. Through
+# v1.4.0 this file carried a COPY of _parse_pos_int (main.cyr can't be
+# included: it ends in a top-level main() call), so the real parser's
+# missing overflow check went untested.
+
+# Big-endian writers + a zeroed buffer, for hand-built .git/index images.
+fn put_be32(buf, off, v): i64 {
+    store8(buf + off + 0, (v >> 24) & 255);
+    store8(buf + off + 1, (v >> 16) & 255);
+    store8(buf + off + 2, (v >> 8) & 255);
+    store8(buf + off + 3, v & 255);
+    return 0;
+}
+
+fn put_be16(buf, off, v): i64 {
+    store8(buf + off + 0, (v >> 8) & 255);
+    store8(buf + off + 1, v & 255);
+    return 0;
+}
+
+fn zbuf(n): i64 {
+    var b = alloc(n);
+    memset(b, 0, n);
+    return b;
+}
+
+# "DIRC" + version + entry count. Returns the header length (12).
+fn idx_header(buf, version, count): i64 {
+    store8(buf + 0, 68); store8(buf + 1, 73); store8(buf + 2, 82); store8(buf + 3, 67);
+    put_be32(buf, 4, version);
+    put_be32(buf, 8, count);
+    return 12;
+}
+
+# A v2/v3 entry at `pos` (buffer pre-zeroed): stat data with only mtime
+# and size set, a zero oid of `oid_len` bytes, flags (+ the v3 extended
+# word when `ext` is 1), the name, NUL padding to a multiple of 8.
+# Returns the position after it.
+fn idx_entry(buf, pos, oid_len, mtime, size, name, ext): i64 {
+    put_be32(buf, pos + 8, mtime);
+    put_be32(buf, pos + 36, size);
+    var nlen = strlen(name);
+    var flen = nlen;
+    if (flen > 0xFFF) { flen = 0xFFF; }
+    var flags = flen;
+    var hdr = 42 + oid_len;
+    if (ext == 1) { flags = flags | 0x4000; hdr = hdr + 2; }
+    put_be16(buf, pos + 40 + oid_len, flags);
+    memcpy(buf + pos + hdr, name, nlen);
+    var total = hdr + nlen + 1;
+    var rem = total % 8;
+    if (rem != 0) { total = total + (8 - rem); }
+    return pos + total;
+}
+
+# A v4 entry: stat data + oid + flags, then a one-byte varint `strip`
+# and the NUL-terminated `suffix` (no padding).
+fn idx_entry_v4(buf, pos, mtime, size, strip, suffix, full_len): i64 {
+    put_be32(buf, pos + 8, mtime);
+    put_be32(buf, pos + 36, size);
+    put_be16(buf, pos + 60, full_len);
+    store8(buf + pos + 62, strip);
+    var sl = strlen(suffix);
+    memcpy(buf + pos + 63, suffix, sl);
+    store8(buf + pos + 63 + sl, 0);
+    return pos + 63 + sl + 1;
+}
+
+# A GitCtx as git_open builds one (tracked map + shared dir cell), over
+# the given parallel vecs, ignore patterns and listing prefix.
+fn mk_ctx(paths, mtimes, sizes, patterns, listing): i64 {
+    var m = map_new_str();
     var i = 0;
-    while (load8(cstr + i) != 0) {
-        var b = load8(cstr + i);
-        if (b < 48) { return 0 - 1; }
-        if (b > 57) { return 0 - 1; }
-        v = v * 10 + (b - 48);
+    while (i < vec_len(paths)) {
+        map_set(m, vec_get(paths, i), i + 1);
         i = i + 1;
     }
-    return v;
+    var cell = alloc(8);
+    store64(cell, 0);
+    var c = alloc(56);
+    store64(c + 0, paths);
+    store64(c + 8, mtimes);
+    store64(c + 16, sizes);
+    store64(c + 24, patterns);
+    store64(c + 32, make_str(listing));
+    store64(c + 40, m);
+    store64(c + 48, cell);
+    return c;
 }
+
 
 fn make_str(c): i64 {
     return str_clone(str_from(c));
@@ -120,8 +194,11 @@ fn main(): i64 {
     assert_eq(str_lt_ci(a, b), 1, "apple < banana");
     assert_eq(str_lt_ci(b, a), 0, "banana not < apple");
     assert_eq(str_lt_ci(a, a), 0, "apple not < apple");
-    assert_eq(str_lt_ci(a, a_upper), 0, "apple not < APPLE (case-fold equal)");
-    assert_eq(str_lt_ci(a_upper, a), 0, "APPLE not < apple (case-fold equal)");
+    # v1.4.1: equal under case folding -> raw bytes decide, uppercase first.
+    assert_eq(str_lt_ci(a, a_upper), 0, "apple not < APPLE (raw tiebreak)");
+    assert_eq(str_lt_ci(a_upper, a), 1, "APPLE < apple (raw tiebreak)");
+    assert_eq(str_lt_ci(make_str("Readme"), make_str("readme")), 1, "Readme < readme");
+    assert_eq(str_lt_ci(make_str("README"), make_str("Readme")), 1, "README < Readme");
     assert_eq(str_lt_ci(a, apricot), 1, "apple < apricot");
     assert_eq(str_lt_ci(app, a), 1, "app < apple (prefix shorter)");
     assert_eq(str_lt_ci(a, app), 0, "apple not < app (prefix shorter)");
@@ -153,6 +230,48 @@ fn main(): i64 {
     vec_push(single, make_str("only"));
     sort_entries(single);
     assert_eq(str_eq(vec_get(single, 0), make_str("only")), 1, "single-element vec");
+
+    # v1.4.1: case-only collisions sort the same whatever order getdents
+    # returned them in (they were stable-sorted as equal through v1.4.0).
+    var perm1 = vec_of3(make_str("README"), make_str("readme"), make_str("Readme"));
+    var perm2 = vec_of3(make_str("readme"), make_str("Readme"), make_str("README"));
+    sort_entries(perm1);
+    sort_entries(perm2);
+    var same_order = 1;
+    var po = 0;
+    while (po < 3) {
+        if (str_eq(vec_get(perm1, po), vec_get(perm2, po)) == 0) { same_order = 0; }
+        po = po + 1;
+    }
+    assert_eq(same_order, 1, "case-only collisions: order independent of input");
+    assert_eq(str_eq(vec_get(perm1, 0), make_str("README")), 1, "collision order: README first");
+    assert_eq(str_eq(vec_get(perm1, 2), make_str("readme")), 1, "collision order: readme last");
+
+    # The merge path: every case above is below the 16-entry insertion
+    # cutoff, so _merge / _merge_sort had no correctness assertion. 40
+    # names in reverse order exercise both halves and the copy-back.
+    var big = vec_new();
+    var mg_i = 39;
+    while (mg_i >= 0) {
+        var mg_nb = alloc(4);
+        store8(mg_nb, 101);                        # 'e'
+        store8(mg_nb + 1, 48 + mg_i / 10);
+        store8(mg_nb + 2, 48 + mg_i % 10);
+        store8(mg_nb + 3, 0);
+        vec_push(big, str_from(mg_nb));
+        mg_i = mg_i - 1;
+    }
+    sort_entries(big);
+    var big_ok = 1;
+    var mg_k = 1;
+    while (mg_k < 40) {
+        if (str_lt_ci(vec_get(big, mg_k - 1), vec_get(big, mg_k)) == 0) { big_ok = 0; }
+        mg_k = mg_k + 1;
+    }
+    assert_eq(vec_len(big), 40, "merge path: 40 entries kept");
+    assert_eq(big_ok, 1, "merge path: 40 reversed entries come out ascending");
+    assert_eq(str_eq(vec_get(big, 0), make_str("e00")), 1, "merge path: first = e00");
+    assert_eq(str_eq(vec_get(big, 39), make_str("e39")), 1, "merge path: last = e39");
 
     test_group("classify_path");
     assert_eq(classify_path("README.md"), 0, "README.md is non-dir");
@@ -249,6 +368,18 @@ fn main(): i64 {
     # 1099511627776 → 1.0T
     assert_eq(format_size_human(1099511627776, sb), 4, "1TB -> 4 bytes");
     assert_eq(buf_eq_cstr(sb, 4, "1.0T"), 1, "1TB -> '1.0T'");
+    # v1.4.1: P and E (a 1 PiB file read '1024.0T'), and no overflow in
+    # the tenths digit (922337203685477581 rendered '838860.)T').
+    assert_eq(format_size_human(1125899906842624, sb), 4, "1PB -> 4 bytes");
+    assert_eq(buf_eq_cstr(sb, 4, "1.0P"), 1, "1PB -> '1.0P'");
+    assert_eq(format_size_human(1152921504606846976, sb), 4, "1EB -> 4 bytes");
+    assert_eq(buf_eq_cstr(sb, 4, "1.0E"), 1, "1EB -> '1.0E'");
+    assert_eq(format_size_human(922337203685477581, sb), 6, "~0.8 EiB -> 6 bytes");
+    assert_eq(buf_eq_cstr(sb, 6, "819.2P"), 1, "922337203685477581 -> '819.2P' (was '838860.)T')");
+    assert_eq(format_size_human(9223372036854775807, sb), 4, "i64 max -> 4 bytes");
+    assert_eq(buf_eq_cstr(sb, 4, "7.9E"), 1, "i64 max -> '7.9E'");
+    assert_eq(format_size_human(1099511627775, sb), 7, "1TB-1 -> 7 bytes");
+    assert_eq(buf_eq_cstr(sb, 7, "1023.9G"), 1, "1TB-1 -> '1023.9G' (truncates)");
 
     test_group("format_mtime");
     var mb = alloc(16);
@@ -278,6 +409,16 @@ fn main(): i64 {
     # The boundary itself must still format normally.
     format_mtime(0, mb);
     assert_eq(buf_eq_cstr(mb, 16, "1970-01-01 00:00"), 1, "epoch 0 still formats (boundary)");
+    # v1.4.1: past year 9999 _chrono_w4 emitted arbitrary bytes (ESC 7 /
+    # ESC 8 at year 235,7xx) and epoch_to_date looped once per year.
+    format_mtime(253402300799, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "9999-12-31 23:59"), 1, "9999-12-31 23:59:59 still formats");
+    format_mtime(253402300800, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "year 10000 -> placeholder (was ':000')");
+    format_mtime(7376000000000, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "year ~235,700 -> placeholder (was ESC 7)");
+    format_mtime(9000000000000000000, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "9e18 -> placeholder, immediately (was a hang)");
 
     # ============================================================
     # M3 — multi-column auto-layout
@@ -424,26 +565,28 @@ fn main(): i64 {
     var _root_paths = vec_new();
     vec_push(_root_paths, make_str("src/a.txt"));
     vec_push(_root_paths, make_str("top.txt"));
-    var _root_ctx = alloc(48);
+    var _root_ctx = alloc(56);
     store64(_root_ctx + 0, _root_paths);
     store64(_root_ctx + 8, vec_new());
     store64(_root_ctx + 16, vec_new());
     store64(_root_ctx + 24, vec_new());
     store64(_root_ctx + 32, make_str(""));
     store64(_root_ctx + 40, 0);
+    store64(_root_ctx + 48, 0);                 # no dir cell: the scan path
     # Empty rel = "the listing IS the repo root" -> tracked, because
     # any indexed path at all lives under it.
     assert_eq(_git_dir_has_tracked(_root_ctx, make_str("")), 1, "empty rel + tracked paths -> 1");
     assert_eq(_git_dir_has_tracked(_root_ctx, make_str("src")), 1, "'src' has tracked children");
     assert_eq(_git_dir_has_tracked(_root_ctx, make_str("nope")), 0, "unrelated dir -> 0");
     # An empty index must NOT report the root as tracked.
-    var _empty_ctx = alloc(48);
+    var _empty_ctx = alloc(56);
     store64(_empty_ctx + 0, vec_new());
     store64(_empty_ctx + 8, vec_new());
     store64(_empty_ctx + 16, vec_new());
     store64(_empty_ctx + 24, vec_new());
     store64(_empty_ctx + 32, make_str(""));
     store64(_empty_ctx + 40, 0);
+    store64(_empty_ctx + 48, 0);
     assert_eq(_git_dir_has_tracked(_empty_ctx, make_str("")), 0, "empty rel + empty index -> 0");
 
     # v1.4.0: the name sanitizer is darshana's `tty_sanitize_buf` in
@@ -553,8 +696,8 @@ fn main(): i64 {
     # Directory (any perms) -> BLUE
     assert_eq(color_for_mode(0x41ED), TTY_FG_BLUE, "dir 0755 -> BLUE");
     assert_eq(color_for_mode(0x41C0), TTY_FG_BLUE, "dir 0700 -> BLUE");
-    # Symlink -> CYAN (broken detection lives in compute_colors, not here)
-    assert_eq(color_for_mode(0xA1FF), TTY_FG_CYAN, "symlink -> CYAN (live; broken is compute_colors)");
+    # Symlink -> CYAN (broken detection needs a follow-stat: compute_decor)
+    assert_eq(color_for_mode(0xA1FF), TTY_FG_CYAN, "symlink -> CYAN (live; broken is compute_decor)");
     # FIFO -> YELLOW
     assert_eq(color_for_mode(0x11A4), TTY_FG_YELLOW, "fifo -> YELLOW");
     # Socket -> BRIGHT_MAGENTA
@@ -731,14 +874,33 @@ fn main(): i64 {
     assert_eq(load8(pbuf + 12), 0x82, "[1,0,1] third vert at +12");
 
     test_group("_parse_pos_int");
-    assert_eq(_test_parse_pos_int("1"), 1, "'1' -> 1");
-    assert_eq(_test_parse_pos_int("42"), 42, "'42' -> 42");
-    assert_eq(_test_parse_pos_int("999"), 999, "'999' -> 999");
-    assert_eq(_test_parse_pos_int(""), 0 - 1, "'' -> -1");
-    assert_eq(_test_parse_pos_int("0"), 0, "'0' -> 0 (caller rejects 0)");
-    assert_eq(_test_parse_pos_int("abc"), 0 - 1, "'abc' -> -1");
-    assert_eq(_test_parse_pos_int("12a"), 0 - 1, "'12a' -> -1 (mid-string non-digit)");
-    assert_eq(_test_parse_pos_int("-5"), 0 - 1, "'-5' -> -1 (sign rejected)");
+    assert_eq(_parse_pos_int("1"), 1, "'1' -> 1");
+    assert_eq(_parse_pos_int("42"), 42, "'42' -> 42");
+    assert_eq(_parse_pos_int("999"), 999, "'999' -> 999");
+    assert_eq(_parse_pos_int(""), 0 - 1, "'' -> -1");
+    assert_eq(_parse_pos_int("0"), 0, "'0' -> 0 (caller rejects 0)");
+    assert_eq(_parse_pos_int("abc"), 0 - 1, "'abc' -> -1");
+    assert_eq(_parse_pos_int("12a"), 0 - 1, "'12a' -> -1 (mid-string non-digit)");
+    assert_eq(_parse_pos_int("-5"), 0 - 1, "'-5' -> -1 (sign rejected)");
+    # v1.4.1: the bound the comment always promised.
+    assert_eq(_parse_pos_int("2147483647"), 2147483647, "2^31-1 accepted");
+    assert_eq(_parse_pos_int("2147483648"), 0 - 1, "2^31 -> -1");
+    assert_eq(_parse_pos_int("18446744073709551617"), 0 - 1, "2^64+1 -> -1 (wrapped to 1 before)");
+    assert_eq(_parse_pos_int("99999999999999999999999"), 0 - 1, "huge -> -1");
+
+    test_group("_long_flag_code");
+    assert_eq(_long_flag_code("--"), LF_END_OPTS, "'--' -> end of options (v1.4.1)");
+    assert_eq(_long_flag_code("--tree"), LF_TREE, "--tree");
+    assert_eq(_long_flag_code("--git"), LF_GIT, "--git");
+    assert_eq(_long_flag_code("--mime"), LF_MIME, "--mime");
+    assert_eq(_long_flag_code("--level"), LF_LEVEL, "--level");
+    assert_eq(_long_flag_code("--no-color"), LF_NO_COLOR, "--no-color");
+    assert_eq(_long_flag_code("--no-icons"), LF_NO_ICONS, "--no-icons");
+    assert_eq(_long_flag_code("--help"), LF_HELP, "--help");
+    assert_eq(_long_flag_code("--version"), LF_VERSION, "--version");
+    assert_eq(_long_flag_code("---"), LF_UNKNOWN, "'---' unknown");
+    assert_eq(_long_flag_code("--gitx"), LF_UNKNOWN, "no prefix match");
+    assert_eq(_long_flag_code("--level=2"), LF_UNKNOWN, "--level=N form not accepted");
 
     # ============================================================
     # M7 — git status (helpers + classifier)
@@ -778,15 +940,17 @@ fn main(): i64 {
     store8(bad_hdr + 8, 0); store8(bad_hdr + 9, 0);
     store8(bad_hdr + 10, 0); store8(bad_hdr + 11, 0);
     assert_eq(_git_parse_index(bad_hdr, 12, paths_a, mtimes_a, sizes_a), 0 - 1, "bad signature -> -1");
-    # Wrong version
-    var v3_hdr = alloc(12);
-    store8(v3_hdr + 0, 68); store8(v3_hdr + 1, 73);     # "DIRC"
-    store8(v3_hdr + 2, 82); store8(v3_hdr + 3, 67);
-    store8(v3_hdr + 4, 0); store8(v3_hdr + 5, 0);
-    store8(v3_hdr + 6, 0); store8(v3_hdr + 7, 3);       # version 3
-    store8(v3_hdr + 8, 0); store8(v3_hdr + 9, 0);
-    store8(v3_hdr + 10, 0); store8(v3_hdr + 11, 0);
-    assert_eq(_git_parse_index(v3_hdr, 12, paths_a, mtimes_a, sizes_a), 0 - 1, "v3 -> -1 (v2 only)");
+    # Versions: 2..4 accepted since v1.4.1 (v3 was rejected, and the
+    # rejection ignored, so the column showed every file '?').
+    var vh = zbuf(12);
+    idx_header(vh, 3, 0);
+    assert_eq(_git_parse_index(vh, 12, paths_a, mtimes_a, sizes_a), 0, "v3 empty -> 0 (v1.4.1)");
+    idx_header(vh, 4, 0);
+    assert_eq(_git_parse_index(vh, 12, paths_a, mtimes_a, sizes_a), 0, "v4 empty -> 0 (v1.4.1)");
+    idx_header(vh, 5, 0);
+    assert_eq(_git_parse_index(vh, 12, paths_a, mtimes_a, sizes_a), 0 - 1, "v5 -> -1");
+    idx_header(vh, 1, 0);
+    assert_eq(_git_parse_index(vh, 12, paths_a, mtimes_a, sizes_a), 0 - 1, "v1 -> -1");
     # Valid v2 with 0 entries
     var v2_empty = alloc(12);
     store8(v2_empty + 0, 68); store8(v2_empty + 1, 73);
@@ -800,6 +964,115 @@ fn main(): i64 {
     var sizes_b = vec_new();
     assert_eq(_git_parse_index(v2_empty, 12, paths_b, mtimes_b, sizes_b), 0, "v2 empty -> 0");
     assert_eq(vec_len(paths_b), 0, "v2 empty -> 0 paths pushed");
+
+    test_group("_git_parse_index v2/v3/v4/sha256 (v1.4.1)");
+    # v2: two entries, real framing.
+    var ib = zbuf(512);
+    var ip = idx_header(ib, 2, 2);
+    ip = idx_entry(ib, ip, 20, 1700000000, 5, "a.txt", 0);
+    ip = idx_entry(ib, ip, 20, 1700000001, 7, "src/b.txt", 0);
+    var pv = vec_new(); var mv = vec_new(); var sv = vec_new();
+    assert_eq(_git_parse_index(ib, ip, pv, mv, sv), 0, "v2 two entries -> 0");
+    assert_eq(vec_len(pv), 2, "v2: 2 paths");
+    assert_eq(str_eq(vec_get(pv, 1), make_str("src/b.txt")), 1, "v2: second path");
+    assert_eq(vec_get(mv, 1), 1700000001, "v2: second mtime");
+    assert_eq(vec_get(sv, 0), 5, "v2: first size");
+    # A name that is not NUL-terminated where git puts the NUL is a
+    # misframed entry -> -1.
+    var mf_buf = zbuf(512);
+    var mf_pos = idx_header(mf_buf, 2, 1);
+    mf_pos = idx_entry(mf_buf, mf_pos, 20, 1, 1, "abc", 0);
+    put_be16(mf_buf, 12 + 60, 2);                  # claims 2 bytes: "ab" then 'c', not NUL
+    var pz = vec_new(); var mz = vec_new(); var sz = vec_new();
+    assert_eq(_git_parse_index(mf_buf, mf_pos, pz, mz, sz), 0 - 1, "name length that misses the NUL -> -1");
+    # v3: the second entry carries the extended flag word (+2 bytes).
+    var ib3 = zbuf(512);
+    var ip3 = idx_header(ib3, 3, 2);
+    ip3 = idx_entry(ib3, ip3, 20, 10, 1, "plain", 0);
+    ip3 = idx_entry(ib3, ip3, 20, 11, 2, "ext/flagged.txt", 1);
+    var p3 = vec_new(); var m3 = vec_new(); var s3 = vec_new();
+    assert_eq(_git_parse_index(ib3, ip3, p3, m3, s3), 0, "v3 with an extended entry -> 0");
+    assert_eq(str_eq(vec_get(p3, 1), make_str("ext/flagged.txt")), 1, "v3: extended entry's name");
+    assert_eq(vec_get(s3, 1), 2, "v3: extended entry's size");
+    # v4: "src/a.c", then "src/b.c" stored as strip 3 + "b.c".
+    var ib4 = zbuf(512);
+    var ip4 = idx_header(ib4, 4, 2);
+    ip4 = idx_entry_v4(ib4, ip4, 20, 1, 0, "src/a.c", 7);
+    ip4 = idx_entry_v4(ib4, ip4, 21, 2, 3, "b.c", 7);
+    var p4 = vec_new(); var m4 = vec_new(); var s4 = vec_new();
+    assert_eq(_git_parse_index(ib4, ip4, p4, m4, s4), 0, "v4 prefix-compressed -> 0");
+    assert_eq(str_eq(vec_get(p4, 0), make_str("src/a.c")), 1, "v4: first path");
+    assert_eq(str_eq(vec_get(p4, 1), make_str("src/b.c")), 1, "v4: second path rebuilt from the prefix");
+    assert_eq(vec_get(m4, 1), 21, "v4: second mtime");
+    # v4: stripping more than the previous path holds -> -1.
+    var ib4b = zbuf(256);
+    var ip4b = idx_header(ib4b, 4, 1);
+    ip4b = idx_entry_v4(ib4b, ip4b, 1, 1, 5, "x", 1);
+    var pq = vec_new(); var mq = vec_new(); var sq = vec_new();
+    assert_eq(_git_parse_index(ib4b, ip4b, pq, mq, sq), 0 - 1, "v4 strip > previous length -> -1");
+    # 0xFFF long name: the length comes from the NUL scan. v1.4.0 started
+    # that count at 0xFFF and failed the whole parse.
+    var ln = alloc(4200);
+    memset(ln, 97, 4100);
+    store8(ln + 4100, 0);
+    var ibl = zbuf(4400);
+    var ipl = idx_header(ibl, 2, 2);
+    ipl = idx_entry(ibl, ipl, 20, 1, 1, ln, 0);
+    ipl = idx_entry(ibl, ipl, 20, 2, 2, "z.txt", 0);
+    var pl = vec_new(); var ml = vec_new(); var ls_v = vec_new();
+    assert_eq(_git_parse_index(ibl, ipl, pl, ml, ls_v), 0, "4100-byte name -> 0");
+    assert_eq(str_len(vec_get(pl, 0)), 4100, "long name: full length recovered");
+    assert_eq(str_eq(vec_get(pl, 1), make_str("z.txt")), 1, "long name: the entry after it still parses");
+    # SHA-256: 32-byte ids shift the flags word by 12 bytes.
+    var ibs = zbuf(512);
+    var ips = idx_header(ibs, 2, 1);
+    ips = idx_entry(ibs, ips, 32, 3, 4, "sha.txt", 0);
+    var ps = vec_new(); var ms = vec_new(); var ss = vec_new();
+    assert_eq(_git_parse_index_oid(ibs, ips, 32, ps, ms, ss), 0, "sha256 index, oid_len 32 -> 0");
+    assert_eq(str_eq(vec_get(ps, 0), make_str("sha.txt")), 1, "sha256: name");
+    var ps1 = vec_new(); var ms1 = vec_new(); var ss1 = vec_new();
+    assert_eq(_git_parse_index_oid(ibs, ips, 20, ps1, ms1, ss1), 0 - 1, "sha256 index read as sha1 -> -1");
+
+    test_group("_git_oid_len");
+    var cfg1 = "[core]\n\trepositoryformatversion = 1\n[extensions]\n\tobjectFormat = sha256\n";
+    assert_eq(_git_oid_len(cfg1, strlen(cfg1)), 32, "objectFormat = sha256 -> 32");
+    var cfg2 = "[core]\n\tbare = false\n";
+    assert_eq(_git_oid_len(cfg2, strlen(cfg2)), 20, "no objectformat -> 20");
+    var cfg3 = "[extensions]\n\tobjectformat = sha1\n# sha256\n";
+    assert_eq(_git_oid_len(cfg3, strlen(cfg3)), 20, "sha1, sha256 only on a later line -> 20");
+
+    test_group("git status outcomes (v1.4.1)");
+    var gp = vec_new(); var gm = vec_new(); var gs = vec_new();
+    vec_push(gp, make_str("a.txt"));      vec_push(gm, 100); vec_push(gs, 10);
+    vec_push(gp, make_str("src/b.txt"));  vec_push(gm, 200); vec_push(gs, 20);
+    vec_push(gp, make_str("big.bin"));    vec_push(gm, 300); vec_push(gs, 1073741824);
+    var gpat = vec_new();
+    vec_push(gpat, make_str("*.log"));
+    var gctx = mk_ctx(gp, gm, gs, gpat, "");
+    assert_eq(git_status_for(gctx, make_str("a.txt"), 0, 100, 10), 46, "tracked + matching stat -> '.'");
+    assert_eq(git_status_for(gctx, make_str("a.txt"), 0, 101, 10), 77, "mtime differs -> 'M'");
+    assert_eq(git_status_for(gctx, make_str("a.txt"), 0, 100, 11), 77, "size differs -> 'M'");
+    assert_eq(git_status_for(gctx, make_str("new.txt"), 0, 1, 1), 63, "untracked -> '?'");
+    assert_eq(git_status_for(gctx, make_str("app.log"), 0, 1, 1), 33, "ignored -> '!'");
+    assert_eq(git_status_for(gctx, make_str("src"), 1, 1, 1), 46, "dir with tracked files -> '.'");
+    # u32 compare, as git: 5 GiB is stored as 5 GiB mod 2^32 = 1 GiB.
+    assert_eq(git_status_for(gctx, make_str("big.bin"), 0, 300, 5368709120), 46, "5 GiB file clean -> '.'");
+    assert_eq(git_status_for(gctx, make_str("a.txt"), 0, 100 + 4294967296, 10), 46, "mtime compared mod 2^32");
+    # The listing path itself (-l <file>, -ld <dir>, the -T root).
+    var fctx = mk_ctx(gp, gm, gs, gpat, "src/b.txt");
+    assert_eq(git_status_for_root(fctx, make_str("b.txt"), 0, 200, 20), 46, "-l --git src/b.txt -> '.'");
+    assert_eq(git_status_for_root(fctx, make_str("b.txt"), 0, 201, 20), 77, "-l --git src/b.txt modified -> 'M'");
+    var dctx = mk_ctx(gp, gm, gs, gpat, "src");
+    assert_eq(git_status_for_root(dctx, make_str("src"), 1, 1, 1), 46, "-ld --git src -> '.'");
+    var lctx = mk_ctx(gp, gm, gs, gpat, "app.log");
+    assert_eq(git_status_for_root(lctx, make_str("app.log"), 0, 1, 1), 33, "-l --git app.log -> '!'");
+    var uctx = mk_ctx(gp, gm, gs, gpat, "nope.txt");
+    assert_eq(git_status_for_root(uctx, make_str("nope.txt"), 0, 1, 1), 63, "-l --git untracked -> '?'");
+    # Directory lookup through the shared prefix set agrees with the scan.
+    assert_eq(_git_dir_has_tracked(gctx, make_str("src")), 1, "prefix set: src has tracked files");
+    assert_eq(_git_dir_has_tracked(gctx, make_str("sr")), 0, "prefix set: 'sr' is not a prefix dir");
+    assert_eq(_git_dir_has_tracked(gctx, make_str("a.txt")), 0, "prefix set: a file is not a dir");
+    assert_eq(load64(load64(gctx + 48)) != 0, 1, "prefix set built on first lookup");
 
     test_group("_git_match_one");
     # Exact basename
@@ -871,6 +1144,23 @@ fn main(): i64 {
     # ============================================================
     # M8 — mime detection
     # ============================================================
+
+    test_group("d_basename");
+    assert_eq(str_eq(d_basename("a/b/c.txt"), make_str("c.txt")), 1, "a/b/c.txt -> c.txt");
+    assert_eq(str_eq(d_basename("docs/"), make_str("docs")), 1, "trailing / ignored");
+    assert_eq(str_eq(d_basename("plain"), make_str("plain")), 1, "no slash -> itself");
+    assert_eq(str_eq(d_basename("/"), make_str("/")), 1, "/ stays /");
+    assert_eq(str_eq(d_basename("./-x"), make_str("-x")), 1, "./-x -> -x");
+
+    test_group("classify_indicator");
+    assert_eq(classify_indicator(0x41ED), 47, "dir -> '/'");
+    assert_eq(classify_indicator(0xA1FF), 64, "symlink -> '@'");
+    assert_eq(classify_indicator(0x11A4), 124, "fifo -> '|'");
+    assert_eq(classify_indicator(0xC1ED), 61, "socket -> '='");
+    assert_eq(classify_indicator(0x81ED), 42, "exec regular -> '*'");
+    assert_eq(classify_indicator(0x8148), 42, "group/other exec only -> '*'");
+    assert_eq(classify_indicator(0x81A4), 0, "plain regular -> none");
+    assert_eq(classify_indicator(0x61B0), 0, "block device -> none");
 
     test_group("_mime_for_inode");
     var mime_dir  = _mime_for_inode(0x41ED);          # dir 0755
@@ -962,6 +1252,14 @@ fn main(): i64 {
     # Regular non-executable + unknown ext + path doesn't exist (magic open fails) → octet-stream
     assert_eq(streq(mime_for_entry("/nonexistent", make_str("foo.xyzunknown"), reg_mode), "application/octet-stream"), 1,
       "unknown ext + magic-open-fails -> octet-stream");
+    # v1.4.1: in mime/default.cyml since M8, missing from the baked table.
+    assert_eq(streq(mime_for_entry("/nonexistent", make_str("sheet.xlsx"), reg_mode),
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"), 1, "xlsx ext lookup");
+    # A real magic hit through the hardened probe (non-blocking, fstat-checked):
+    # the build output is an ELF with no extension and (in the test) no exec bit.
+    assert_eq(_mime_probe_magic("build/darshini") != 0, 1, "probe reads a real file");
+    assert_eq(_mime_probe_magic("/dev/null"), 0, "probe refuses a character device");
+    assert_eq(_mime_probe_magic("."), 0, "probe refuses a directory");
 
     return assert_summary();
 }

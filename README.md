@@ -45,23 +45,21 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-**v1.4.0 stable** (current state, version by version, in
-[state.md](docs/development/state.md)). v1.0 contract frozen
+**v1.4.1 stable** — current state in
+[state.md](docs/development/state.md), the plan in
+[roadmap.md](docs/development/roadmap.md). v1.0 contract frozen
 ([ADR 0001](docs/adr/0001-color-scheme.md) /
 [0002](docs/adr/0002-icon-format.md) /
 [0003](docs/adr/0003-mime-detection.md) /
-[0004](docs/adr/0004-tree-mode.md));
-pre-v1 [audit cleared](docs/audit/2026-05-23-audit.md)
-2026-05-23. v1.1 adds `--help` / `--version` / `-F` / `-d`
-plus merge-sort + git-hashmap upgrades; v1.1.1 adds
-multi-path argv; v1.1.2 ships the hot-path optimizations
-from the [bench baseline](docs/benchmarks.md) (hybrid sort
-+ pick_cols early-out + path_join buf reuse). All v1.1.x
-additions non-breaking under the M10 freeze. Targets: Linux
-x86_64 and AGNOS (since v1.3.0); the aarch64 build's output has
-matched x86_64's byte-for-byte since v1.4.0 but it is not yet a
-declared target. On a terminal, untrusted names are sanitized
-through darshana (see [SECURITY.md](SECURITY.md)).
+[0004](docs/adr/0004-tree-mode.md)); 1.x is non-breaking
+additions, fixes and performance. Audits:
+[2026-05-23](docs/audit/2026-05-23-audit.md) (pre-v1),
+[2026-08-23](docs/audit/2026-08-23-audit.md),
+[2026-10-15](docs/audit/2026-10-15-audit.md). Targets: Linux
+x86_64 and AGNOS; the aarch64 build's output matches x86_64's
+byte-for-byte but it is not yet a declared target. On a terminal,
+untrusted names (and metadata) are neutralized before they reach the
+screen (see [SECURITY.md](SECURITY.md)).
 
 Feature surface:
 
@@ -84,26 +82,33 @@ Feature surface:
   standard box-drawing connectors; composes with long +
   color + icons; doesn't follow symlinks-to-dirs.
 - **`--git` status column** — `.`/`M`/`?`/`!` per entry,
-  read directly from `.git/index` v2 + `.gitignore`
-  (no `git` subprocess). Silent skip outside a repo.
+  read directly from `.git/index` (v2–v4, SHA-1 or SHA-256)
+  plus the root `.gitignore` and `.git/info/exclude` (no `git`
+  subprocess). Ignore rules are a subset — exact name,
+  `*suffix`, `dir/`; no negation, nested `.gitignore` or
+  mid-pattern globs yet (roadmap 1.5.0). Silent outside a
+  repo, and declines (no column) for an index it can't read
+  or a submodule / worktree `.git` file.
 - **`--mime` type column** — `text/markdown`,
   `application/x-cyrius`, `application/x-executable`,
   etc; human-readable mapping in `mime/default.cyml`.
   Shown only under `-l`.
 - **`-F` classify** — POSIX trailing indicator: `/`
   directory, `*` executable, `@` symlink, `|` fifo,
-  `=` socket.
+  `=` socket — on listing entries and path arguments alike.
 - **`-d` list-dir-as-self** — emit the path as a single
   entry instead of listing its contents.
 - **Multi-path** — `darshini dir1 dir2 dir3`. Errors first,
   then non-dirs (one section, no header), then dirs (each
   with `path:` header + blank between). Composes with all
   format flags.
+- **`--`** — end of flags, so `darshini -- *` is safe when a
+  name starts with `-`.
 - **`--help` / `--version`** — standard meta flags.
 
-Next candidates: mtime localization, post-v1 platforms
-(aarch64 Linux then macOS / BSD / Windows). See
-[state.md → Next](docs/development/state.md).
+Next: see the [roadmap](docs/development/roadmap.md) — 1.4.2
+internals, 1.5.0 `--git` accuracy, 1.6.0 display correctness,
+1.7.0 platforms.
 
 ## Build
 
@@ -122,7 +127,7 @@ toolchain on PATH; the version is pinned in `cyrius.cyml`.
 
 ```sh
 cp build/darshini ~/.local/bin/                       # or wherever your PATH points
-darshini --version                                     # → "darshini 1.4.0"
+darshini --version                                     # → "darshini 1.4.1"
 ```
 
 Suggested zsh aliases (the maintainer's
@@ -148,6 +153,7 @@ darshini -l --git              # + git status column (silent outside a repo)
 darshini -l --git --mime       # + mime types
 darshini src tests docs        # multi-path, each dir gets a header
 darshini -d */                 # list each subdirectory as itself
+darshini -F -- *               # classify every name, even ones starting with -
 darshini --no-color --no-icons # plain output
 darshini | cat                 # pipe-aware: one entry per line, plain bytes
 darshini --help                # full flag reference
@@ -157,15 +163,14 @@ darshini --help                # full flag reference
 
 - [`docs/adr/`](docs/adr/) — frozen design decisions (color
   scheme, icon format, mime detection, tree mode)
-- [`docs/audit/2026-05-23-audit.md`](docs/audit/2026-05-23-audit.md)
-  — pre-v1 security + code review
+- [`docs/audit/`](docs/audit/) — security + code reviews
+  (pre-v1, v1.3.2, v1.4.1)
 - [`docs/benchmarks.md`](docs/benchmarks.md) — perf baseline +
-  v1.1.x optimization history
+  optimization history (v1.1.x, v1.4.1)
 - [`docs/development/state.md`](docs/development/state.md) —
   live state (version, dep graph, known gotchas)
 - [`docs/development/roadmap.md`](docs/development/roadmap.md) —
-  milestone sequencing (v1.0 complete; 1.x section tracks
-  ongoing)
+  the 1.4.x → 1.x path
 - [`docs/guides/getting-started.md`](docs/guides/getting-started.md) —
   contributor walkthrough
 

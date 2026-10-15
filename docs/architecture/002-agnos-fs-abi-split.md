@@ -10,8 +10,11 @@ below is `#ifdef CYRIUS_TARGET_AGNOS`-gated so the Linux path stays
 byte-identical.
 
 **1. `stat` and `open` take an explicit path length on agnos.** Linux takes a
-NUL-terminated cstr. The wrappers `d_stat` / `d_open_ro` / `d_lstat` in
-`walk.cyr` exist solely to hide this; call them rather than the raw syscalls.
+NUL-terminated cstr. The wrappers `d_stat` / `d_lstat` / `d_open_probe` /
+`d_open_data` / `d_open_dir` in `walk.cyr` exist solely to hide this; call
+them rather than the raw syscalls. (The open wrappers also carry the v1.4.1
+non-blocking flags on Linux; agnos has no such flags, and its `fstat` is a
+stub, so `d_fd_regular_size` answers "regular, size unknown" there.)
 
 **2. There was no `lstat` on agnos** — syscall 6 is `close` there, not `lstat`.
 `d_lstat` falls back to `d_stat`, so on agnos a symlink reports its target.
@@ -25,8 +28,12 @@ and the aarch64 build's output is byte-identical to x86_64's. aarch64 is still
 not a declared supported target.)
 
 **3. The directory-read ABI is a different call with a different record
-layout.** The stdlib `dir_list` is Linux `getdents64` (#217) only. agnos uses
-`getdents` (#29) with a packed `AgnosDirent`, parsed by `_d_dir_list_agnos`.
+layout.** Linux is `getdents64` (#217); agnos is `getdents` (#29) with a
+packed `AgnosDirent`. From v1.3.0 to v1.4.0 darshini parsed the agnos form
+itself (`_d_dir_list_agnos`), because the stdlib `dir_list` was Linux-only.
+The stdlib has since grown the agnos arm, and `dir_list_checked` (cyrius
+6.6.10) reports read errors instead of folding them into "empty" — so
+v1.4.1 retired darshini's copy and calls the stdlib on every target.
 
 ⛔ **Do not "simplify" that onto agnos `sys_readdir` (#81)**, added to the
 stdlib in cycc 6.4.44. It looks like a drop-in replacement and is not: its

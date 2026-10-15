@@ -1,222 +1,159 @@
 # darshini — Roadmap
 
-> Milestone plan. M0–M10 (v1.0) complete; 1.x cycle tracks
-> non-breaking additions + perf. State lives in
-> [`state.md`](state.md); this file is the sequencing.
+> Forward-looking only. What shipped is in the
+> [CHANGELOG](../../CHANGELOG.md); what is true right now is in
+> [`state.md`](state.md). This file is the sequencing from here.
 
-## v1.0 criteria — ✅ all met (shipped 2026-05-23)
+## Where we are
 
-The darshini v1.0 contract: eza core-feature parity for the
-common-case `ls` workflow, with stable CLI flag surface and frozen
-icon-set format. Tree mode, git-status column, and mime-type
-recognition all green on the maintainer's daily-use targets.
+**v1.4.1** (2026-10-15). The v1.0 contract (M0–M10, shipped
+2026-05-19 → 05-23) is intact: eza-style listing with long format,
+multi-column layout, color, icons, tree mode, a git-status column and a
+mime column, pipe-aware. The 1.x line since has added `--help` /
+`--version` / `-F` / `-d` / multi-path / `--`, AGNOS as a target,
+darshana's terminal primitives, two security sweeps
+([2026-08-23](../audit/2026-08-23-audit.md),
+[2026-10-15](../audit/2026-10-15-audit.md)) and the hot-path work in
+[`benchmarks.md`](../benchmarks.md).
 
-- [x] CLI flag surface frozen — `-l` / `-h` / `-1` / `-T` /
-      `--level N` / `--no-color` / `--no-icons` / `--git` /
-      `--mime`. `--help` / `--version` shipped at v1.1.0 as
-      a non-breaking addition; `-a` collapsed into the
-      "show hidden by default" semantics (no flag needed).
-- [x] CYML icon-mapping schema documented and frozen
-      ([ADR 0002](../adr/0002-icon-format.md)).
-- [x] `icons/` ships a curated default mapping covering common
-      extensions + special files (`Makefile`, `README*`,
-      `.gitignore`, …). See `icons/default.cyml`.
-- [x] Test coverage: 233 assertions across every pure helper
-      + CI smokes for flag combinations + error paths.
-- [x] Benchmarks captured in
-      [`docs/benchmarks.md`](../benchmarks.md) for walk+render
-      on representative trees.
-- [x] CHANGELOG complete from v0.1.0 onward.
-- [x] Security audit pass —
-      [`docs/audit/2026-05-23-audit.md`](../audit/2026-05-23-audit.md).
+## The 1.x rules
 
-## Milestones
+- **Frozen**: the flag surface, the pipe output bytes of a correct
+  listing, the success / error exit classes, the icon-mapping format
+  (ADR 0002), the color scheme (ADR 0001), mime precedence (ADR 0003),
+  tree shape (ADR 0004).
+- **Breaking** (→ 2.0): a change to the exit code or default output
+  bytes of a *correct* run (CLAUDE.md). Fixing output that was wrong —
+  a lying `--git` column, a trailing pad, a raw control byte — is
+  `Fixed`, as v1.3.2 and v1.4.1 did. A new opt-in flag is `Added`.
+- **Bump size**: patch for fixes, internals, toolchain; minor for new
+  flags, new targets, a large behavior delta in an existing column, or
+  absorbing a breaking upstream (convention).
 
-### M0 — Scaffold (v0.1.0) — ✅ shipped 2026-05-19
+## Path
 
-- `cyrius init` scaffold landed
-- `./build/darshini` prints scaffold version and exits
-- Doc-tree per [first-party-documentation.md](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/first-party-documentation.md)
+### 1.4.x — patch line: internals and gates, no new surface
 
-### M1 — Directory walk + basic listing (v0.2.0)
+- **1.4.1** — ✅ audit and repair sweep
+  ([audit](../audit/2026-10-15-audit.md)).
+- **1.4.2** — internals + CI, zero output change:
+  - **Sort on the stdlib.** Replace `render.cyr`'s merge sort with
+    `vec_sort_by` (cycc 6.5.4; O(1) extra memory against the per-call
+    scratch vec). Blocked until v1.4.1 because introsort is unstable
+    and `str_lt_ci` called `README` / `readme` equal; v1.4.1's raw-byte
+    tiebreak makes it a strict total order on distinct names, so the
+    output cannot depend on stability any more. Verify by A/B and the
+    40-entry merge test.
+  - **CI runs the cross targets**, not just compiles them: the suite
+    and the A/B matrix under `qemu-aarch64`, the suite under mirshi for
+    agnos.
+  - **CI table-drift gate**: `icons/default.cyml` vs `src/icons.cyr` and
+    `mime/default.cyml` vs `src/mime.cyr`, entry by entry. ADR 0002
+    deferred this "until drift becomes a problem"; v1.4.1 found the
+    first drift (`xlsx`).
+  - **Golden examples**: regenerate `docs/examples/` from the binary
+    and check them in CI, so the doc can't show a layout darshini
+    cannot produce again.
 
-The minimum viable output: walk the cwd, list entries one per line,
-exit. No colors, no icons, no columns — establish the walk + stat
-pipeline.
+### 1.5.0 — `--git` accuracy (ADR 0005)
 
-- `darshini` lists the cwd's entries, one per line
-- `darshini <path>` lists `<path>`'s entries (file or directory)
-- Sorted alphabetically (case-insensitive default; revisit at M4)
-- Tests: happy path + empty dir + permission denied + nonexistent path
-- **Dep gate**: stdlib only
-- **Acceptance**: `darshini` in this repo prints `CHANGELOG.md / CLAUDE.md / cyrius.cyml / …`
+The column's answers change for many entries, so a minor bump and an
+ADR, even though every change is a fix.
 
-### M2 — Long format (`-l`) (v0.3.0)
+- **Full `.gitignore` semantics**, checked against
+  `git status --ignored`: `!` negation with last-match-wins; `/`
+  anchoring and mid-path patterns matched against the repo-relative
+  path (not the basename); `?`, `[...]`, mid-pattern `*`, `**`;
+  backslash escapes; git's trailing-space rule (and no leading-space
+  trim). Today: exact name, `*suffix`, `name/` only.
+- **Every ignore source**: nested `.gitignore` files scoped to their
+  directory; `core.excludesFile` and `$XDG_CONFIG_HOME/git/ignore`.
+- **Inheritance**: the contents of an ignored directory are `!`
+  (`-T`, `darshini --git build`); today they show `?`.
+- **`gitdir:` files** — submodules and linked worktrees: index from the
+  gitdir, `info/exclude` via `commondir`. Declined since v1.4.1 (no
+  column), which beats the wrong repo's index but is not an answer.
+- **`.git` itself** in a listing shows `?`. Pick the right mark.
+- **Ownership**: git's `safe.directory` rule — decline a repository
+  owned by another user (a planted `/tmp/.git`).
+- Considered, not planned: staged-vs-unstaged (needs HEAD's tree:
+  object decompression); per-directory dirty aggregation (a stat of
+  every tracked file below each directory).
 
-- `-l` flag — long-form rows: permissions / size / mtime / name
-- `-h` flag — human-readable sizes (4.2K instead of 4321)
-- mtime format: `YYYY-MM-DD HH:MM` (locale-free, stable)
-- Tests: every column for known fixtures
-- **Dep gate**: M1
-- **Acceptance**: `darshini -lh` produces aligned columns.
+### 1.6.0 — display correctness
 
-### M3 — Multi-column auto-layout (v0.4.0)
+- **Column widths in cells, not bytes.** The grid measures a name by
+  bytes written, so well-formed multibyte names misalign the columns to
+  their right (`é` 2 bytes / 1 cell, CJK 3 / 2). Needs UTF-8 decoding
+  plus an East Asian Width table (wide = 2, combining = 0). TTY grid
+  only; pipe output is unaffected.
+- **Decorate path arguments** like listing entries on a TTY:
+  `darshini *` colors and icons the directories' contents but prints
+  the files it was handed plain. (`-F` on arguments landed in 1.4.1.)
+- **One `-l` table across file arguments**: `darshini -l a b c` sizes
+  each row on its own, so sizes don't line up as `ls -l` does.
+- **`--mime` under `-T -l`** (ADR 0004 promised it; tree.cyr has no
+  mime path).
+- **mtime localization** — opt-in flag; UTC stays the default (the v1.0
+  locale-free contract).
 
-When stdout is a TTY and `-l` isn't passed, fit entries into
-multiple columns based on terminal width.
+### 1.7.0 — platforms
 
-- Terminal-width detection via `ioctl(TIOCGWINSZ)` (or fallback to 80)
-- Column-fit algorithm: max widths, vertical-then-horizontal layout
-- `-1` flag — force single-column (matches `ls -1` semantics)
-- Tests: 1k-entry directory, 100-entry directory, 5-entry directory
-- **Dep gate**: M1
-- **Acceptance**: `darshini` in a 100-entry dir produces a clean
-  multi-column layout in an 80-col terminal.
+- **aarch64 Linux, declared.** Output has matched x86_64 byte-for-byte
+  since v1.4.0 (304 / 304 captures at v1.4.1). What remains is the
+  owner's call plus the 1.4.2 CI gate.
+- **AGNOS `lstat`** (#102, agnos 1.56.53): symlinks currently render as
+  their target there. Changes agnos output; needs a mirshi run proving
+  #102 is emulated.
+- **AGNOS decoration** — blocked upstream: needs a per-fd terminal test
+  in agnos (its `winsize#60` describes the console, not fd 1, so using
+  it would decorate `darshini > file`). Then darshana's Linux arm of
+  `term_width` becomes the whole function.
+- **macOS / BSD** — needs a darshana arm for `tty_winsize` /
+  `tty_isatty`; the stdlib has the stat layouts and `getdirentries`.
 
-### M4 — Color via darshana (v0.5.0)
+### Needs an owner decision (unscheduled)
 
-- `[deps.darshana]` wired
-- Per-entry color by file type (dir, executable, symlink, broken
-  symlink, regular file)
-- TTY auto-detect (no color on pipe)
-- `--no-color` flag to force-off
-- ADR: `docs/adr/0001-color-scheme.md` — palette + rationale
-- **Dep gate**: darshana ≥ 0.3.0
-- **Acceptance**: `darshini` colorizes on TTY; `darshini | cat`
-  emits plain output.
+- **Symlink targets under `-l`** (`link -> target`). Changes `-l`
+  output bytes: an opt-in flag in 1.x, or the default in 2.0.
+- **Icon precedence for directories.** A directory named `README.d` or
+  `Makefile` gets the README / Makefile glyph, not the folder (ADR 0002,
+  corrected at v1.4.1). eza does the opposite. A TTY-only icon change.
+- **Exit status when entries can't be stat'd.** In a readable but
+  unsearchable directory darshini prints `?` rows and exits 0; `ls`
+  exits 1. (An *unreadable* directory exits 1 since v1.4.1.)
+- **`NO_COLOR` / `CLICOLOR`.** A widely followed convention, but an
+  environment knob, against the "no environment-driven theming" line
+  below.
+- **Icons as data.** CLAUDE.md says new icons are data edits; the
+  tables are compile-baked (ADR 0002). Runtime CYML loading would make
+  the principle true at a startup-parse cost — or the principle changes.
+- **Pre-release tags** (`2.0.0-rc1`) do not trigger `release.yml`.
 
-### M5 — Icons (v0.6.0)
+## Out of scope for 1.x
 
-- CYML icon mapping: `icons/default.cyml` maps `<ext>` → `<glyph>`
-  + ANSI color, with special-case entries for well-known filenames
-  (`Makefile`, `Dockerfile`, `README*`, etc.)
-- ADR: `docs/adr/0002-icon-format.md` — schema + rationale
-- `--no-icons` flag to suppress
-- Tests: every shipped icon renders for its trigger
-- **Dep gate**: M4 (icons inherit from darshana)
-- **Acceptance**: `darshini -l` in this repo shows the Cyrius icon
-  for `.cyr`, the markdown icon for `.md`, etc.
+Kept so nobody adds these by accident.
 
-### M6 — Tree mode (`-T`) (v0.7.0)
-
-- `-T` / `--tree` flag — recursive display with box-drawing characters
-- `--level N` to cap depth
-- Reuses M2 row format per entry; box-drawing prefixes per entry
-- Tests: nested dirs, symlink-to-dir (don't recurse into it by
-  default; explicit flag to follow)
-- **Dep gate**: M2 + M5
-- **Acceptance**: `darshini -T --level 2` on this repo shows the
-  expected two-level box-drawn tree.
-
-### M7 — Git-status column (`--git`) (v0.8.0)
-
-- `--git` flag — extra column showing per-entry git status (modified,
-  added, ignored, untracked, clean)
-- Reads `.git/index` + `.git/info/exclude` + `.gitignore` directly;
-  no `git` subprocess
-- Skips silently when no `.git/` in ancestor chain (no wasted stat)
-- Tests against a controlled test repo with each status type present
-- **Dep gate**: M2
-- **Acceptance**: in this repo, `darshini -l --git` shows
-  appropriate status flags for tracked / modified / untracked files.
-
-### M8 — Mime-type recognition (`--mime`) (v0.9.0)
-
-- `--mime` flag — extra column showing detected mime type
-- Detection via magic-bytes table (CYML-defined; ships in `mime/`)
-- Falls back to extension lookup when magic-bytes inconclusive
-- ADR: `docs/adr/0003-mime-detection.md`
-- **Dep gate**: M5
-- **Acceptance**: `darshini -l --mime` shows `text/markdown`,
-  `application/x-cyrius`, `application/x-executable` etc.
-
-### M9 — Harden + dogfood — ✅ shipped 2026-05-23 (v0.9.1)
-
-- P(-1) hardening pass complete; audit doc at
-  [`docs/audit/2026-05-23-audit.md`](../audit/2026-05-23-audit.md).
-- Bench baseline captured in
-  [`docs/benchmarks.md`](../benchmarks.md).
-- ADR 0004 (tree mode) back-filled.
-- Maintainer's daily `ls` alias migrated to darshini at v1.1.x.
-
-### M10 — v1.0.0 — ✅ shipped 2026-05-23
-
-- CLI flags + icon format + color scheme + mime detection
-  + tree mode all frozen.
-- CHANGELOG `[1.0.0]` `Breaking` section documents the
-  freeze (no signature changes — the freeze is the contract
-  change per the M10 design).
-- v1.0.0 cut.
-
-## 1.x line — non-breaking additions + perf
-
-- **v1.1.0** (2026-05-23) — `--help` / `--version` / `-F` /
-  `-d` flags, merge-sort `sort_entries`, hashmap
-  `_git_find_tracked`.
-- **v1.1.1** (2026-05-23) — multi-path argv
-  (`darshini dir1 dir2 ...`). Completes the maintainer's
-  eza-alias retirement.
-- **v1.1.2** (2026-05-23) — hot-path optimizations: hybrid
-  sort (insertion-cutoff at merge-sort leaves),
-  `pick_cols` widest-aware short-circuit, `_path_join_into`
-  buffer reuse in `compute_decor`.
-- v1.1.3 – v1.3.4 — toolchain / darshana bumps, agnos
-  support (v1.3.0), the v1.3.2 P(-1) sweep and its v1.3.3
-  backlog; see the [CHANGELOG](../../CHANGELOG.md).
-- **v1.4.0** (2026-10-12) — cyrius 6.7.9 + darshana 1.3.0;
-  terminal code on darshana's primitives (`tty_winsize`,
-  `tty_isatty`, `tty_sgr_buf`, `tty_sanitize_buf`); untrusted
-  names sanitized on every output path, and on AGNOS.
-
-1.x backlog:
-- **mtime localization** — opt-in flag; keep UTC default.
-- **Platform support** — aarch64 Linux → macOS / BSD /
-  Windows. aarch64: since v1.4.0 the build's output is
-  byte-identical to x86_64's across the 52-mode A/B matrix
-  under `qemu-aarch64`; what remains is the owner's call to
-  declare it supported, plus a CI cross-build gate.
-  Arch-specific sites enumerated in [`state.md`](state.md)
-  "Known gotchas".
-- **AGNOS decoration needs a per-fd terminal test** (agnos-side).
-  `term_width` returns 0 on agnos by decision (v1.4.0): its
-  `winsize#60` describes the console, not fd 1, so using it would
-  put escapes, icons and a multi-column grid into
-  `darshini > file`. When agnos exposes whether an fd is the
-  console, the Linux arm of `term_width` (darshana's
-  `tty_winsize`) becomes the whole function and agnos gets the
-  real console width.
-- **agnos `lstat`** — `d_lstat` still falls back to `stat` on
-  agnos, so a symlink reports its target there. agnos 1.56.53
-  added `lstat#102` and the stdlib wraps it as
-  `sys_lstat(path, len, buf)`. Adopting it changes agnos output
-  for every symlink and needs a mirshi run to confirm #102 is
-  emulated there.
-- **Column widths count bytes, not cells.** The multi-column
-  layout measures a name by the bytes it writes, so a
-  well-formed multibyte UTF-8 name (`é` is 2 bytes / 1 cell, CJK
-  3 bytes / 2 cells) misaligns the columns to its right.
-  Pre-existing since M3; measured at v1.4.0 on a 30-entry grid.
-  Needs a display-width rule (code points, East Asian width).
-
-## Out of scope (for v1.0)
-
-The list keeps future contributors from adding to v1.0 by accident.
-
-- **Gitignore-aware filtering** — out of scope; the `--git` column
-  shows status, doesn't filter. Filter with `find` or shell globs.
-- **Extended attributes / ACLs** — out of scope.
-- **`--sort=size` / `--sort=mtime` / `--sort=…`** — out of scope for
-  v1.0; alphabetical only. (Reconsider for v1.1 if there's demand.)
-- **Recursive `-R` (non-tree)** — out of scope; use `-T --level N`.
+- **Gitignore-aware filtering** — the `--git` column shows status, it
+  doesn't filter. Filter with `find` or shell globs.
+- **Extended attributes / ACLs.**
+- **`--sort=size` / `--sort=mtime` / …** — alphabetical only. Reopen
+  only on real demand.
+- **Recursive `-R` (non-tree)** — use `-T --level N`.
+- **Following symlinks into directories under `-T`** — would need a
+  visited-inode set (ADR 0004).
+- **A mime magic cache** between runs (benchmarks.md candidate 3) —
+  listings rarely re-run within seconds.
 - **AI-augmented features** (`chakshu`-style mime prediction,
-  repo-context-aware coloring) — explicitly v2.0 territory.
-- **Windows / macOS** — Linux + AGNOS-native only for v1.0.
-- **Configurable output via dotfiles** — out of scope. The CLI flag
-  surface is the contract; environment-driven theming is the
-  neofetch trap and we're not falling into it.
+  repo-context coloring) — 2.0 territory.
+- **Windows.**
+- **Configurable output via dotfiles or environment** — the CLI flag
+  surface is the contract; environment-driven theming is the neofetch
+  trap.
 
 ## Cross-references
 
-- [`state.md`](state.md) — live status (supported features, icon coverage)
+- [`state.md`](state.md) — live status
 - [`../../CHANGELOG.md`](../../CHANGELOG.md) — release history
+- [`../audit/`](../audit/) — audit reports
 - [darshana](https://github.com/MacCracken/darshana) — rendering substrate dep

@@ -3,7 +3,9 @@
 Captured 2026-05-23 at v0.9.0 via `cyrius bench
 tests/darshini.bcyr` on the maintainer's x86_64 Linux box.
 **Refreshed 2026-05-23 at v1.1.0** after the merge-sort +
-git-hashmap upgrades — diff section at the bottom.
+git-hashmap upgrades, at v1.1.2 (hot paths), and at **v1.4.1**
+(end-to-end listing cost: buffered stdout, `--git` directory
+lookup) — sections at the bottom, newest last.
 Pure-algorithm benchmarks — filesystem I/O excluded (those vary
 with kernel page cache + fs state and are dominated by syscall
 overhead, not by darshini's code).
@@ -38,6 +40,9 @@ Worst-case 1k-entry reverse-sorted directory under `-l --git --mime`:
 - **Total: 40-50 ms.** Noticeable but acceptable for v1.0 (`tree` in a deep node_modules behaves similarly).
 
 ## Optimization candidates (post-v1)
+
+Status at v1.4.1: 1, 2 and 4 shipped (v1.1.0 / v1.1.0 / v1.1.2); 3
+stays deferred (see the roadmap). Kept as written for the record.
 
 1. **Merge-sort replacement for `sort_entries`**. Removes the
    O(N²) worst case. Estimated ship: v1.1 if user feedback flags
@@ -108,10 +113,11 @@ improvement at typical scales.
   short-circuit returns 1 col immediately when the widest entry
   doesn't fit. Skips the full per-col iteration loop.
 - ~~`path_join` buffer reuse~~ — **shipped in v1.1.2.** Local
-  `_path_join_into` helper writes into a per-listing stack
-  buffer. `compute_decor` uses it; lib/fs.cyr's `path_join`
-  stays for cases where caller-owned allocation is needed
-  (tree.cyr's recursion).
+  `_path_join_into` helper writes into one per-listing heap
+  buffer (`alloc(PATH_BUF_SIZE)`, reused for every entry; the
+  v1.1.2 text said "stack"). `compute_decor` uses it;
+  lib/fs.cyr's `path_join` stays for cases where caller-owned
+  allocation is needed (tree.cyr's recursion).
 
 ## v1.1.2 refresh — 2026-05-23
 
@@ -142,3 +148,29 @@ under any perception threshold.
 At a 1000-entry listing under `-l --git --mime`, that saves
 ~233 µs of pure path-join work (1000 × 233 ns) — meaningful
 but secondary to the larger lstat + per-entry decoration costs.
+
+## v1.4.1 refresh — 2026-10-15: whole-listing cost
+
+The tables above time pure functions. v1.4.1's changes are in what
+those tables exclude — write syscalls and the `--git` directory lookup —
+so this refresh times **whole invocations** (`stdout` to `/dev/null`,
+best of three, same machine, v1.4.0 vs v1.4.1 built from the same
+toolchain). Output is byte-identical in every row (checked by hash).
+
+| Invocation | v1.4.0 | v1.4.1 | Why |
+|---|---|---|---|
+| `-l` on 5,000 entries | 35.0 ms | 20.3 ms | stdout buffered: 40,000 `write(2)` → 4 |
+| `-1` on 5,000 entries | 11.3 ms | 7.3 ms | 10,000 writes → 1 |
+| `-T /usr/share` (80k entries) | 438 ms | 271 ms | one write per ancestor level per line → buffered |
+| `-T -l /usr/share` | 662 ms | 310 ms | + per-entry stat / formatter scratch on the stack |
+| `-T --git` over a 20k-file repo in 2k dirs | 491 ms | 77 ms | directory status: index scan per dir → prefix set |
+| `--git d00` (100 subdirs) in that repo | 13.3 ms | 12.3 ms | the set is built once, one insert per directory |
+
+The `cyrius bench` micro-benchmarks are unchanged within noise at
+v1.4.1 (`sort_entries` best=1000 499 µs, worst=1000 827 µs; `pick_cols`
+1k@80 186 µs; `_path_join_into` 73 ns) — the case-only sort tiebreak
+runs only when two names compare equal ignoring case.
+
+On a terminal stdout is line-buffered rather than block-buffered, so
+`-T` still streams line by line; the win there is the per-row pieces
+(padding spaces, connectors, escapes) collapsing into one write per line.

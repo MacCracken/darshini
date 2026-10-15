@@ -23,8 +23,15 @@ fn lower_byte(b): i64 {
 }
 
 # Strict less-than over Str, case-insensitive on ASCII letters.
-# Returns 1 if a < b, else 0. Equal strings return 0 (stable for
+# Returns 1 if a < b, else 0. Identical strings return 0 (stable for
 # insertion sort).
+#
+# v1.4.1: names equal under case folding ("README" / "readme") are
+# ordered by their raw bytes, so uppercase first. Through v1.4.0 they
+# compared equal and the stable sort kept the order getdents returned
+# them in — `touch README readme Readme` and `touch readme Readme
+# README` listed the same three names in different orders, against the
+# byte-stable contract above.
 fn str_lt_ci(a: Str, b: Str): i64 {
     var ad = str_data(a);
     var al = str_len(a);
@@ -47,6 +54,18 @@ fn str_lt_ci(a: Str, b: Str): i64 {
     }
     if (verdict != 0 - 1) { return verdict; }
     if (al < bl) { return 1; }
+    if (al > bl) { return 0; }
+    # Same length, equal ignoring case: the first differing raw byte.
+    i = 0;
+    while (i < al) {
+        var rx = load8(ad + i);
+        var ry = load8(bd + i);
+        if (rx != ry) {
+            if (rx < ry) { return 1; }
+            return 0;
+        }
+        i = i + 1;
+    }
     return 0;
 }
 
@@ -119,7 +138,7 @@ fn _insertion_sort_range(v, lo, hi): i64 {
 # choice (Java Arrays.sort, libstdc++ std::sort, etc.) — large
 # enough to amortize the recursion overhead, small enough that
 # insertion sort's O(N²) doesn't bite. Bench-confirmed on
-# already-sorted 1k input: 635 µs → ~135 µs.
+# already-sorted 1k input: 635 µs → 493 µs (docs/benchmarks.md).
 var _SORT_INSERTION_CUTOFF = 16;
 
 # Top-down recursive merge-sort on `v[lo..hi)`. log₂(N) deep —
@@ -163,8 +182,9 @@ fn sort_entries(entries): i64 {
 
 # Emit one Str per line to stdout. Equivalent to a ls(1) -1 column.
 #
-# Decoration vecs (`colors` / `icons` / `gitchrs`): non-zero
-# means "decorate"; passing 0 disables that decoration.
+# Decoration vecs (`colors` / `icons` / `gitchrs` / `classifies`):
+# non-zero means "decorate"; passing 0 disables that decoration. The
+# `-F` indicator cell is not padded here (nothing follows the name).
 fn print_entries(entries, colors, icons, gitchrs, classifies): i64 {
     var i = 0;
     var n = vec_len(entries);
@@ -173,7 +193,6 @@ fn print_entries(entries, colors, icons, gitchrs, classifies): i64 {
     var git_pad = 0;
     if (gitchrs != 0)    { git_pad = git_display_width(); }
     var cls_pad = 0;
-    if (classifies != 0) { cls_pad = classify_display_width(); }
     while (i < n) {
         var s = vec_get(entries, i);
         var c = 0;
@@ -281,10 +300,17 @@ fn format_size_decimal(size, buf): i64 {
 }
 
 # Render `size` as a human-readable string in IEC-style 1024-based
-# buckets: < 1K stays decimal; otherwise X.YK / X.YM / X.YG / X.YT.
-# Matches `ls -h` / `eza -h` defaults. Returns bytes written.
-# One decimal place when size >= 1024; sub-1K is integer with no
-# suffix (so a `1` byte file shows as `1`, matching ls).
+# buckets: < 1K stays decimal; otherwise X.YK / X.YM / X.YG / X.YT /
+# X.YP / X.YE. Returns bytes written. One decimal place when size >=
+# 1024, TRUNCATED (1048575 is `1023.9K`) — `ls -h` rounds up and would
+# print `1.0M`; the truncating form is the v1.0 contract. Sub-1K is
+# integer with no suffix (so a `1` byte file shows as `1`, like ls).
+#
+# v1.4.1: the tenths digit was `(size * 10 / scale) % 10`, and `size *
+# 10` overflows i64 above ~9.2e17 — a 922337203685477581-byte sparse
+# file rendered `838860.)T`. It is now taken from the remainder (below),
+# which cannot overflow. P and E were added at the same time; through v1.4.0
+# a 1 PiB file read `1024.0T`.
 fn format_size_human(size, buf): i64 {
     if (size < 0) { size = 0; }
     if (size < 1024) { return format_size_decimal(size, buf); }
@@ -302,8 +328,18 @@ fn format_size_human(size, buf): i64 {
         unit_ch = 84;             # 'T'
         scale = 1099511627776;
     }
+    if (size >= 1125899906842624) {      # 1024^5
+        unit_ch = 80;                    # 'P'
+        scale = 1125899906842624;
+    }
+    if (size >= 1152921504606846976) {   # 1024^6
+        unit_ch = 69;                    # 'E'
+        scale = 1152921504606846976;
+    }
     var whole = size / scale;
-    var frac10 = (size * 10 / scale) % 10;
+    # floor(10 * r / scale), as floor(5 * r / (scale / 2)): exact, since
+    # scale is a power of two, and 5 * r < 5 * 2^60 stays inside i64.
+    var frac10 = (5 * (size % scale)) / (scale / 2);
     var n = format_size_decimal(whole, buf);
     store8(buf + n, 46);          # '.'
     store8(buf + n + 1, 48 + frac10);
@@ -359,6 +395,18 @@ fn format_mtime(epoch, buf): i64 {
     # placeholder long.cyr already emits for a failed stat, so the
     # field keeps its exact 16-byte width. Epochs >= 0 are untouched
     # and byte-identical.
+    # v1.4.1: and years past 9999. `_chrono_w4` writes `48 + year / 1000`
+    # through store8, so a five-digit year emits whatever byte that
+    # truncates to: year 10000 renders `:000-01-01`, years 235,7xx and
+    # 235,8xx emit ESC 7 / ESC 8 (save / restore cursor) raw into the
+    # terminal — a later row then overwrites an earlier one, the same
+    # hide-a-sibling effect v1.3.2 closed for names — and other ranges
+    # emit raw C1 (0x9B, CSI) and C0 (CR) bytes. `epoch_to_date` also
+    # loops once per year: an mtime of 1e16 took 1.1 s per entry, 9e18
+    # an estimated ~19 minutes. Such mtimes survive extraction from a
+    # hostile tar onto tmpfs. 253402300799 is 9999-12-31 23:59:59 UTC;
+    # anything later gets the same placeholder as a pre-1970 mtime.
+    if (epoch > 253402300799) { epoch = 0 - 1; }
     if (epoch < 0) {
         store8(buf + 0, 63);  store8(buf + 1, 63);  store8(buf + 2, 63);
         store8(buf + 3, 63);  store8(buf + 4, 45);  store8(buf + 5, 63);

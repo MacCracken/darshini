@@ -30,13 +30,21 @@ executable-bit-set tail**.
 Order:
 1. Non-regular file type (directory / symlink / fifo / socket /
    block dev / char dev) → `inode/*` mime per IANA.
-2. Regular file with an extension in the table → extension's
+2. Exact filename in `[filenames]` (`Makefile`, `LICENSE`, …) →
+   its mapped mime. (Shipped at M8 but missing from this list until
+   v1.4.1.)
+3. Regular file with an extension in the table → extension's
    mapped mime.
-3. Regular file, no extension match, executable bit set →
+4. Regular file, no extension match, executable bit set →
    `application/x-executable` (skip magic).
-4. Regular file, no extension match, not executable → open +
-   read first 16 bytes, magic-byte dispatch.
-5. Default → `application/octet-stream`.
+5. Regular file, no extension match, not executable → open +
+   read first 16 bytes, magic-byte dispatch. Since v1.4.1 the open
+   is non-blocking and no-follow, `fstat` must confirm a regular
+   file, and a file under 2 bytes is not read.
+6. Default → `application/octet-stream`.
+
+"No extension match" includes an extension that is present but not
+in the table: an executable `tool.xyz` is `application/x-executable`.
 
 Why diverge from "magic-first":
 - Roadmap's order makes `--mime` cost N opens for every listing.

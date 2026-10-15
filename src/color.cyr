@@ -20,7 +20,8 @@
 # ADR 0001. Returns 0 when the entry should render uncolored
 # (regular non-executable file). Symlinks return CYAN here —
 # broken-symlink detection requires a follow-stat against the
-# path, which only `compute_colors` can do.
+# path, which the callers holding one do (compute_decor,
+# render_long_one, tree.cyr's _tree_decor).
 fn color_for_mode(mode): i64 {
     var fmt = mode & S_IFMT;
     if (fmt == S_IFDIR)  { return TTY_FG_BLUE; }
@@ -37,31 +38,13 @@ fn color_for_mode(mode): i64 {
     return 0;
 }
 
-# Build per-entry "decoration" vecs for the listing of `entries`
-# (basenames inside `dir_str`):
-#   - colors  vec: parallel vec<sgr_code> per ADR 0001 (or 0)
-#   - icons   vec: parallel vec<cstr glyph bytes> per ADR 0002
-#                  (or 0 if stat failed)
-#   - gitchrs vec: parallel vec<i64 status-char byte> per M7
-#                  (or 0 when want_git == 0; ' ' = 32 when ctx
-#                  is non-null but the lookup failed)
-# Each vec is omitted if its want_ flag is 0; the returned
-# 24-byte struct stores 0 for the omitted slot.
-#
-# Single lstat per entry — saves three separate passes.
-# Symlinks pay one extra `sys_stat` for broken-target detection
-# (only when want_color is on; the icon stays the link glyph
-# either way; git status uses lstat-only data).
-#
-# Returns a 24-byte heap struct: {colors@0, icons@8, gitchrs@16}.
-# v1.1.2 path-join into a caller-allocated cstr buffer.
-# Writes `dir + "/" + name + "\0"` into buf and returns buf.
-# Saves an allocation per call vs lib/fs.cyr's `path_join`
-# (which builds via str_builder). Caller is responsible for
-# sizing buf large enough — `PATH_BUF_SIZE` (4096) covers
-# the Linux PATH_MAX. The buffer is OK to reuse across loop
-# iterations because no consumer stashes the cstr past its
-# iteration.
+# v1.1.2 path-join into a caller-allocated cstr buffer of
+# PATH_BUF_SIZE bytes. Writes `dir + "/" + name + "\0"` into buf and
+# returns buf — or an empty cstr and 0 when the join would not fit
+# (bounded since v1.3.2; see below). Saves an allocation per call vs
+# lib/fs.cyr's `path_join` (which builds via str_builder). The buffer
+# is OK to reuse across loop iterations because no consumer stashes
+# the cstr past its iteration.
 var PATH_BUF_SIZE = 4096;
 fn _path_join_into(buf, dir_str, name_str): i64 {
     var dlen = str_len(dir_str);
@@ -101,6 +84,23 @@ fn _path_join_into(buf, dir_str, name_str): i64 {
     return buf;
 }
 
+# Build per-entry "decoration" vecs for the listing of `entries`
+# (basenames inside `dir_str`), each parallel to `entries`:
+#   - colors     vec<sgr_code> per ADR 0001 (0 = uncolored)
+#   - icons      vec<cstr glyph> per ADR 0002 (0 if stat failed)
+#   - gitchrs    vec<status byte> per M7 (' ' when the stat failed)
+#   - mimes      vec<cstr> per ADR 0003
+#   - classifies vec<indicator byte> for `-F` (0 = none)
+#   - stats      vec<stat buffer> (0 where the lstat failed) — handed
+#                to render_long so `-l` stats each entry once (v1.3.3)
+# Each of the first five is 0 when its want_ flag is off.
+#
+# Single lstat per entry. Symlinks pay one extra stat for broken-target
+# detection (only when want_color is on; the icon stays the link glyph
+# either way; git status uses lstat-only data).
+#
+# Returns a 48-byte heap struct: {colors@0, icons@8, gitchrs@16,
+# mimes@24, classifies@32, stats@40}.
 fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, want_classify): i64 {
     var colors = 0;
     var icons = 0;
@@ -372,16 +372,23 @@ fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad, classify_char,
         } }
     if (p > 0) { d_write(STDOUT_FD, &pre, p); }
     _write_name_bytes(str_data(name), str_len(name));
-    # Suffix: the v1.1 -F classify indicator — a 1-char suffix, or a
-    # space when `-F` is on but the mode has none, keeping the column
-    # aligned — then the SGR reset (exactly 4 bytes).
+    # Suffix: the v1.1 -F classify indicator, then the SGR reset
+    # (exactly 4 bytes). `classify_pad > 0` reserves the indicator's
+    # cell with a space when the mode has none — only the multi-column
+    # grid passes it, where the next column's alignment depends on it.
+    # v1.4.1: every other layout (`-1`, a pipe, `-l`, `-T`, an argument
+    # echo) put nothing after that space, so it was pure trailing
+    # whitespace in the output — `darshini -F | while IFS= read -r f`
+    # read "plain " for a file named "plain". `ls -F` never emits it.
     var suf[8];
     var s = 0;
-    if (classify_pad > 0) {
-        if (classify_char != 0) { store8(&suf, classify_char); }
-        else { store8(&suf, 32); }
+    if (classify_char != 0) {
+        store8(&suf, classify_char);
         s = 1;
-    }
+    } else { if (classify_pad > 0) {
+            store8(&suf, 32);
+            s = 1;
+        } }
     if (color != 0) {
         var r = tty_sgr_reset_buf(&suf, s);
         if (r > 0) { s = r; }
@@ -390,9 +397,34 @@ fn emit_decorated(name, color, icon, icon_pad, git_char, git_pad, classify_char,
     return 0;
 }
 
-# Back-compat shim for callers that still want the no-decoration
-# (or color-only) path — most of the long-format / non-listing
-# emit paths.
-fn emit_colored(name, color): i64 {
-    return emit_decorated(name, color, 0, 0, 0, 0, 0, 0);
+# Write a NUL-terminated string darshini authored itself (a literal, a
+# message) to `fd`. Never for a name or path — those go through
+# `_write_name_bytes` / `_write_err_bytes`.
+fn print_cstr_fd(fd, c): i64 {
+    d_write(fd, c, strlen(c));
+    return 0;
+}
+
+# `<prog>: <path>: <msg>` on stderr. The quoted path is untrusted — it
+# is often a shell glob's expansion, so `darshini *` hands us every name
+# in the directory — and goes through the stderr sanitizer (v1.4.0;
+# through v1.3.4 it was written raw). Moved here from main.cyr at
+# v1.4.1 so tree.cyr can report an unreadable subdirectory.
+fn emit_error(prog_path, path_cstr, msg): i64 {
+    print_cstr_fd(STDERR_FD, prog_path);
+    print_cstr_fd(STDERR_FD, ": ");
+    _write_err_bytes(path_cstr, strlen(path_cstr));
+    print_cstr_fd(STDERR_FD, ": ");
+    print_cstr_fd(STDERR_FD, msg);
+    d_write(STDERR_FD, "\n", 1);
+    return 0;
+}
+
+# The diagnostic for a directory that could not be read, discriminated
+# the way run() discriminates a failed top-level open.
+fn emit_dir_error(path_cstr, rc): i64 {
+    if (rc == 0 - EACCES) {
+        return emit_error("darshini", path_cstr, "permission denied");
+    }
+    return emit_error("darshini", path_cstr, "cannot read directory");
 }

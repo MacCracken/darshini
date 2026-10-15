@@ -60,8 +60,10 @@ When deciding the icon for an entry named `name` with mode `m`,
 walk this list. First match wins; no fallthrough.
 
 1. **Exact filename** — `[filenames][name]`
-2. **Filename prefix** — `[filename_prefixes][p]` for the longest
-   `p` that is a prefix of `name`
+2. **Filename prefix** — `[filename_prefixes][p]` for the first
+   `p` (in table order) that is a prefix of `name`. No two shipped
+   prefixes overlap, so first-match and longest-match agree today; a
+   new prefix that nests inside an existing one must go above it.
 3. **File-type override** — if `m` is a directory / symlink /
    fifo / socket / blockdev / chardev, use the type-specific
    glyph (folder, link, etc.). Regular files fall through to (4).
@@ -70,11 +72,15 @@ walk this list. First match wins; no fallthrough.
 5. **Generic fallback** — `<file glyph>` for any other regular
    file
 
-Type-overrides land at step (3) so that directories named
-`README.d` still get the folder glyph (not the README glyph) —
-matching eza's precedence. The exact-filename + prefix rules
-sit above type-override so `Makefile` (a regular file) gets its
-specific glyph rather than the generic file glyph.
+The exact-filename + prefix rules sit above type-override so
+`Makefile` (a regular file) gets its specific glyph rather than
+the generic file glyph. A consequence the v1.0 text got wrong
+(corrected at v1.4.1, verified against the binary): a
+*directory* named `README.d` or `Makefile` also matches step 1 or
+2 and gets the README / Makefile glyph, not the folder glyph —
+the opposite of eza. Moving the type override above the name
+rules would change icons in default TTY output, so it is a
+roadmap question, not a fix.
 
 ### Display width
 

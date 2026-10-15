@@ -1,10 +1,9 @@
 # darshini — git status column (M7, `--git`).
 #
-# Reads `.git/index` (v2 binary format) directly + `.gitignore`
+# Reads `.git/index` (binary) directly + `.gitignore` / `info/exclude`
 # (text) to classify each listing entry as tracked / modified /
-# untracked / ignored. Per CLAUDE.md hard rule: NO `git`
-# subprocess — every byte comes from sys_open + sys_read against
-# the on-disk files.
+# untracked / ignored. Per CLAUDE.md hard rule: NO `git` subprocess —
+# every byte comes from open + read against the on-disk files.
 #
 # Status chars (per-entry, single char):
 #   '.' (46) — tracked, clean (stat matches index)
@@ -13,19 +12,25 @@
 #   '!' (33) — ignored (matches a .gitignore / info/exclude rule)
 #   ' ' (32) — entry's mode lookup failed (broken symlink, race)
 #
-# MVP scope at v0.8.0:
-#   - .git/index v2 only (errors out on v3+ / index-v4 path
-#     compression; the majority of working repos are v2)
-#   - Linear-scan tracked vec for path membership (fine through
-#     low thousands of entries; hashmap upgrade is post-v1)
-#   - .gitignore line-by-line pattern subset: exact-basename,
-#     `*<suffix>` glob (e.g. `*.swp`), `<name>/` directory match.
-#     Skips negation (`!`), brace expansion, mid-string globs,
-#     `**` deep-match. Per-line comments + blank lines stripped.
-#   - No HEAD vs index diff (so "added/staged" doesn't show
-#     distinctly — treated as tracked). Defer to post-v1.
-#   - No nsec-precision modification check (most filesystems
-#     return 0 nsec; comparing would false-flag clean files).
+# Scope (v1.4.1):
+#   - `.git/index` versions 2, 3 and 4 (v4's path-prefix compression),
+#     SHA-1 or SHA-256 object ids. An index that exists but cannot be
+#     read or parsed DECLINES the git context — the column does not
+#     appear — rather than appearing with every file '?'.
+#   - O(1) tracked-path lookup (hashmap, v1.1) and O(1) directory
+#     lookup (prefix set, v1.4.1).
+#   - Ignore rules from the repo-root `.gitignore` and
+#     `.git/info/exclude` only, matched against the entry's basename,
+#     in a subset: exact name, `*<suffix>`, `<name>/` directory-only.
+#     No negation, no mid-pattern or class globs, no nested
+#     `.gitignore`, no `core.excludesFile`. The full rule set is a
+#     roadmap milestone, not a patch.
+#   - No HEAD-vs-index diff ("added/staged" shows as tracked) and no
+#     per-subtree dirty aggregation for directories.
+#   - Second-precision mtime check; comparing nanoseconds would
+#     false-flag clean files on filesystems that report 0.
+#   - A `.git` FILE (a submodule or linked worktree) declines the
+#     context instead of falling through to the enclosing repo.
 
 # ================================================================
 # Endian + path helpers
@@ -63,12 +68,10 @@ fn _be_u16(buf, off): i64 {
 # invocation there is: bare `darshini --git` inside any repo
 # subdirectory, where main.cyr supplies "." as the path.
 #
-# `..` components are deliberately LEFT IN PLACE. The walk-up probes
-# each candidate with stat(2), so the kernel resolves `..` against
-# the real, symlink-aware tree. Resolving it lexically here would
-# rewrite "/a/link/.." to "/a" when `link` points into a different
-# repo, binding the listing to the wrong index — turning a case that
-# is correct today into a wrong answer.
+# `..` components are deliberately LEFT IN PLACE: resolving them
+# lexically would rewrite "/a/link/.." to "/a" when `link` points into
+# a different repo. Since v1.4.1 this only matters on the fallback
+# path — `_git_physical` asks the kernel for the real directory first.
 fn _git_normalize_abs(p): i64 {
     var plen = strlen(p);
     var out = alloc(plen + 2);
@@ -116,9 +119,7 @@ fn _git_normalize_abs(p): i64 {
 # Return the absolute version of a path cstr. If already
 # absolute (starts with '/'), returns a normalized copy.
 # Else, prepends cwd + '/' and normalizes. Doesn't resolve `..`
-# or symlinks — fine for our use (we just need a stable prefix
-# for the repo-root walk-up and the listing-rel computation),
-# and see `_git_normalize_abs` for why `..` must stay lexical.
+# or symlinks — the lexical fallback behind `_git_physical`.
 fn _git_make_absolute(p): i64 {
     if (load8(p) == 47) { return _git_normalize_abs(p); }
     #ifdef CYRIUS_TARGET_AGNOS
@@ -147,20 +148,125 @@ fn _git_make_absolute(p): i64 {
     #endif
 }
 
-# Walk up from `dir_abs` (must be an absolute cstr), checking
-# at each level whether `<dir>/.git` is a directory. Returns
-# a heap-alloc'd cstr of the directory containing `.git/` on
-# success, or 0 when no enclosing repo was found before
-# reaching the filesystem root.
+#ifndef CYRIUS_TARGET_AGNOS
+# The kernel's absolute path for directory `dir_cstr`, or 0 if it can't
+# be had: open it and read back /proc/self/fd/<fd>, which names the
+# real directory with every symlink and `..` already resolved.
+fn _git_dir_physical(dir_cstr): i64 {
+    var fd = d_open_dir(dir_cstr);
+    if (fd < 0) { return 0; }
+    var lp[32];
+    memcpy(&lp, "/proc/self/fd/", 14);
+    var digits[24];
+    var nd = 0;
+    var v = fd;
+    if (v == 0) { store8(&digits, 48); nd = 1; }
+    while (v > 0) {
+        store8(&digits + nd, 48 + v % 10);
+        v = v / 10;
+        nd = nd + 1;
+    }
+    var k = 0;
+    while (k < nd) {
+        store8(&lp + 14 + k, load8(&digits + nd - 1 - k));
+        k = k + 1;
+    }
+    store8(&lp + 14 + nd, 0);
+    var out = alloc(4097);
+    var n = sys_readlink(&lp, out, 4096);
+    sys_close(fd);
+    if (n <= 0) { return 0; }
+    if (n >= 4096) { return 0; }
+    if (load8(out) != 47) { return 0; }
+    store8(out + n, 0);
+    return out;
+}
+#endif
+
+# v1.4.1: the PHYSICAL absolute path of a listing path, as git sees it.
+#
+# Through v1.4.0 the repo-root walk-up ran on the lexical path. Any `..`
+# the walk had to step past stayed in the listing's repo-relative prefix
+# ("src/sub/.."), so every lookup missed and every tracked file showed
+# '?' — `darshini --git ..` from two levels down, or `--git ../sibling`.
+# And a symlink into another repo bound to the wrong index: from repo
+# A, `darshini --git link` (link -> B/src) used A's, while `cd link;
+# darshini --git` used B's. git resolves the physical cwd, so now does
+# this. A directory resolves whole; for a non-directory (`-l --git
+# file`), its parent resolves and the name is re-attached unresolved —
+# a symlink is tracked as itself. Falls back to the lexical
+# `_git_make_absolute` when /proc can't answer, and always on agnos.
+fn _git_physical(p): i64 {
+    #ifndef CYRIUS_TARGET_AGNOS
+    var whole = _git_dir_physical(p);
+    if (whole != 0) { return whole; }
+    # Not a directory: split off the last component (ignoring trailing
+    # '/'), resolve the parent, re-attach the name.
+    var e = strlen(p);
+    var trimming = 1;
+    while (trimming == 1) {
+        if (e > 1) {
+            if (load8(p + e - 1) == 47) { e = e - 1; }
+            else { trimming = 0; }
+        } else { trimming = 0; }
+    }
+    var slash = 0 - 1;
+    var i = e - 1;
+    var searching = 1;
+    while (searching == 1) {
+        if (i < 0) { searching = 0; }
+        else {
+            if (load8(p + i) == 47) { slash = i; searching = 0; }
+            else { i = i - 1; }
+        }
+    }
+    var parent = ".";
+    var name_off = 0;
+    if (slash == 0) { parent = "/"; name_off = 1; }
+    if (slash > 0) {
+        parent = alloc(slash + 1);
+        memcpy(parent, p, slash);
+        store8(parent + slash, 0);
+        name_off = slash + 1;
+    }
+    var nlen = e - name_off;
+    if (nlen > 0) {
+        var pp = _git_dir_physical(parent);
+        if (pp != 0) {
+            var pl = strlen(pp);
+            var out = alloc(pl + 1 + nlen + 1);
+            memcpy(out, pp, pl);
+            var w = pl;
+            if (pl > 1) { store8(out + w, 47); w = w + 1; }
+            if (pl == 1) { if (load8(pp) != 47) { store8(out + w, 47); w = w + 1; } }
+            memcpy(out + w, p + name_off, nlen);
+            store8(out + w + nlen, 0);
+            return out;
+        }
+    }
+    #endif
+    return _git_make_absolute(p);
+}
+
+# Walk up from `dir_abs` (must be an absolute cstr), checking at each
+# level for `<dir>/.git`. Returns a heap cstr of the directory whose
+# `.git` is a directory, or 0 when none was found before the filesystem
+# root — or when the nearest `.git` is NOT a directory (v1.4.1).
+#
+# A `.git` file is a submodule or a linked worktree (`gitdir: <path>`).
+# Through v1.4.0 the walk stepped past it to the enclosing repo, whose
+# index does not hold the submodule's files, so every one showed '?'.
+# Following `gitdir:` is roadmap work; until then no context beats a
+# wrong one.
 fn _git_find_root(dir_abs): i64 {
     var len = strlen(dir_abs);
-    var buf = alloc(len + 1);
+    var buf = alloc(len + 2);
     memcpy(buf, dir_abs, len);
     store8(buf + len, 0);
     var done = 0;
     while (done == 0) {
         var cur_len = strlen(buf);
-        # Probe <buf>/.git as a directory.
+        # Probe <buf>/.git.
         var probe = alloc(cur_len + 8);
         memcpy(probe, buf, cur_len);
         var pos = cur_len;
@@ -181,6 +287,7 @@ fn _git_find_root(dir_abs): i64 {
         if (rc >= 0) {
             var mode = load32(&stat_buf + STAT_MODE);
             if ((mode & S_IFMT) == S_IFDIR) { return buf; }
+            return 0;
         }
         # Walk up — find last '/' in buf and truncate.
         if (cur_len <= 1) { done = 1; }
@@ -195,8 +302,15 @@ fn _git_find_root(dir_abs): i64 {
                 } else { if (i == 0) { scanning = 0; }
                     else { i = i - 1; } }
             }
-            if (found <= 0) { done = 1; }
-            else { store8(buf + found, 0); }
+            if (found < 0) { done = 1; }
+            else {
+                # v1.4.1: a '/' at index 0 means the parent IS the root;
+                # keep it, so the next probe is "/.git". Through v1.4.0
+                # the walk stopped here and a repo rooted at / was never
+                # found from below.
+                if (found == 0) { store8(buf + 1, 0); }
+                else { store8(buf + found, 0); }
+            }
         }
     }
     return 0;
@@ -221,58 +335,165 @@ fn _git_listing_rel(repo_root, listing_abs): i64 {
 }
 
 # ================================================================
-# .git/index parsing (v2)
+# .git/index parsing (v2 / v3 / v4)
 # ================================================================
 
-# Parse the index buffer into three parallel vecs:
-#   paths  : vec<Str>  — repo-relative path of each tracked entry
-#   mtimes : vec<i64>  — index-recorded mtime_sec
-#   sizes  : vec<i64>  — index-recorded size (u32)
-# Returns 0 on success, -1 if the header is not v2 / DIRC.
-fn _git_parse_index(buf, len, paths, mtimes, sizes): i64 {
+# Read git's offset-varint (index v4) at buf+pos, bounded by `len`.
+# Stores the position after it at `out_pos`; returns the value, or -1
+# when the varint runs off the buffer or past 2^31.
+fn _git_varint(buf, pos, len, out_pos): i64 {
+    if (pos >= len) { return 0 - 1; }
+    var c = load8(buf + pos);
+    pos = pos + 1;
+    var val = c & 127;
+    while ((c & 128) != 0) {
+        if (pos >= len) { return 0 - 1; }
+        if (val > 16777215) { return 0 - 1; }
+        val = val + 1;
+        c = load8(buf + pos);
+        pos = pos + 1;
+        val = (val << 7) + (c & 127);
+    }
+    store64(out_pos, pos);
+    return val;
+}
+
+# The parser, for an object id of `oid_len` bytes (20 = SHA-1, 32 =
+# SHA-256). Entry layout: 40 bytes of stat data, the oid, a 16-bit
+# flags word (low 12 bits: name length, 0xFFF = "longer, scan for the
+# NUL"), then from v3 a second 16-bit word when flags bit 0x4000 is set.
+# v2/v3: the NUL-terminated name, NUL-padded to a multiple of 8.
+# v4: an offset-varint count of bytes to drop from the PREVIOUS path,
+# then the NUL-terminated suffix, unpadded.
+#
+# v1.4.1. Through v1.4.0 only v2 was accepted, and the -1 for anything
+# else was ignored, so a v3 index (`git add -N`, sparse checkout) or v4
+# (`feature.manyFiles`) produced a git column with every file '?'. A
+# SHA-256 repository has a v2 header but 32-byte ids, so its entries
+# were misread outright. The long-name branch started its NUL scan at
+# 0xFFF instead of 0, so a path of 4095+ bytes ended parsing and every
+# later entry showed '?'. And a name is now required to be non-empty and
+# to end in a NUL where git puts one, which catches a misframed entry
+# early.
+fn _git_parse_index_oid(buf, len, oid_len, paths, mtimes, sizes): i64 {
     if (len < 12) { return 0 - 1; }
     if (load8(buf + 0) != 68) { return 0 - 1; }   # 'D'
     if (load8(buf + 1) != 73) { return 0 - 1; }   # 'I'
     if (load8(buf + 2) != 82) { return 0 - 1; }   # 'R'
     if (load8(buf + 3) != 67) { return 0 - 1; }   # 'C'
     var version = _be_u32(buf, 4);
-    if (version != 2) { return 0 - 1; }
+    if (version < 2) { return 0 - 1; }
+    if (version > 4) { return 0 - 1; }
     var n = _be_u32(buf, 8);
+    var fixed = 42 + oid_len;              # stat data + oid + flags
     var pos = 12;
+    var prev = 0;                          # v4: previous path (cstr)
+    var prev_len = 0;
+    var npos[8];
     var i = 0;
     while (i < n) {
-        if (pos + 62 > len) { return 0 - 1; }
+        if (pos + fixed > len) { return 0 - 1; }
         var mtime_sec = _be_u32(buf, pos + 8);
         var size = _be_u32(buf, pos + 36);
-        var flags = _be_u16(buf, pos + 60);
-        var name_len = flags & 0xFFF;
-        # Handle the rare "name >= 4095 bytes" case by treating
-        # the field as "scan until NUL" up to the end of the
-        # index — safe even though the precise length is unknown.
-        if (name_len == 0xFFF) {
-            var k = pos + 62;
-            while (k < len) {
-                if (load8(buf + k) == 0) { k = len; }
-                else { name_len = name_len + 1; k = k + 1; }
-            }
+        var flags = _be_u16(buf, pos + 40 + oid_len);
+        var hdr = fixed;
+        if (version >= 3) {
+            if ((flags & 0x4000) != 0) { hdr = hdr + 2; }
         }
-        var name_start = pos + 62;
-        if (name_start + name_len > len) { return 0 - 1; }
-        var name_buf = alloc(name_len + 1);
-        memcpy(name_buf, buf + name_start, name_len);
-        store8(name_buf + name_len, 0);
-        vec_push(paths, str_clone(str_from(name_buf)));
+        if (pos + hdr > len) { return 0 - 1; }
+        var name_start = pos + hdr;
+        var name_buf = 0;
+        var name_len = 0;
+        if (version == 4) {
+            var strip = _git_varint(buf, name_start, len, &npos);
+            if (strip < 0) { return 0 - 1; }
+            if (strip > prev_len) { return 0 - 1; }
+            var sfx = load64(&npos);
+            var se = sfx;
+            var nul = 0;
+            while (nul == 0) {
+                if (se >= len) { return 0 - 1; }                  # no NUL
+                if (load8(buf + se) == 0) { nul = 1; }
+                else { se = se + 1; }
+            }
+            var keep = prev_len - strip;
+            name_len = keep + (se - sfx);
+            name_buf = alloc(name_len + 1);
+            if (keep > 0) { memcpy(name_buf, prev, keep); }
+            memcpy(name_buf + keep, buf + sfx, se - sfx);
+            store8(name_buf + name_len, 0);
+            pos = se + 1;
+        } else {
+            name_len = flags & 0xFFF;
+            if (name_len == 0xFFF) {
+                name_len = 0;
+                var lnul = 0;
+                while (lnul == 0) {
+                    if (name_start + name_len >= len) { return 0 - 1; }   # no NUL
+                    if (load8(buf + name_start + name_len) == 0) { lnul = 1; }
+                    else { name_len = name_len + 1; }
+                }
+            }
+            if (name_start + name_len + 1 > len) { return 0 - 1; }
+            if (load8(buf + name_start + name_len) != 0) { return 0 - 1; }
+            name_buf = alloc(name_len + 1);
+            memcpy(name_buf, buf + name_start, name_len);
+            store8(name_buf + name_len, 0);
+            # Entry size: header + name + 1..8 NUL pad to a multiple of 8.
+            var total = hdr + name_len + 1;
+            var rem = total % 8;
+            if (rem != 0) { total = total + (8 - rem); }
+            pos = pos + total;
+        }
+        # git never writes an empty path; one here means misframing.
+        if (name_len == 0) { return 0 - 1; }
+        vec_push(paths, str_from(name_buf));
         vec_push(mtimes, mtime_sec);
         vec_push(sizes, size);
-        # Total entry size: 62 + name_len + 1..8 NUL pad to
-        # multiple-of-8. ceil((62+name_len+1)/8)*8.
-        var total = 62 + name_len + 1;
-        var rem = total % 8;
-        if (rem != 0) { total = total + (8 - rem); }
-        pos = pos + total;
+        prev = name_buf;
+        prev_len = name_len;
         i = i + 1;
     }
     return 0;
+}
+
+# Parse the index buffer into three parallel vecs:
+#   paths  : vec<Str>  — repo-relative path of each tracked entry
+#   mtimes : vec<i64>  — index-recorded mtime_sec (u32)
+#   sizes  : vec<i64>  — index-recorded size (u32)
+# for a SHA-1 repository. Returns 0 on success, -1 on any malformation.
+fn _git_parse_index(buf, len, paths, mtimes, sizes): i64 {
+    return _git_parse_index_oid(buf, len, 20, paths, mtimes, sizes);
+}
+
+# 20 for a SHA-1 repository, 32 when `.git/config` sets
+# `extensions.objectFormat = sha256` — the only case git writes 32-byte
+# ids into the index. A cheap scan (case-insensitive key, as git
+# config is), not a config parser: it looks for "objectformat" followed
+# on the same line by "sha256".
+fn _git_oid_len(cfg, n): i64 {
+    var i = 0;
+    while (i + 12 <= n) {
+        var j = 0;
+        var hit = 1;
+        var key = "objectformat";
+        while (j < 12) {
+            if (lower_byte(load8(cfg + i + j)) != load8(key + j)) { hit = 0; j = 12; }
+            else { j = j + 1; }
+        }
+        if (hit == 1) {
+            var k = i + 12;
+            while (k + 6 <= n) {
+                if (load8(cfg + k) == 10) { k = n; }
+                else {
+                    if (memeq(cfg + k, "sha256", 6) == 1) { return 32; }
+                    k = k + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 20;
 }
 
 # ================================================================
@@ -283,7 +504,7 @@ fn _git_parse_index(buf, len, paths, mtimes, sizes): i64 {
 # Each pattern is a Str of the trimmed line. Comments (#) and
 # negation (!) and blank lines are skipped. Trailing '\r' from
 # CRLF endings is trimmed. Patterns are stored as-given (with
-# any trailing '/' preserved — _git_match_ignore handles that).
+# any trailing '/' preserved — _git_match_one handles that).
 fn _git_parse_ignore(buf, len, patterns): i64 {
     var pos = 0;
     while (pos < len) {
@@ -343,7 +564,7 @@ fn _git_parse_ignore(buf, len, patterns): i64 {
 
 # Match `name` against one ignore `pattern` (both Strs).
 # `is_dir` (0/1) is honored by directory-only `pat/` patterns.
-# Subset semantics — see docs/adr at M7 closeout if added.
+# Subset semantics — see the header.
 fn _git_match_one(pattern, name, is_dir): i64 {
     var plen = str_len(pattern);
     var nlen = str_len(name);
@@ -351,10 +572,8 @@ fn _git_match_one(pattern, name, is_dir): i64 {
     var pd = str_data(pattern);
     var nd = str_data(name);
     # Directory-only `pat/`
-    var dir_only = 0;
     var match_len = plen;
     if (load8(pd + plen - 1) == 47) {
-        dir_only = 1;
         match_len = plen - 1;
         if (is_dir == 0) { return 0; }
     }
@@ -387,17 +606,21 @@ fn _git_match_any(patterns, name, is_dir): i64 {
 # GitCtx — the "loaded git state for this listing"
 # ================================================================
 #
-# 48-byte struct:
+# 56-byte struct:
 #   +0  paths       : vec<Str> tracked repo-relative paths
 #   +8  mtimes      : vec<i64> index-recorded mtime_sec, parallel
 #   +16 sizes       : vec<i64> index-recorded size, parallel
 #   +24 patterns    : vec<Str> ignore patterns
-#   +32 listing     : Str — listing dir relative to repo root ("" if at root)
+#   +32 listing     : Str — listing path relative to repo root ("" if at root)
 #   +40 tracked_map : Str-keyed hashmap of repo-relative-path → (idx + 1)
 #                     into the parallel mtimes/sizes vecs. v1.1 replaces
 #                     the v1.0 linear scan in _git_find_tracked. Values are
 #                     stored as `idx + 1` so a 0 result from map_get can be
 #                     distinguished from "first entry's idx is 0".
+#   +48 dir_cell    : pointer to an 8-byte cell holding the directory
+#                     prefix set (built on first use), or 0 for "scan".
+#                     A cell, not the map, so contexts sharing one parsed
+#                     index (see git_open) build the set once. v1.4.1.
 
 fn _ctx_paths(c): i64       { return load64(c + 0); }
 fn _ctx_mtimes(c): i64      { return load64(c + 8); }
@@ -405,14 +628,17 @@ fn _ctx_sizes(c): i64       { return load64(c + 16); }
 fn _ctx_patterns(c): i64    { return load64(c + 24); }
 fn _ctx_listing(c): i64     { return load64(c + 32); }
 fn _ctx_tracked_map(c): i64 { return load64(c + 40); }
+fn _ctx_dir_cell(c): i64    { return load64(c + 48); }
 
-# Try to open + slurp a file into a heap buf. Returns
-# (buf_ptr, len) packed: a 16-byte struct {ptr@0, len@8}. ptr=0
-# on failure.
+# Read a whole file into a heap buf. Returns a 24-byte struct
+# {ptr@0, len@8, status@16}: status 0 = read (ptr/len valid), 1 = absent
+# (no such file, or empty), 2 = present but unusable (unreadable, not a
+# regular file, larger than `cap`, short read).
 fn _git_slurp(path_cstr, cap): i64 {
-    var r = alloc(16);
+    var r = alloc(24);
     store64(r, 0);
     store64(r + 8, 0);
+    store64(r + 16, 1);
     # v1.3.2 (P(-1)): size from stat(2), then read to EOF.
     #
     # Through v1.3.1 this allocated the full `cap` and did ONE
@@ -422,26 +648,23 @@ fn _git_slurp(path_cstr, cap): i64 {
     # LARGER than cap, the read returned exactly cap and the parse
     # walked a truncated index — every entry past the cutoff simply
     # wasn't there, so those tracked files rendered '?' (untracked)
-    # with no indication anything had been dropped. Silently wrong
-    # beats loudly wrong only in the sense that nobody notices.
+    # with no indication anything had been dropped.
     #
     # Now: stat first, allocate exactly the file's size, and loop
-    # until EOF. `cap` becomes a sanity ceiling rather than a
-    # truncation point — a file beyond it yields NO git context, so
-    # the column silently doesn't appear (the same shape as the M7
-    # out-of-repo case) instead of appearing and lying.
-    #
-    # Side benefit: a FIFO stats with st_size 0 and is refused here,
-    # so `--git` no longer blocks forever on a planted `.git/index`
-    # FIFO. (Real `git` does hang on that, so this is a small
-    # improvement over the reference rather than a parity fix.)
+    # until EOF. `cap` is a sanity ceiling rather than a truncation
+    # point. A FIFO stats with st_size 0 and is refused here; since
+    # v1.4.1 the open is also non-blocking and fstat must confirm a
+    # regular file, so one swapped in after the stat cannot hang us.
     var st[144];
     if (d_stat(path_cstr, &st) < 0) { return r; }
     var size = load64(&st + STAT_SIZE);
     if (size <= 0) { return r; }
+    store64(r + 16, 2);
     if (size > cap) { return r; }
-    var fd = d_open_ro(path_cstr);
+    var fd = d_open_data(path_cstr);
     if (fd < 0) { return r; }
+    var fsz[8];
+    if (d_fd_regular_size(fd, &fsz) == 0) { sys_close(fd); return r; }
     var buf = alloc(size + 1);
     var got = 0;
     var reading = 1;
@@ -454,99 +677,69 @@ fn _git_slurp(path_cstr, cap): i64 {
         }
     }
     sys_close(fd);
-    if (got <= 0) { return r; }
+    if (got < size) { return r; }
     store64(r, buf);
     store64(r + 8, got);
+    store64(r + 16, 0);
     return r;
 }
 
-# Top-level: open the listing path's enclosing git repo,
-# parse index + ignores, build a GitCtx. Returns 0 when no
-# enclosing `.git/` was found (caller renders without the
-# column per acceptance criterion).
-fn git_open(listing_cstr): i64 {
-    var listing_abs = _git_make_absolute(listing_cstr);
-    var repo_root = _git_find_root(listing_abs);
-    if (repo_root == 0) { return 0; }
-    # .git/index path
-    var rlen = strlen(repo_root);
-    var idx_path = alloc(rlen + 16);
-    memcpy(idx_path, repo_root, rlen);
-    store8(idx_path + rlen + 0, 47);  # /
-    store8(idx_path + rlen + 1, 46);  # .
-    store8(idx_path + rlen + 2, 103); # g
-    store8(idx_path + rlen + 3, 105); # i
-    store8(idx_path + rlen + 4, 116); # t
-    store8(idx_path + rlen + 5, 47);  # /
-    store8(idx_path + rlen + 6, 105); # i
-    store8(idx_path + rlen + 7, 110); # n
-    store8(idx_path + rlen + 8, 100); # d
-    store8(idx_path + rlen + 9, 101); # e
-    store8(idx_path + rlen + 10, 120);# x
-    store8(idx_path + rlen + 11, 0);
+# `<root>/<rel>` as a fresh cstr.
+fn _git_path(root, rel): i64 {
+    var rlen = strlen(root);
+    var nlen = strlen(rel);
+    var out = alloc(rlen + 1 + nlen + 1);
+    memcpy(out, root, rlen);
+    store8(out + rlen, 47);
+    memcpy(out + rlen + 1, rel, nlen);
+    store8(out + rlen + 1 + nlen, 0);
+    return out;
+}
+
+# v1.4.1: one parsed index per repository per run. `darshini -l --git *`
+# opens a context per argument, and through v1.4.0 each one re-read and
+# re-parsed `.git/index` — 18 file arguments against a 90k-entry index
+# took 1.1 s and 430 MB. Arguments in the same repository now share the
+# parse and differ only in their listing prefix.
+var _git_cache_root = 0;
+var _git_cache_ctx = 0;
+
+# Parse one repository's index and ignore files into a GitCtx with an
+# empty listing prefix, or 0 when the index is present but unusable.
+fn _git_load(repo_root): i64 {
     # v1.3.2: sanity ceiling, not a truncation point — _git_slurp
     # sizes its buffer from stat(2), so a realistic index of any
     # size is read whole. 256 MB is far beyond any real .git/index
     # (linux.git's is ~9 MB); past it we decline the git context
-    # rather than allocate absurdly. The old 4 MB value WAS a
-    # truncation point and silently untracked large repos.
-    var idx_slurp = _git_slurp(idx_path, 268435456);
+    # rather than allocate absurdly.
+    var idx_slurp = _git_slurp(_git_path(repo_root, ".git/index"), 268435456);
     var paths = vec_new();
     var mtimes = vec_new();
     var sizes = vec_new();
-    if (load64(idx_slurp) != 0) {
-        _git_parse_index(load64(idx_slurp), load64(idx_slurp + 8), paths, mtimes, sizes);
+    # No index at all is a fresh repository: nothing is tracked, which is
+    # a true answer. An index that exists but can't be read or parsed is
+    # not — decline rather than show every file '?' (v1.4.1; through
+    # v1.4.0 the failure was ignored and the column lied).
+    if (load64(idx_slurp + 16) == 2) { return 0; }
+    if (load64(idx_slurp + 16) == 0) {
+        var oid_len = 20;
+        var cfg = _git_slurp(_git_path(repo_root, ".git/config"), 1048576);
+        if (load64(cfg + 16) == 0) { oid_len = _git_oid_len(load64(cfg), load64(cfg + 8)); }
+        var prc = _git_parse_index_oid(load64(idx_slurp), load64(idx_slurp + 8), oid_len,
+          paths, mtimes, sizes);
+        if (prc < 0) { return 0; }
     }
-    # .gitignore path
-    var ign_path = alloc(rlen + 16);
-    memcpy(ign_path, repo_root, rlen);
-    store8(ign_path + rlen + 0, 47);
-    store8(ign_path + rlen + 1, 46);
-    store8(ign_path + rlen + 2, 103);
-    store8(ign_path + rlen + 3, 105);
-    store8(ign_path + rlen + 4, 116);
-    store8(ign_path + rlen + 5, 105);  # i
-    store8(ign_path + rlen + 6, 103);  # g
-    store8(ign_path + rlen + 7, 110);  # n
-    store8(ign_path + rlen + 8, 111);  # o
-    store8(ign_path + rlen + 9, 114);  # r
-    store8(ign_path + rlen + 10, 101); # e
-    store8(ign_path + rlen + 11, 0);
-    var ign_slurp = _git_slurp(ign_path, 1048576);
     var patterns = vec_new();
-    if (load64(ign_slurp) != 0) {
+    var ign_slurp = _git_slurp(_git_path(repo_root, ".gitignore"), 1048576);
+    if (load64(ign_slurp + 16) == 0) {
         _git_parse_ignore(load64(ign_slurp), load64(ign_slurp + 8), patterns);
     }
-    # .git/info/exclude (optional second layer)
-    var exc_path = alloc(rlen + 24);
-    memcpy(exc_path, repo_root, rlen);
-    store8(exc_path + rlen + 0, 47);
-    store8(exc_path + rlen + 1, 46);
-    store8(exc_path + rlen + 2, 103);
-    store8(exc_path + rlen + 3, 105);
-    store8(exc_path + rlen + 4, 116);
-    store8(exc_path + rlen + 5, 47);
-    store8(exc_path + rlen + 6, 105);  # i
-    store8(exc_path + rlen + 7, 110);  # n
-    store8(exc_path + rlen + 8, 102);  # f
-    store8(exc_path + rlen + 9, 111);  # o
-    store8(exc_path + rlen + 10, 47);
-    store8(exc_path + rlen + 11, 101); # e
-    store8(exc_path + rlen + 12, 120); # x
-    store8(exc_path + rlen + 13, 99);  # c
-    store8(exc_path + rlen + 14, 108); # l
-    store8(exc_path + rlen + 15, 117); # u
-    store8(exc_path + rlen + 16, 100); # d
-    store8(exc_path + rlen + 17, 101); # e
-    store8(exc_path + rlen + 18, 0);
-    var exc_slurp = _git_slurp(exc_path, 1048576);
-    if (load64(exc_slurp) != 0) {
+    var exc_slurp = _git_slurp(_git_path(repo_root, ".git/info/exclude"), 1048576);
+    if (load64(exc_slurp + 16) == 0) {
         _git_parse_ignore(load64(exc_slurp), load64(exc_slurp + 8), patterns);
     }
-    var listing = _git_listing_rel(repo_root, listing_abs);
-    # v1.1: build the tracked-path hashmap so _git_find_tracked
-    # can drop from O(N) linear scan to O(1) average. Values are
-    # (idx + 1) so a get-miss returns 0.
+    # v1.1: the tracked-path hashmap so _git_find_tracked is O(1)
+    # average. Values are (idx + 1) so a get-miss returns 0.
     var tracked_map = map_new_str();
     var pi = 0;
     var pn = vec_len(paths);
@@ -554,13 +747,40 @@ fn git_open(listing_cstr): i64 {
         map_set(tracked_map, vec_get(paths, pi), pi + 1);
         pi = pi + 1;
     }
-    var ctx = alloc(48);
+    var cell = alloc(8);
+    store64(cell, 0);
+    var ctx = alloc(56);
     store64(ctx + 0, paths);
     store64(ctx + 8, mtimes);
     store64(ctx + 16, sizes);
     store64(ctx + 24, patterns);
-    store64(ctx + 32, listing);
+    store64(ctx + 32, str_clone(str_from("")));
     store64(ctx + 40, tracked_map);
+    store64(ctx + 48, cell);
+    return ctx;
+}
+
+# Top-level: open the listing path's enclosing git repo, parse index +
+# ignores, build a GitCtx. Returns 0 when no enclosing `.git/` was found
+# (caller renders without the column per the M7 acceptance criterion),
+# and — since v1.4.1 — when the index exists but cannot be used.
+fn git_open(listing_cstr): i64 {
+    var listing_abs = _git_physical(listing_cstr);
+    var repo_root = _git_find_root(listing_abs);
+    if (repo_root == 0) { return 0; }
+    var base = 0;
+    if (_git_cache_root != 0) {
+        if (streq(_git_cache_root, repo_root) == 1) { base = _git_cache_ctx; }
+    }
+    if (base == 0) {
+        base = _git_load(repo_root);
+        if (base == 0) { return 0; }
+        _git_cache_root = repo_root;
+        _git_cache_ctx = base;
+    }
+    var ctx = alloc(56);
+    memcpy(ctx, base, 56);
+    store64(ctx + 32, _git_listing_rel(repo_root, listing_abs));
     return ctx;
 }
 
@@ -590,10 +810,58 @@ fn _git_find_tracked(ctx, rel_path): i64 {
     return v - 1;
 }
 
+# Every proper directory prefix of every tracked path ("a/b/c.txt"
+# contributes "a" and "a/b"), as a Str-keyed set.
+#
+# git keeps the index sorted by path, so a prefix the previous path
+# shares has already been inserted: only the '/' positions at or past
+# the common prefix with the previous path are new. That makes the
+# build one insert per distinct directory instead of one per path per
+# level (20k paths in 2k dirs: ~2.1k inserts, not ~40k). An unsorted
+# index stays correct — it just inserts some prefixes twice.
+fn _git_build_dir_set(paths): i64 {
+    var m = map_new_str();
+    var n = vec_len(paths);
+    var prev = 0;
+    var prev_len = 0;
+    var i = 0;
+    while (i < n) {
+        var p = vec_get(paths, i);
+        var pd = str_data(p);
+        var pl = str_len(p);
+        var common = 0;
+        var cmp_on = 1;
+        while (cmp_on == 1) {
+            if (common >= pl) { cmp_on = 0; }
+            else { if (common >= prev_len) { cmp_on = 0; }
+                else { if (load8(pd + common) != load8(prev + common)) { cmp_on = 0; }
+                    else { common = common + 1; } } }
+        }
+        var j = common;
+        while (j < pl) {
+            if (load8(pd + j) == 47) {
+                if (j > 0) { map_set(m, str_from_buf(pd, j), 1); }
+            }
+            j = j + 1;
+        }
+        prev = pd;
+        prev_len = pl;
+        i = i + 1;
+    }
+    return m;
+}
+
 # Check whether any tracked path lives under `dir_rel`. Used for
 # directory entries — git's index doesn't track directories
 # themselves, only files, so a directory is "tracked" iff it
-# contains a tracked file. Linear scan, prefix-then-slash match.
+# contains a tracked file.
+#
+# v1.4.1: a set lookup. Through v1.4.0 this scanned the whole index
+# once per directory entry — measured on 90k index entries in 5k
+# directories, `-T --git` took 10.9 s against 0.87 s without `--git`.
+# The prefix set is built on the first directory lookup and shared by
+# every context over the same index. A context without a cell (unit
+# tests) keeps the scan.
 fn _git_dir_has_tracked(ctx, dir_rel): i64 {
     var paths = _ctx_paths(ctx);
     var n = vec_len(paths);
@@ -603,11 +871,14 @@ fn _git_dir_has_tracked(ctx, dir_rel): i64 {
     # the repo root, so there is no prefix to match against. Any
     # tracked path at all lives under it. Through v1.3.2 this returned
     # 0 unconditionally, which is why the tree's own root rendered '?'.
-    # No other caller can reach dlen == 0: `_git_entry_relpath` always
-    # yields either the entry name or listing + "/" + name.
     if (dlen == 0) {
         if (n > 0) { return 1; }
         return 0;
+    }
+    var cell = _ctx_dir_cell(ctx);
+    if (cell != 0) {
+        if (load64(cell) == 0) { store64(cell, _git_build_dir_set(paths)); }
+        return map_has(load64(cell), dir_rel);
     }
     var dd = str_data(dir_rel);
     var i = 0;
@@ -623,10 +894,19 @@ fn _git_dir_has_tracked(ctx, dir_rel): i64 {
     return 0;
 }
 
-# Classify a listing entry → status char (per the header).
-# `mtime_sec` and `size` come from the entry's lstat; `is_dir`
-# is its directory flag (drives directory-only ignore matches
-# and the dir-aggregate tracked-check).
+# Status of the tracked entry at index slot `idx` given the entry's own
+# lstat mtime and size. v1.4.1: compared as u32, as git does
+# (`sd_size != (unsigned)st_size`) — the index stores both fields in 32
+# bits. Through v1.4.0 the full 64-bit values were compared, so every
+# tracked file of 4 GiB or more, and every pre-1970 mtime, showed 'M'.
+fn _git_tracked_status(ctx, idx, mtime_sec, size): i64 {
+    var indexed_mtime = vec_get(_ctx_mtimes(ctx), idx);
+    var indexed_size = vec_get(_ctx_sizes(ctx), idx);
+    if (indexed_mtime != (mtime_sec & 0xFFFFFFFF)) { return 77; }   # 'M'
+    if (indexed_size != (size & 0xFFFFFFFF)) { return 77; }
+    return 46;                                                      # '.'
+}
+
 # v1.3.2 (P(-1)): status for an entry identified by its path
 # RELATIVE TO THE LISTING ROOT (`sub_rel`, e.g. "src/deep/c.txt"),
 # rather than by basename alone.
@@ -644,66 +924,44 @@ fn _git_dir_has_tracked(ctx, dir_rel): i64 {
 fn git_status_for_sub(ctx, sub_rel, basename, is_dir, mtime_sec, size): i64 {
     var rel = _git_entry_relpath(ctx, sub_rel);
     var idx = _git_find_tracked(ctx, rel);
-    if (idx >= 0) {
-        var indexed_mtime = vec_get(_ctx_mtimes(ctx), idx);
-        var indexed_size = vec_get(_ctx_sizes(ctx), idx);
-        if (indexed_mtime != mtime_sec) { return 77; }   # 'M'
-        if (indexed_size != size) { return 77; }
-        return 46;                                        # '.'
-    }
+    if (idx >= 0) { return _git_tracked_status(ctx, idx, mtime_sec, size); }
+    # Directories aren't in the index directly — treat as tracked if
+    # any indexed path lives under them. Doesn't surface per-subtree
+    # dirty status.
     if (is_dir == 1) {
         if (_git_dir_has_tracked(ctx, rel) == 1) { return 46; }
     }
     if (_git_match_any(_ctx_patterns(ctx), basename, is_dir) == 1) { return 33; }   # '!'
-    return 63;                                            # '?'
+    return 63;                                                                      # '?'
 }
 
-# v1.3.3: status for the LISTING ROOT itself — the entry `-T` prints
-# on its own first line. Its repo-relative path is the ctx listing
-# prefix directly, not prefix + display-name. Through v1.3.2 the root
-# line went through the ordinary path and was looked up as
-# "src/src" (or "./."), always missed, and always rendered '?' even
-# when the directory was fully tracked.
+# Status for a direct child `name` of the listing.
+fn git_status_for(ctx, name, is_dir, mtime_sec, size): i64 {
+    return git_status_for_sub(ctx, name, name, is_dir, mtime_sec, size);
+}
+
+# Status for the LISTING PATH ITSELF: the `-T` root line (v1.3.3) and,
+# since v1.4.1, a path rendered by `-l <file>` / `-ld <dir>`. Its
+# repo-relative path is the ctx listing prefix directly, not prefix +
+# display name. Through v1.3.2 the tree root was looked up as "src/src"
+# and always rendered '?'; through v1.4.0 `-l --git <file>` had the same
+# defect — `a.txt` was looked up as "a.txt/a.txt" — so every file
+# argument showed '?', tracked or not.
 #
-# Ignore matching is skipped: a pattern matching the listing root
-# would mean the user explicitly asked to list an ignored directory,
-# and reporting '!' for the thing they named is noise, not
-# information. The tree's own contents still match normally.
-fn git_status_for_root(ctx, is_dir, mtime_sec, size): i64 {
+# Ignore matching applies to a non-directory (`basename` is its name):
+# `darshini -l --git app.log` agrees with the `! app.log` row of the
+# listing around it. A directory skips it, as the tree root always has:
+# reporting '!' for a directory the user explicitly named is noise.
+fn git_status_for_root(ctx, basename, is_dir, mtime_sec, size): i64 {
     var rel = _ctx_listing(ctx);
     var idx = _git_find_tracked(ctx, rel);
-    if (idx >= 0) {
-        var indexed_mtime = vec_get(_ctx_mtimes(ctx), idx);
-        var indexed_size = vec_get(_ctx_sizes(ctx), idx);
-        if (indexed_mtime != mtime_sec) { return 77; }   # 'M'
-        if (indexed_size != size) { return 77; }
-        return 46;                                        # '.'
-    }
+    if (idx >= 0) { return _git_tracked_status(ctx, idx, mtime_sec, size); }
     if (is_dir == 1) {
         if (_git_dir_has_tracked(ctx, rel) == 1) { return 46; }
+        return 63;
     }
-    return 63;                                            # '?'
-}
-
-fn git_status_for(ctx, name, is_dir, mtime_sec, size): i64 {
-    var rel = _git_entry_relpath(ctx, name);
-    var idx = _git_find_tracked(ctx, rel);
-    if (idx >= 0) {
-        var indexed_mtime = vec_get(_ctx_mtimes(ctx), idx);
-        var indexed_size = vec_get(_ctx_sizes(ctx), idx);
-        if (indexed_mtime != mtime_sec) { return 77; }   # 'M'
-        if (indexed_size != size) { return 77; }
-        return 46;                                        # '.'
-    }
-    # Directories aren't in the index directly — treat as
-    # tracked if any indexed path lives under them. Doesn't
-    # surface per-subtree dirty status (would need aggregating
-    # — defer to post-v1 enhancement).
-    if (is_dir == 1) {
-        if (_git_dir_has_tracked(ctx, rel) == 1) { return 46; }
-    }
-    if (_git_match_any(_ctx_patterns(ctx), name, is_dir) == 1) { return 33; }   # '!'
-    return 63;                                            # '?'
+    if (_git_match_any(_ctx_patterns(ctx), basename, 0) == 1) { return 33; }
+    return 63;
 }
 
 # Fixed display-width budget per entry when `--git` is on.

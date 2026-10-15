@@ -53,9 +53,9 @@ fn _emit_spaces(n): i64 {
 # tracks the max size-string width; pass 2 emits aligned rows.
 #
 # Per CLAUDE.md: lstat (not stat) is used so symlinks render as
-# `l...` with their own length rather than the target's. M2
-# scope: no symlink-target rendering yet — the `-> target` tail
-# lands when the symlink-display ADR opens for M6 / M7 territory.
+# `l...` with their own length rather than the target's. The link
+# target (`-> target`) is not rendered — adding it changes `-l`
+# output bytes, so it is a roadmap decision, not a fix.
 # v1.3.3: `stats` is the parallel vec of stat buffers compute_decor
 # already produced (0 per entry when its lstat failed), or 0 when no
 # decoration pass ran at all — `-l` on a pipe with no --git/--mime,
@@ -185,9 +185,8 @@ fn render_long(entries, dir_str, want_human, colors, icons, gitchrs, mimes, clas
         if (icons != 0)      { icon_pad = icon_display_width(); }
         var git_pad = 0;
         if (gitchrs != 0)    { git_pad = git_display_width(); }
-        var cls_pad = 0;
-        if (classifies != 0) { cls_pad = classify_display_width(); }
-        emit_decorated(name, col_code, ic, icon_pad, gc, git_pad, cl, cls_pad);
+        # No `-F` cell padding: the name ends the row (v1.4.1).
+        emit_decorated(name, col_code, ic, icon_pad, gc, git_pad, cl, 0);
         d_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }
@@ -203,26 +202,45 @@ fn render_long(entries, dir_str, want_human, colors, icons, gitchrs, mimes, clas
 # `want_color` (M4) / `want_icons` (M5): toggle decoration.
 # Symlinks pay the extra `sys_stat` for broken-target color
 # detection only when want_color is on.
-fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx, want_classify): i64 {
-    var stat_buf = alloc(144);
-    var rc = lstat_path(path_cstr, stat_buf);
-    if (rc < 0) { return 1; }
-    var mode = load32(stat_buf + STAT_MODE);
-    var perm_buf = alloc(10);
-    format_perms(mode, perm_buf);
-    var size_buf = alloc(32);
-    var size = load64(stat_buf + STAT_SIZE);
+#
+# v1.4.1:
+#   * `want_mime` — the --mime column. Through v1.4.0 `-l --mime
+#     <file>` silently dropped it.
+#   * icon / mime / ignore rules see the path's last component
+#     (`d_basename`), not the whole argument, so `-l docs/README.md`
+#     gets the README glyph.
+#   * git status is the status of the listing path itself
+#     (`git_status_for_root`); through v1.4.0 the argument was looked
+#     up as `<path>/<path>` and every file showed '?'.
+fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx, want_classify, want_mime): i64 {
+    var stat_buf[144];
+    var rc = lstat_path(path_cstr, &stat_buf);
+    if (rc < 0) {
+        emit_error("darshini", path_cstr, "cannot stat");
+        return 1;
+    }
+    var mode = load32(&stat_buf + STAT_MODE);
+    var perm_buf[16];
+    format_perms(mode, &perm_buf);
+    var size_buf[32];
+    var size = load64(&stat_buf + STAT_SIZE);
     var size_len = 0;
-    if (want_human == 1) { size_len = format_size_human(size, size_buf); }
-    else { size_len = format_size_decimal(size, size_buf); }
-    var mtime_buf = alloc(16);
-    format_mtime(load64(stat_buf + STAT_MTIME), mtime_buf);
-    d_write(STDOUT_FD, perm_buf, 10);
+    if (want_human == 1) { size_len = format_size_human(size, &size_buf); }
+    else { size_len = format_size_decimal(size, &size_buf); }
+    var mtime_buf[16];
+    format_mtime(load64(&stat_buf + STAT_MTIME), &mtime_buf);
+    d_write(STDOUT_FD, &perm_buf, 10);
     d_write(STDOUT_FD, " ", 1);
-    d_write(STDOUT_FD, size_buf, size_len);
+    d_write(STDOUT_FD, &size_buf, size_len);
     d_write(STDOUT_FD, " ", 1);
-    d_write(STDOUT_FD, mtime_buf, 16);
+    d_write(STDOUT_FD, &mtime_buf, 16);
     d_write(STDOUT_FD, " ", 1);
+    var base = d_basename(path_cstr);
+    if (want_mime == 1) {
+        var m = mime_for_entry(path_cstr, base, mode);
+        print_cstr_fd(STDOUT_FD, m);
+        d_write(STDOUT_FD, " ", 1);
+    }
     var col_code = 0;
     if (want_color == 1) {
         var fmt = mode & S_IFMT;
@@ -237,7 +255,7 @@ fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx, want_
     }
     var path_str = str_from(path_cstr);
     var ic = 0;
-    if (want_icons == 1) { ic = icon_for_entry(path_str, mode); }
+    if (want_icons == 1) { ic = icon_for_entry(base, mode); }
     var icon_pad = 0;
     if (want_icons == 1) { icon_pad = icon_display_width(); }
     var gc = 0;
@@ -246,17 +264,13 @@ fn render_long_one(path_cstr, want_human, want_color, want_icons, git_ctx, want_
         git_pad = git_display_width();
         var is_dir = 0;
         if ((mode & S_IFMT) == S_IFDIR) { is_dir = 1; }
-        gc = git_status_for(git_ctx, path_str, is_dir,
-          load64(stat_buf + STAT_MTIME),
-          load64(stat_buf + STAT_SIZE));
+        gc = git_status_for_root(git_ctx, base, is_dir,
+          load64(&stat_buf + STAT_MTIME),
+          load64(&stat_buf + STAT_SIZE));
     }
     var cl = 0;
-    var cls_pad = 0;
-    if (want_classify == 1) {
-        cl = classify_indicator(mode);
-        cls_pad = classify_display_width();
-    }
-    emit_decorated(path_str, col_code, ic, icon_pad, gc, git_pad, cl, cls_pad);
+    if (want_classify == 1) { cl = classify_indicator(mode); }
+    emit_decorated(path_str, col_code, ic, icon_pad, gc, git_pad, cl, 0);
     d_write(STDOUT_FD, "\n", 1);
     return 0;
 }

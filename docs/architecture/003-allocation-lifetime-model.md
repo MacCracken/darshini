@@ -20,12 +20,15 @@ if one ever is, this note is the thing to re-read first.
 **A scratch buffer inside a loop is not free.** cycc 6.5.11 moved the stdlib
 `dir_list` / `is_dir` 4 KB `getdents` scratch from `alloc()` to a stack local
 precisely because of this — upstream measured 4104 bytes burned *per call*.
-darshini's Linux path picked that up automatically at v1.3.1 by re-vendoring.
-Its agnos mirror `_d_dir_list_agnos` (`walk.cyr`) still calls `alloc(4096)`,
-so on agnos every directory visited still burns 4 KB that is never returned —
-which compounds under `-T` on a deep tree. Known, recorded in
-`docs/development/state.md`, and deliberately not bundled into the v1.3.2
-patch cut because it is an agnos behavior change that wants its own test pass.
+darshini's Linux path picked that up automatically at v1.3.1 by re-vendoring;
+its agnos mirror `_d_dir_list_agnos` got the same fix at v1.3.3 and was
+retired for the stdlib's own agnos arm at v1.4.1. The same release moved
+`-T`'s per-entry stat buffer and `-l` formatter scratch to the stack — they
+were `alloc()`s per entry, ~200 dead bytes each, carried to exit. What is
+still retained per entry is inherent to the shape: the entry name, its path
+join, and (under `-l` / decoration) its stat buffer in the decoration vecs.
+Measured at v1.4.1: `-T` over 80k entries peaks at ~35 MB RSS. The 64 KB
+stdout buffer (v1.4.1) is one allocation for the run.
 
 **When to use which**: `alloc()` for anything whose lifetime is the run (the
 entries vec, the decoration vecs, the parsed git index). `fl_alloc()` /

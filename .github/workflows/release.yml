@@ -1,8 +1,9 @@
 name: Release
 
-# Triggers on semver tags only (1.0.0, 1.2.3, 2.0.0-rc1). An optional
-# leading `v` is accepted (v1.0.0). Non-numeric tags are ignored.
-# Mirrors darshana's release trigger surface.
+# Triggers on plain semver tags only (1.0.0, 1.2.3). An optional
+# leading `v` is accepted (v1.0.0). Pre-release tags such as 2.0.0-rc1
+# do NOT match these patterns (no trailing wildcard), and non-numeric
+# tags are ignored. Mirrors darshana's release trigger surface.
 on:
   push:
     tags:
@@ -24,11 +25,11 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   # ────────────────────────────────────────────────────────────────
-  # Verify — VERSION file, cyrius.cyml indirection, the baked source
-  # literal, and the git tag must all agree before anything is
-  # packaged. Unlike darshana (whose dist header is generated from
-  # VERSION), darshini carries a hand-bumped _darshini_version_str()
-  # literal, so we assert it too. Exposes `version` for downstream.
+  # Verify — VERSION file, cyrius.cyml indirection, CHANGELOG and the
+  # git tag must all agree before anything is packaged. Since v1.4.1
+  # `--version` prints CYRIUS_PKG_VERSION (from cyrius.cyml, i.e. from
+  # VERSION) instead of a hand-bumped literal; the CI gate's --version
+  # smoke checks the built binary. Exposes `version` for downstream.
   # ────────────────────────────────────────────────────────────────
   version-verify:
     name: Version verify
@@ -39,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract VERSION / tag / cyml / source literal
+      - name: Extract VERSION / tag / cyml / changelog
         id: extract
         run: |
           TAG="${GITHUB_REF_NAME#v}"   # strip optional leading 'v'
@@ -55,8 +56,8 @@ jobs:
             exit 1
           fi
 
-          if ! grep -qE "return \"darshini ${VERSION}\";" src/main.cyr; then
-            echo "::error::_darshini_version_str() not bumped to ${VERSION}" >&2
+          if ! grep -q 'CYRIUS_PKG_VERSION' src/main.cyr; then
+            echo "::error::src/main.cyr no longer prints CYRIUS_PKG_VERSION" >&2
             exit 1
           fi
 

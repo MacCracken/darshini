@@ -7,10 +7,12 @@
 #
 # Detection order (per ADR 0003):
 #   1. Non-regular file type → inode/*
-#   2. Extension match here → mapped mime
-#   3. No-ext + executable bit → application/x-executable
-#   4. No-ext + magic-bytes match → from [magic_bytes]
-#   5. Default → application/octet-stream
+#   2. Exact filename in [filenames] → mapped mime
+#   3. Extension match here → mapped mime
+#   4. No extension match + executable bit → application/x-executable
+#   5. No extension match + magic-bytes match → from [magic_bytes]
+#   6. Default → application/octet-stream
+# ("No extension match" includes an extension that is not in the table.)
 
 [filenames]
 # Exact-match (case-sensitive). Fires before the extension lookup.

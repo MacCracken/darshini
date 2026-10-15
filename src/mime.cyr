@@ -120,6 +120,11 @@ fn _mime_for_ext(ext_cstr): i64 {
     if (_icons_ext_eq(ext_cstr, "sql") == 1)   { return "application/sql"; }
     if (_icons_ext_eq(ext_cstr, "db") == 1)    { return "application/x-sqlite3"; }
     if (_icons_ext_eq(ext_cstr, "sqlite") == 1){ return "application/x-sqlite3"; }
+    # v1.4.1: in mime/default.cyml since M8 but never baked in here, so
+    # a spreadsheet sniffed as its zip container (or octet-stream).
+    if (_icons_ext_eq(ext_cstr, "xlsx") == 1)  {
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    }
     # Other
     if (_icons_ext_eq(ext_cstr, "lock") == 1)  { return "text/plain"; }
     if (_icons_ext_eq(ext_cstr, "pdf") == 1)   { return "application/pdf"; }
@@ -128,7 +133,9 @@ fn _mime_for_ext(ext_cstr): i64 {
 
 # Magic-bytes dispatch. `buf` is the first `len` bytes read from
 # the file (len <= 16 expected). Returns mime cstr or 0 when no
-# signature matches. Order matches ADR 0003 §"Magic-bytes set".
+# signature matches. Checked shortest-prefix-last (grouped by the
+# bytes each signature needs); no two signatures overlap, so the
+# result is the same as ADR 0003's table order.
 fn _mime_for_magic_bytes(buf, len): i64 {
     if (len >= 4) {
         if (load8(buf + 0) == 0x7f) { if (load8(buf + 1) == 0x45) {
@@ -191,9 +198,22 @@ fn _mime_for_magic_bytes(buf, len): i64 {
 
 # Open + read up to 16 bytes + dispatch via magic-byte table.
 # Closes the fd. Returns mime cstr or 0 (no magic match).
+#
+# v1.4.1: ADR 0003 promises zero opens for a non-regular file, and the
+# lstat-based precedence keeps that promise — unless the file is swapped
+# for a FIFO or a symlink between the lstat and this open, which made
+# `--mime` hang (3 in 88 runs under a racing rename). The open is now
+# non-blocking and no-follow (d_open_probe), fstat must confirm a
+# regular file, and a file shorter than the shortest signature (2
+# bytes) is not read at all — which also keeps a size-0 pseudo-file
+# like /proc/kmsg, as root, from blocking the read.
 fn _mime_probe_magic(path_cstr): i64 {
-    var fd = d_open_ro(path_cstr);
+    var fd = d_open_probe(path_cstr);
     if (fd < 0) { return 0; }
+    var fsz[8];
+    if (d_fd_regular_size(fd, &fsz) == 0) { sys_close(fd); return 0; }
+    var sz = load64(&fsz);
+    if (sz >= 0) { if (sz < 2) { sys_close(fd); return 0; } }
     var buf[16];
     var n = sys_read(fd, &buf, 16);
     sys_close(fd);

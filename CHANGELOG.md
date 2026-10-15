@@ -4,6 +4,236 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-15
+
+Code audit and repair sweep. Three independent audit lenses (listing
+pipeline correctness, untrusted-input parsers, docs / CI / tests) plus a
+lead review of every module; every finding was reproduced against the
+v1.4.0 binary before it was touched. Report:
+[`docs/audit/2026-10-15-audit.md`](docs/audit/2026-10-15-audit.md).
+Toolchain and darshana unchanged (cyrius 6.7.9, darshana 1.3.0).
+
+Patch bump. No flag was removed or changed meaning. Output changes only
+where the output was wrong — a control byte from a hostile mtime, a
+`--git` status that disagreed with git, a missing `-F` indicator, a
+trailing pad space — which is `Fixed` under the v1.3.2 precedent. Two
+exit-code changes are fixes of failures reported as success (an
+unreadable directory under `-T`; `--help` to a full disk), and one is a
+garbage argument now rejected (`--level 18446744073709551617`).
+
+**Verified.** A 76-mode A/B harness on a fixture holding every file type,
+setuid / setgid / sticky bits, ELF / PNG magic, a 5 GB sparse file, a
+1960 mtime, a CRLF `.gitignore`, all git states, unreadable and
+unsearchable dirs, UTF-8 / Latin-1 / truncated names, nine control-byte
+names and dash-leading names — each mode on a pipe and under a real PTY
+at 100, 53 and 0 columns (304 captures):
+- v1.4.0 → v1.4.1: 113 captures differ; every one classified line by
+  line into the fixes below (the `-F` pad alone accounts for most). Nothing
+  else changed.
+- aarch64 (under `qemu-aarch64`) against x86_64: **0 / 304** differ.
+- `CYRIUS_DCE=1` against the normal build: **0 / 304** differ.
+- agnos under `mirshi --root`, 21 modes: 6 differ, all intended (tree
+  read errors, `-F` pad, help / usage text, `--`).
+- Each `--git` fix checked against real git (v2 / v3 / v4 / SHA-256
+  repos, a submodule, `..`, a symlink into another repo, a 5,000-byte
+  path).
+
+### Security
+
+- **A file's mtime reached the terminal raw.** `format_mtime` had no upper
+  bound: `_chrono_w4` stores `48 + year / 1000` through `store8`, so a year
+  past 9999 emits whatever byte that truncates to. Year 10000 rendered
+  `:000-01-01`; years 235,7xx / 235,8xx emitted `ESC 7` / `ESC 8` (save /
+  restore cursor) — a later row then overwrites an earlier one, the same
+  hide-a-sibling effect v1.3.2 closed for *names* — and other ranges
+  emitted raw C1 (`0x9B`, CSI) and C0 (CR) bytes. `epoch_to_date` also
+  loops once per year: an mtime of 1e16 took 1.1 s per entry, 9e18 an
+  estimated ~19 minutes. Reachable from a hostile archive: `tar
+  --mtime=@7378962105600` extracted onto tmpfs keeps the timestamp. Repro:
+  `touch -d @7376000000000 f; darshini -l . | od -c` (v1.4.0: `033 7`).
+  Anything past 9999-12-31 23:59:59 UTC now renders the `????-??-??
+  ??:??` placeholder pre-1970 mtimes already used.
+- **`--mime` could hang on a racing directory.** Entries are lstat'd, then
+  opened for magic bytes with plain `O_RDONLY`, which follows symlinks and
+  blocks on a FIFO; a file swapped for a FIFO in between hung the run (3
+  in 88 under a racing rename). Opens are now non-blocking and
+  close-on-exec on Linux (`d_open_probe` / `d_open_data` / `d_open_dir`),
+  the probe does not follow symlinks, `fstat` must confirm a regular file
+  before anything is read, and a file under 2 bytes is not read at all.
+  Same treatment for `.git/index` / `.gitignore` reads and the directory
+  probe.
+
+### Fixed
+
+- **`-l --git <file>` showed `?` for every file**, tracked or not, and
+  `-ld --git <dir>` likewise: `render_long_one` looked the argument up as
+  `<path>/<path>` under a context whose listing prefix was already the
+  path. It now asks for the status of the listing path itself
+  (`git_status_for_root`, extended with ignore matching for files).
+- **A `..` in the path made every tracked file `?`** — `darshini --git ..`
+  from two levels down, `--git ../sibling` — because the repo-root walk
+  kept the `..` in the repo-relative prefix. And a symlink into another
+  repository bound to the wrong index (`--git link` vs `cd link; darshini
+  --git`). The listing's physical path now comes from the kernel (the
+  directory is opened and `/proc/self/fd/N` read back), as git uses the
+  physical cwd; the lexical path is the fallback, and agnos keeps it.
+- **Index v3, v4 and SHA-256 repositories produced a column of `?`.** Only
+  v2 was parsed and the failure was ignored, so the column appeared and
+  lied — v3 comes from `git add -N` and sparse checkout, v4 from
+  `feature.manyFiles`, and a SHA-256 repo has a v2 header with 32-byte ids
+  that misframed every entry. The parser now handles v2–v4 (v3's
+  extended-flag word, v4's prefix compression) for SHA-1 and SHA-256
+  (`extensions.objectFormat` from `.git/config`). An index that exists but
+  can't be read or parsed now **declines** the context — no column —
+  which SECURITY.md had claimed since v1.3.2 but only held for the size
+  ceiling. A missing index (a fresh repo) is still "nothing tracked".
+- **A path of 4095+ bytes in the index ended parsing**: the long-name
+  branch started its NUL scan count at 0xFFF instead of 0, so the length
+  check failed and every later entry showed `?`. Names must now also be
+  non-empty and NUL-terminated where git puts the NUL.
+- **Tracked files of 4 GiB or more, and pre-1970 mtimes, always showed
+  `M`.** The index stores size and mtime as u32; git compares
+  `sd_size != (unsigned)st_size`. Now so does darshini.
+- **A submodule or linked worktree used the enclosing repo's index** (its
+  `.git` is a *file*, and the walk stepped past it), so every file showed
+  `?`. It now declines; following `gitdir:` is roadmap 1.5.0. And a repo
+  rooted at `/` is found from below (the walk stopped one level short).
+- **`-F` ignored path arguments.** `darshini -F run.sh fifo link` printed
+  no `*` / `|` / `@`, and `-dF` added `/` only for a directory —
+  following the symlink, so `-dF link_to_dir` said `link_to_dir/` where
+  `ls -dF` says `link_to_dir@`. Arguments now get their indicator from an
+  lstat.
+- **`-F` left a trailing space after every name without an indicator** on
+  a pipe and in `-1`, `-l` and `-T` output. The pad reserves the
+  indicator's cell for the multi-column grid's alignment; elsewhere
+  nothing follows it, so it was trailing whitespace —
+  `darshini -F | while IFS= read -r f` read `"plain "`. `ls -F` never
+  emits it. The grid keeps its pad. This changes pipe bytes under `-F`
+  for such names, and only for them.
+- **An unreadable directory looked empty.** Under `-T` an unreadable
+  subdirectory was drawn exactly like an empty one, exit 0, while
+  `darshini <that dir>` said "permission denied", exit 1; and a directory
+  read failing part-way (EIO) silently truncated any listing. Reads now go
+  through the stdlib's `dir_list_checked`: the error is reported on
+  stderr right after the directory's own line, whatever was read is still
+  listed, and the run exits 1 — `ls -R`'s behavior.
+- **`--help` / `--version` exited 0 when their output could not be
+  written** (`darshini --help > /dev/full`): `main()` returned before the
+  v1.3.3 write-error check. Now exit 1 with `darshini: write error`.
+- **`-l --mime <file>` dropped the mime column.**
+- **Icon, mime and ignore rules saw the whole path argument**, not its
+  name, so `-l docs/README.md` got the generic glyph instead of README's,
+  and `./a.b/file` took `b/file` as its extension. They now see
+  `d_basename(path)`.
+- **Names differing only in case sorted in getdents order.** `touch README
+  readme Readme` and `touch readme Readme README` listed the same names in
+  different orders. `str_lt_ci` now breaks a case-folded tie on the raw
+  bytes (uppercase first), so order depends only on the names.
+- **`-h` overflowed above ~9.2e17 bytes** (`838860.)T` — a non-digit in the
+  size column) because the tenths digit came from `size * 10`. It is now
+  computed from the remainder, exactly, and P / E units were added (a
+  1 PiB file read `1024.0T`).
+- **`--level` accepted values that wrapped**: the parser's comment promised
+  -1 on overflow and the code had no check, so `--level
+  18446744073709551617` ran at depth 1. Values past 2^31 − 1 are rejected.
+- **`xlsx` was in `mime/default.cyml` but not in the compiled table**, so a
+  spreadsheet sniffed as its zip container.
+
+### Changed
+
+- **stdout is buffered.** Every `d_write` used to be its own `write(2)`,
+  and a row is many small pieces — `-l` on 5,000 entries made 40,000
+  calls, and `-T` one more per ancestor level per line. Output now goes
+  through one 64 KB buffer: that `-l` is 4 calls and 35.0 → 20.3 ms; `-T
+  /usr/share` (80k entries) 438 → 271 ms; `-T -l` 662 → 310 ms (with the
+  next item). stderr writes flush stdout first, so the interleaving of
+  listing and diagnostics on a terminal is unchanged (verified under a
+  PTY); on a terminal the buffer is line-buffered, so `-T` still streams;
+  `main()` flushes before the write-error check.
+- **`-T` keeps per-entry scratch on the stack** — its stat buffer and the
+  `-l` formatter buffers were four `alloc()`s per entry that the bump
+  allocator never reclaimed.
+- **`--git` directory status is a set lookup.** `_git_dir_has_tracked`
+  scanned the whole index once per directory entry; it now builds the set
+  of directory prefixes once (one insert per distinct directory, using the
+  index's sort order) and shares it. `-T --git` on a 20k-file repo in 2k
+  directories: 491 → 77 ms. Arguments in the same repository also share
+  one parsed index instead of re-reading it per argument.
+- **`--version` comes from `CYRIUS_PKG_VERSION`**, which `cyrius build`
+  derives from `cyrius.cyml` → `VERSION`, instead of a hand-bumped literal
+  kept in step by a release step and a CI grep. (The 2026-10-07 cyrius fix
+  that makes it resolve at any include depth landed in 6.7.6.)
+- **The agnos directory enumerator is the stdlib's.** darshini parsed agnos
+  `getdents` (#29) itself since v1.3.0 because the stdlib `dir_list` was
+  Linux-only; the stdlib has since grown the same agnos arm, so
+  `_d_dir_list_agnos` is retired and `list_dir_checked` serves every
+  target.
+- **Help and usage text**: `[path ...]` (multi-path since v1.1.1), the
+  `--` line, `--tree` in the usage line, `-h`'s units, `--level` "with
+  -T", `--mime` "not -T", and the defaults paragraph no longer claims a
+  pipe "suppresses all decoration" (the `--git` / `--mime` / `-F` columns
+  print there by design).
+- Argv helpers (`_arg_eq`, `_parse_pos_int`, `_long_flag_code`) moved to
+  a new `src/cli.cyr` so the suite can include them; `print_cstr_fd` /
+  `emit_error` moved to `color.cyr` so `tree.cyr` can report errors.
+- Removed dead code: `emit_colored`, `emit_icon`, `d_open_ro`. The three
+  copies of the git status lookup are now one (`git_status_for` wraps
+  `git_status_for_sub`).
+
+### Added
+
+- **`--` ends the flags.** Every later argument is a path, so `darshini --
+  *` is safe when a name starts with `-`. Through v1.4.0 `--` was an
+  unknown flag, so there was no way to do that — and `darshini *` read a
+  file named `-l` as a flag, and one named `--help` as `--help`.
+
+### Tests
+
+- **301 → 400 assertions.** New: the sort tiebreak and the merge path (every
+  existing sort case was under the 16-entry insertion cutoff, so `_merge`
+  had no correctness assertion), `classify_indicator`, the mtime bound,
+  P / E and overflow sizes, `--level` bounds, `_long_flag_code`,
+  `d_basename`, hand-built index images (v2, v3 extended flags, v4 prefix
+  compression and a bad strip, a 4100-byte name, SHA-256 framing, a
+  misframed name), `_git_oid_len`, every `--git` status outcome including
+  the u32 compare and `git_status_for_root` (whose test group never
+  called it), the prefix set, and the hardened magic probe. The suite now
+  includes the real `_parse_pos_int` instead of a copy. Cross-targets:
+  aarch64 400 / 400; agnos 398 / 400 (the two `-ENOENT` assertions, by
+  agnos's flat `-1` design, as before).
+- **Fuzz target 6, the mtime formatter**: the fixed 16-byte shape and a
+  digit-or-`?` alphabet across the whole i64 range, boundary cases first.
+  Mutation-validated: removing the bound fails it at once. The index
+  target now covers v3 / v4 headers and SHA-256 framing.
+- **CI**: lint is zero-warning (the gate exempted every over-120 line,
+  code included, and passed a lint `error`); `cyrius fuzz` runs (the
+  harness called itself a CI gate since v1.3.3 but no step ran it); agnos
+  and aarch64 compile, suite included; new gates for `-F` (no pad,
+  argument indicators), `--`, unreadable directories, hostile mtimes
+  (tmpfs), `--help` / `--version` to `/dev/full`, and `--git` against
+  real git (v2 / v3 / v4 / SHA-256, file arguments, `..`); the DCE gate
+  diffs every byte and exit code across a 20-mode matrix on a pipe and a
+  PTY instead of grepping six names; the mime gate asserts the
+  `x-cyrius` / `x-executable` cases its comment claimed; the ANSI scan
+  covers `\x1B`, `\x9b` / `\233` and OSC; the docs gate checks every ADR.
+  Every build-and-test gate was replayed locally before release.
+
+### Docs
+
+- `docs/development/roadmap.md` rewritten as a forward plan: completed
+  milestones collapsed to a pointer, the old backlog and state.md's
+  "Next" merged and placed on a 1.4.2 → 1.5.0 → 1.6.0 → 1.7.0 path, open
+  owner decisions listed. `state.md` cut back to a current snapshot.
+- Corrected: SECURITY.md (the decline claim; new mtime and open-race
+  notes; no `safe.directory`), ADR 0002 (a *directory* named `README.d`
+  gets the README glyph, not the folder; first-match, not longest-match),
+  ADR 0003 (the `[filenames]` step), ADR 0004 (`--mime` is not rendered
+  under `-T`; the emit helpers don't call the buf variants; no tree
+  bench), the three architecture notes, CONTRIBUTING ("wait for M5"),
+  benchmarks.md (v1.4.1 whole-listing table), the mime CYML header, and
+  docs/examples (regenerated from the binary — the old multi-column
+  sample was a layout darshini cannot produce).
+
 ## [1.4.0] - 2026-10-12
 
 Toolchain `6.6.2` → **`6.7.9`** (the cyrius 6.7 language minor), darshana

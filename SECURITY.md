@@ -32,6 +32,14 @@ filesystem beyond standard output. The realistic threats:
   `tty_isatty` there reports whether the console is up — so names are
   sanitized whenever the console is up, piped or not.
 
+  **Metadata is untrusted too.** A file's mtime survives extraction from
+  a hostile archive (tar keeps it; tmpfs and btrfs store it). Through
+  v1.4.0 a year past 9999 made `-l` emit arbitrary bytes from the
+  date — `ESC 7` / `ESC 8` (save / restore cursor) among them — raw to
+  the terminal, and made the date conversion loop for minutes per entry.
+  Since v1.4.1 such an mtime renders as the `????-??-?? ??:??`
+  placeholder. Sizes and modes are formatted from fixed alphabets.
+
   History: before v1.3.2 names went to the terminal raw in every case
   (and this section claimed otherwise; see
   [`docs/audit/2026-08-23-audit.md`](docs/audit/2026-08-23-audit.md)).
@@ -41,13 +49,28 @@ filesystem beyond standard output. The realistic threats:
   and malformed UTF-8, and never sanitized on AGNOS. v1.4.0 closed all
   three.
 - **`.git/`-parsing safety** — when `--git` is enabled, darshini
-  reads files under `.git/`. The index parser validates the header
-  and bounds every entry against the buffer length. Reads are sized
-  from `stat(2)` and capped: a `.git/index` beyond the ceiling is
-  **declined** — the git column silently does not appear — rather
-  than parsed truncated. Through v1.3.1 an oversized index WAS
-  silently truncated, and every entry past the cutoff was reported
-  untracked; that is fixed in v1.3.2.
+  reads files under `.git/`. The index parser (versions 2–4, SHA-1 or
+  SHA-256) validates the header, bounds every entry against the buffer
+  length, and requires each name to be non-empty and NUL-terminated
+  where git puts the NUL. Reads are sized from `stat(2)` and capped. An
+  index that exists but cannot be used — unreadable, beyond the
+  ceiling, an unknown version, misframed — is **declined**: the git
+  column silently does not appear rather than appearing with wrong
+  answers. (That was claimed here before v1.4.1 but held only for the
+  size ceiling: a parse failure was ignored and the column showed every
+  file `?`. Through v1.3.1 an oversized index was silently truncated.)
+  A `.git` *file* (submodule, linked worktree) also declines rather
+  than falling through to the enclosing repository's index.
+  Not enforced: git's `safe.directory` ownership check. A `.git`
+  planted in a shared parent directory (`/tmp/.git`) applies to
+  listings below it — the effect is limited to wrong status characters
+  and the cost of parsing that index.
+- **Opens cannot hang** — every file darshini opens was classified by a
+  stat first, but can be swapped (for a FIFO, say) before the open.
+  Since v1.4.1 opens on Linux are non-blocking and close-on-exec, the
+  mime probe does not follow symlinks, and an `fstat` must confirm a
+  regular file before anything is read. Through v1.4.0 `--mime` over a
+  directory being raced this way could block forever.
 - **Symlink loops** — directory walks must terminate even on crafted
   symlink cycles. Default behavior: don't follow symlinks into
   directories during walk (only at the root).

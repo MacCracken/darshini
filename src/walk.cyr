@@ -1,19 +1,18 @@
 # darshini — filesystem walking.
 #
 # Stats a user-supplied path, discriminates dir / non-dir / error,
-# and (for directories) reads entries via lib/fs.cyr's dir_list
-# wrapper around getdents64. Returns explicit negative-errno on
+# and (for directories) reads entries via lib/fs.cyr's
+# dir_list_checked (getdents64; agnos getdents #29). Returns explicit negative-errno on
 # stat failure so the caller can render the right message
 # (ENOENT vs EACCES vs other).
 #
 # Pure walk — no sorting, no rendering. Composes with render.cyr
 # and long.cyr.
 #
-# Also hosts `d_write` — the checked stdout/stderr wrapper every
-# other module writes through. It lives here because walk.cyr is the
-# FIRST include in main.cyr, so this definition precedes every use;
-# a helper defined in main.cyr would be invisible to the modules
-# main.cyr includes above itself.
+# Also hosts `d_write` — the checked, buffered stdout/stderr writer
+# every other module writes through. It lives here because walk.cyr is
+# the first include, and the one every harness (tests, fuzz, bench)
+# includes too.
 
 # v1.3.3: checked write.
 #
@@ -27,18 +26,20 @@
 #     unchecked code treated it as complete and silently truncated a
 #     row, corrupting the alignment of everything after it.
 #
-# This wrapper loops on short writes, retries -EINTR (interrupted
-# before transferring anything), and on any other negative return
-# sets a sticky module flag and stops trying. `main()` reads the flag
-# and exits non-zero, which is what a pipeline actually needs.
+# The write loop (`_d_write_raw`) retries short writes and -EINTR
+# (interrupted before transferring anything), and on any other negative
+# return sets a sticky module flag and stops trying. `main()` reads the
+# flag and exits non-zero, which is what a pipeline actually needs.
 #
-# Returns the number of bytes written, which callers are free to keep
+# Returns the number of bytes accepted, which callers are free to keep
 # ignoring — the flag is the contract, not the return.
 var _d_write_failed = 0;
 
 fn d_write_failed(): i64 { return _d_write_failed; }
 
-fn d_write(fd, buf, n): i64 {
+# The checked write itself: every byte darshini puts on fd 1 or fd 2
+# ends up here (through d_write / d_flush below).
+fn _d_write_raw(fd, buf, n): i64 {
     if (n <= 0) { return 0; }
     var off = 0;
     var going = 1;
@@ -60,6 +61,65 @@ fn d_write(fd, buf, n): i64 {
         }
     }
     return off;
+}
+
+# v1.4.1: buffered stdout.
+#
+# Through v1.4.0 every d_write was its own write(2), and a row is built
+# from many small pieces — perms, a space, one call PER padding space,
+# size, mtime, prefix, name, suffix, newline. Measured: `-l` on 5,000
+# entries made 40,000 write(2) calls; `-T` paid one more per ancestor
+# level per line. Stdout now goes through one 64 KB buffer: the same
+# `-l` listing is 4 calls and ~2x faster, `-T /usr/share` (80k entries)
+# ~1.6x. Not one output byte changes — A/B-verified on a pipe and under
+# a PTY.
+#
+# Three rules keep it invisible:
+#   * Anything for stderr flushes stdout first, so the relative order of
+#     listing lines and diagnostics on a shared terminal is exactly what
+#     the unbuffered code produced (run_all interleaves them).
+#   * When stdout is a terminal (main sets it from tty_isatty, like the
+#     name sanitizer), a chunk ending in a newline flushes — the stdio
+#     line-buffering rule, so a long `-T` still streams line by line.
+#   * main() calls d_flush before it reads d_write_failed, so a failed
+#     write still becomes exit 1 (the v1.3.3 contract above).
+# A chunk at least as large as the buffer bypasses it after a flush.
+var D_OUT_CAP = 65536;
+var _d_out = 0;
+var _d_out_len = 0;
+var _d_out_line = 0;
+
+fn d_set_line_buffered(v): i64 {
+    _d_out_line = v;
+    return 0;
+}
+
+fn d_flush(): i64 {
+    if (_d_out_len > 0) {
+        var k = _d_out_len;
+        _d_out_len = 0;
+        _d_write_raw(STDOUT_FD, _d_out, k);
+    }
+    return 0;
+}
+
+fn d_write(fd, buf, n): i64 {
+    if (n <= 0) { return 0; }
+    if (fd != STDOUT_FD) {
+        d_flush();
+        return _d_write_raw(fd, buf, n);
+    }
+    if (_d_out == 0) { _d_out = alloc(D_OUT_CAP); }
+    if (_d_out_len + n > D_OUT_CAP) {
+        d_flush();
+        if (n >= D_OUT_CAP) { return _d_write_raw(fd, buf, n); }
+    }
+    memcpy(_d_out + _d_out_len, buf, n);
+    _d_out_len = _d_out_len + n;
+    if (_d_out_line == 1) {
+        if (load8(buf + n - 1) == 10) { d_flush(); }
+    }
+    return n;
 }
 
 # POSIX mode bits. Cyrius stdlib doesn't define these (yet) — we
@@ -122,13 +182,58 @@ fn d_stat(cpath, buf): i64 {
     #endif
 }
 
-# Open `cpath` read-only. Linux passes (path, O_RDONLY, mode); agnos
-# passes (name, namelen, flags). O_RDONLY is 0 on both.
-fn d_open_ro(cpath): i64 {
+# v1.4.1: opens that cannot hang. Everything darshini opens was first
+# classified by a stat, but the file can be swapped between that stat and
+# the open — a regular file for a FIFO, which blocks open(2) forever with
+# no writer. Measured: `--mime` over a directory where another process
+# swaps a file and a FIFO in turn hung 3 times in 88 runs. On Linux these
+# open non-blocking and close-on-exec; the caller then checks with fstat
+# that it got what the stat promised (`d_fd_regular_size`). agnos has no
+# such flags and a stub fstat, so there the calls are as before.
+#
+# d_open_probe: a file's content (mime magic, a `.git` file). Also
+# O_NOFOLLOW — the entry was lstat'd as a regular file, so a symlink in
+# its place is the race, not the entry.
+fn d_open_probe(cpath): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return sys_open(cpath, strlen(cpath), O_RDONLY);
     #else
-    return sys_open(cpath, O_RDONLY, 0);
+    return sys_open(cpath, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC, 0);
+    #endif
+}
+
+# d_open_data: a file read whole (`.git/index`, `.gitignore`). Follows a
+# symlink — git does — but cannot block.
+fn d_open_data(cpath): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return sys_open(cpath, strlen(cpath), O_RDONLY);
+    #else
+    return sys_open(cpath, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
+    #endif
+}
+
+# d_open_dir: a directory (follows a symlink, like the stat before it).
+fn d_open_dir(cpath): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return sys_open(cpath, strlen(cpath), AO_DIRECTORY);
+    #else
+    return sys_open(cpath, O_RDONLY | O_DIRECTORY | O_NONBLOCK | O_CLOEXEC, 0);
+    #endif
+}
+
+# 1 when `fd` is a regular file, storing its size at `out_size`; else 0.
+# agnos: its fstat is a stub, so this answers 1 with a size of -1
+# ("unknown") and callers keep their pre-v1.4.1 behavior there.
+fn d_fd_regular_size(fd, out_size): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    store64(out_size, 0 - 1);
+    return 1;
+    #else
+    var st[144];
+    if (sys_fstat(fd, &st) < 0) { return 0; }
+    if ((load32(&st + STAT_MODE) & S_IFMT) != S_IFREG) { return 0; }
+    store64(out_size, load64(&st + STAT_SIZE));
+    return 1;
     #endif
 }
 
@@ -208,80 +313,40 @@ fn classify_path(cpath): i64 {
 # (silently returns an empty vec), so without this check
 # permission-denied is indistinguishable from empty-dir.
 fn check_dir_readable(cpath): i64 {
-    var fd = d_open_ro(cpath);
+    var fd = d_open_dir(cpath);
     if (fd < 0) { return fd; }
     sys_close(fd);
     return 0;
 }
 
-#ifdef CYRIUS_TARGET_AGNOS
-# Enumerate a directory on agnos and return a vec<Str> of entry names.
-# The stdlib dir_list (lib/fs.cyr) is Linux/macOS/Windows only — it
-# issues getdents64 (#217) and parses the Linux dirent layout, neither
-# of which exists on agnos. agnos getdents is #29, returning packed
-# `AgnosDirent` records: reclen@0 (u16, record stride), type@2,
-# namelen@3 (authoritative — names are NOT NUL-terminated), ino@4,
-# name@8. Directory fds are opened with AO_DIRECTORY. `.`/`..` are
-# filtered here (agnos returns them like Linux does), matching the
-# stdlib dir_list contract so main.cyr / tree.cyr stay target-agnostic.
-fn _d_dir_list_agnos(path): i64 {
-    var entries = vec_new();
-    var fd = sys_open(str_data(path), str_len(path), AO_DIRECTORY);
-    if (fd < 0) { return entries; }
-    # v1.3.3: STACK scratch, not alloc(). The getdents buffer is dead
-    # the moment this fn returns, but the default allocator is a BUMP
-    # allocator with no free — so every directory visited permanently
-    # burned 4 KB, compounding under `-T` on a deep tree. cycc 6.5.11
-    # made exactly this change to the stdlib `dir_list`, which the
-    # Linux path picked up for free when lib/ was re-vendored at
-    # v1.3.1; this agnos mirror was the half left behind. 4096 here is
-    # BYTES (see docs/architecture/001-var-buf-is-bytes.md) and must
-    # stay in step with the sys_getdents length argument below.
-    var sbuf[4096];
-    var buf = &sbuf;
-    var rgo = 1;
-    while (rgo == 1) {
-        var n = sys_getdents(fd, buf, 4096);
-        if (n <= 0) { rgo = 0; }
-        else {
-            var pos = 0;
-            while (pos < n) {
-                var reclen = load16(buf + pos + DIRENT_RECLEN);
-                if (reclen < 1) { pos = n; }   # malformed reclen — stop, don't spin
-                else {
-                    var namelen = load8(buf + pos + DIRENT_NAMELEN);
-                    var name = buf + pos + DIRENT_NAME;
-                    # Skip "." and ".." (namelen-authoritative, no NUL).
-                    var skip = 0;
-                    if (namelen == 1) { if (load8(name) == 46) { skip = 1; } }
-                    if (namelen == 2) { if (load8(name) == 46) { if (load8(name + 1) == 46) { skip = 1; } } }
-                    if (skip == 0) {
-                        var nb = alloc(namelen + 1);
-                        memcpy(nb, name, namelen);
-                        store8(nb + namelen, 0);
-                        vec_push(entries, str_clone(str_from(nb)));
-                    }
-                    pos = pos + reclen;
-                }
-            }
-        }
-    }
-    sys_close(fd);
-    return entries;
+# Read a directory's entries into `entries` (a vec<Str>; `.` and `..`
+# skipped). Returns 0 when the whole directory was read, or a negative
+# error when it could not be opened or its entry stream failed part-way
+# (-errno on Linux, -1 on agnos); `entries` then holds whatever was read
+# before the failure.
+#
+# v1.4.1: the stdlib's `dir_list_checked`, on every target. Through
+# v1.4.0 this was `dir_list`, which (until cyrius 6.6.10 added the
+# checked form) folds both failures into "an empty directory": `-T`
+# drew an unreadable subdirectory exactly like an empty one and exited
+# 0, and a getdents error mid-listing truncated it silently. Callers
+# now report the error and fail the run.
+#
+# The same release retires darshini's own agnos enumerator
+# (`_d_dir_list_agnos`, v1.3.0): the stdlib's agnos arm issues the same
+# getdents(#29), parses the same AgnosDirent layout, and keeps the
+# getdents scratch on the stack as v1.3.3's fix did. (It is still NOT
+# `sys_readdir` (#81), whose fixed 64-byte records cap names at 63
+# bytes.)
+fn list_dir_checked(path: Str, entries): i64 {
+    return dir_list_checked(path, entries);
 }
-#endif
 
-# Read a directory's entries and return a vec<Str>. On Linux this wraps
-# lib/fs.cyr's dir_list (getdents64); on agnos it routes to the native
-# getdents(#29) enumerator above. Kept thin so the M3 column-layout
-# pass can grow the return shape without breaking M1 callers. `.` and
-# `..` are filtered by the underlying enumerator.
+# Unchecked form, for callers with nothing useful to do on an error.
 fn list_dir(path: Str): i64 {
-    #ifdef CYRIUS_TARGET_AGNOS
-    return _d_dir_list_agnos(path);
-    #else
-    return dir_list(path);
-    #endif
+    var entries = vec_new();
+    list_dir_checked(path, entries);
+    return entries;
 }
 
 # Classify-indicator (POSIX `-F`) for a stat mode. Returns the
@@ -311,6 +376,35 @@ fn classify_indicator(mode): i64 {
 # indicator but the column reserves the slot for alignment).
 fn classify_display_width(): i64 {
     return 1;
+}
+
+# The last component of path cstr `p` as a fresh Str, ignoring trailing
+# '/' ("a/b/" -> "b"); "/" stays "/". Icon, mime and ignore rules match
+# a NAME, so a path argument (`darshini -l docs/README.md`) must be cut
+# down to one before they see it (v1.4.1 — render_long_one passed the
+# whole path, so `README*` and `Makefile` rules never fired for an
+# argument with a directory in it, and `./a.b/file` took "b/file" as
+# its extension).
+fn d_basename(p): i64 {
+    var e = strlen(p);
+    var trimming = 1;
+    while (trimming == 1) {
+        if (e > 1) {
+            if (load8(p + e - 1) == 47) { e = e - 1; }
+            else { trimming = 0; }
+        } else { trimming = 0; }
+    }
+    var b = e;
+    var scanning = 1;
+    while (scanning == 1) {
+        if (b <= 0) { scanning = 0; }
+        else {
+            if (load8(p + b - 1) == 47) { scanning = 0; }
+            else { b = b - 1; }
+        }
+    }
+    if (b >= e) { return str_from_buf(p, e); }
+    return str_from_buf(p + b, e - b);
 }
 
 # lstat a path into a caller-provided 144-byte buffer (heap or

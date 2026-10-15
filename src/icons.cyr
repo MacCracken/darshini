@@ -217,13 +217,3 @@ fn icon_for_entry(name, mode): i64 {
     # 5. Generic file glyph fallback.
     return "";
 }
-
-# Emit `icon` (UTF-8 bytes, terminated by NUL) followed by a
-# single space to stdout. Caller responsible for the SGR wrap
-# (caller usually wraps the whole `icon + space + name` in the
-# color escape pair so the icon takes the name's color).
-fn emit_icon(icon): i64 {
-    d_write(STDOUT_FD, icon, strlen(icon));
-    d_write(STDOUT_FD, " ", 1);
-    return 0;
-}

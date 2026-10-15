@@ -67,8 +67,15 @@ line is one entry. It composes with:
   before the connectors. Layout per row:
   `<perms> <size> <mtime> <ancestor-prefix><connector><git><icon><name>`
 - `-h`: human-size formatting within the `-l` prefix.
-- `--git` / `--mime`: status / mime decoration emitted per
-  entry (mime only when `-l` also set, per ADR 0003).
+- `--git`: status decoration emitted per entry.
+- `--mime`: **not rendered under `-T`**, with or without `-l` —
+  tree.cyr has no mime path (the v1.0 text claimed otherwise;
+  corrected at v1.4.1). A mime column in the tree is a roadmap
+  item.
+- `-F`: the indicator follows the name with no padding cell
+  (v1.4.1 — nothing follows the name on a tree line).
+- An unreadable subdirectory is drawn, then reported on stderr,
+  and the run exits 1 (v1.4.1; it was drawn as empty, exit 0).
 - `--no-color` / `--no-icons`: suppression per the M4/M5 ADRs.
 - `-1`: no-op under `-T` (tree is already
   one-entry-per-line); doesn't error to keep bundling forgiving.
@@ -90,8 +97,10 @@ state.
 sequences into a caller-provided buffer rather than directly to
 stdout. Tests assert exact bytes (the `e2 94 9c` etc. constants
 in `tests/darshini.tcyr`). The stdout-emitting variants
-(`_tree_emit_prefix` / `_tree_emit_connector`) are thin wrappers
-that call the buf variants then `sys_write`.
+(`_tree_emit_prefix` / `_tree_emit_connector`) write the same
+bytes as string literals through `d_write`; they do NOT call the
+buf variants, which only the tests use. The two are kept in step
+by hand — the literals are the production path.
 
 ## Alternatives considered
 
@@ -113,8 +122,9 @@ that call the buf variants then `sys_write`.
 
 ## Consequences
 
-- Tree mode adds one module (`src/tree.cyr`) and one bench
-  none of the existing emit paths touch. Maintenance cost
+- Tree mode adds one module (`src/tree.cyr`) that none of the
+  existing emit paths touch. (There is no tree bench; the v1.0
+  text said there was.) Maintenance cost
   scales with the recursion-state bookkeeping, which is
   localized.
 - The 4-cell-per-depth indent means a 10-deep tree consumes

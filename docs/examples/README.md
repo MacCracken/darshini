@@ -1,36 +1,43 @@
 # darshini — example output
 
-Captured on the darshini repo itself at v1.1.2. Box-drawing
-chars + Nerd Font glyphs are present in the actual TTY
-output but render here as plain text (markdown can't
-preview them faithfully).
+Captured from the binary on a clean checkout of the darshini repo at
+1.4.1 (generated, not hand-edited — the roadmap's 1.4.2 item
+turns these into CI golden files). On a terminal, entries also carry
+color and a Nerd Font glyph; the captures below use `--no-icons` /
+`--no-color` where a glyph would not survive markdown, and say so.
 
-## Default — multi-column on a TTY
+## Default — multi-column on an 80-column TTY
 
 ```
-$ darshini
-.git        build         CODE_OF_CONDUCT.md  docs     README.md    tests
-.github     CHANGELOG.md  CONTRIBUTING.md     icons    SECURITY.md  VERSION
-.gitignore  CLAUDE.md     cyrius.cyml         lib      src
-            cyrius.lock   LICENSE             mime
+$ darshini --no-icons --no-color
+.git        CHANGELOG.md        cyrius.cyml  lib        SECURITY.md
+.github     CLAUDE.md           cyrius.lock  LICENSE    src
+.gitignore  CODE_OF_CONDUCT.md  docs         mime       tests
+build       CONTRIBUTING.md     icons        README.md  VERSION
 ```
 
-Dirs render blue; executables green; symlinks cyan
-(broken: red); each entry prefixed with a Nerd Font glyph.
+Vertical-then-horizontal fill, like `ls`. With icons each cell is two
+cells wider, so the same listing may fit one column fewer. Dirs render
+blue, executables green, symlinks cyan (broken: red).
 
 ## Long format with all decoration
 
 ```
-$ darshini -l --git --mime
-drwxr-xr-x   128 2026-05-22 22:35 inode/directory   ? .git
-drwxr-xr-x    18 2026-05-19 19:03 inode/directory   . .github
--rw-r--r--    89 2026-05-19 19:03 text/x-gitignore  . .gitignore
-drwxr-xr-x    16 2026-05-23 02:49 inode/directory   ! build
--rw-r--r-- 26851 2026-05-23 02:40 text/markdown     . CHANGELOG.md
-...
+$ darshini -l --git --mime | head -8
+drwxr-xr-x   240 2026-10-15 17:34 inode/directory    ? .git
+drwxr-xr-x    60 2026-10-15 17:34 inode/directory    . .github
+-rw-r--r--    89 2026-05-19 19:03 text/x-gitignore   . .gitignore
+drwxr-xr-x    60 2026-10-15 17:34 inode/directory    ! build
+-rw-r--r-- 83378 2026-10-15 17:33 text/markdown      . CHANGELOG.md
+-rw-r--r--  7923 2026-08-24 03:45 text/markdown      . CLAUDE.md
+-rw-r--r--   181 2026-05-19 19:27 text/markdown      . CODE_OF_CONDUCT.md
+-rw-r--r--  1733 2026-10-15 17:26 text/markdown      . CONTRIBUTING.md
 ```
 
-Columns: perms / size / mtime (UTC) / mime / git-status / name.
+...
+
+Columns: perms / size / mtime (UTC) / mime / git status / name. Status:
+`.` tracked and clean, `M` modified, `?` untracked, `!` ignored.
 
 ## Tree mode
 
@@ -45,14 +52,20 @@ docs
 │   ├── README.md
 │   └── template.md
 ├── architecture
+│   ├── 001-var-buf-is-bytes.md
+│   ├── 002-agnos-fs-abi-split.md
+│   ├── 003-allocation-lifetime-model.md
 │   └── README.md
 ├── audit
-│   └── 2026-05-23-audit.md
+│   ├── 2026-05-23-audit.md
+│   ├── 2026-08-23-audit.md
+│   └── 2026-10-15-audit.md
 ├── benchmarks.md
 ├── development
 │   ├── roadmap.md
 │   └── state.md
 ├── examples
+│   ├── .gitkeep
 │   └── README.md
 └── guides
     └── getting-started.md
@@ -63,6 +76,7 @@ docs
 ```
 $ darshini src tests
 src:
+cli.cyr
 color.cyr
 columns.cyr
 git.cyr
@@ -84,11 +98,25 @@ darshini.tcyr
 ## Classify (`-F`)
 
 ```
-$ darshini -dF docs src tests
+$ darshini -F -1 . | head -6
+.git/
+.github/
+.gitignore
+build/
+CHANGELOG.md
+CLAUDE.md
+```
+
+```
+$ darshini -dF docs src tests build/darshini
 docs/
 src/
 tests/
+build/darshini*
 ```
+
+Off the grid, a name with no indicator ends at its last byte — no pad
+space (v1.4.1).
 
 ## Pipe-aware (script-safe)
 
@@ -104,11 +132,11 @@ No color, no icons, no columns — same shape as minimal `ls`.
 ## Outside a git repo
 
 ```
-$ darshini --git /tmp | head -3
-.font-unix
-.ICE-unix
-.X11-unix
+$ darshini --git /usr | head -3
+aarch64-linux-gnu
+bin
+include
 ```
 
-`--git` silently skips when there's no `.git/` in the
-ancestor chain — no error, no column.
+`--git` silently skips when there's no `.git/` in the ancestor chain —
+no error, no column.

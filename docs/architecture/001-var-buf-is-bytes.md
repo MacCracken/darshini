@@ -1,6 +1,7 @@
 # 001 — `var buf[N]` allocates N **bytes**, and three magic numbers depend on it
 
-**Applies to**: every `var`-declared buffer in `src/` (19 sites as of v1.3.2).
+**Applies to**: every `var`-declared buffer in `src/` (38 sites as of v1.4.1 —
+v1.4.1 moved several per-entry scratch buffers from `alloc()` to the stack).
 
 The Cyrius language guide describes `var buf[N]` as N *slots*. In `cycc` it is
 N **bytes**. Every stack buffer in darshini is sized on the byte reading, and
@@ -15,7 +16,8 @@ round number someone liked:
 |---|---|---|
 | `144` | `struct stat` on x86_64 Linux. Every `sys_stat` / `lstat_path` probe buffer. | `walk.cyr`, `color.cyr`, `long.cyr`, `tree.cyr`, `git.cyr` |
 | `4096` | `PATH_MAX`. `PATH_BUF_SIZE` in `color.cyr`, and the `getcwd` buffer in `git.cyr`. | `color.cyr`, `git.cyr` |
-| `8` | One `i64` out-param slot, or the four `u16` fields of `winsize`. | `columns.cyr`, `tree.cyr` |
+| `8` | One `i64` out-param slot. (The `winsize` buffer moved into darshana's `tty_winsize` at v1.4.0.) | `tree.cyr`, `git.cyr`, `mime.cyr`, `main.cyr` |
+| `16` / `24` / `32` / `64` | Formatter scratch: perms (10), mtime (16), a size string (≤ 24 digits), the `/proc/self/fd/N` path, the decorated-entry prefix. Each is the formatter's maximum output, not a guess. | `long.cyr`, `tree.cyr`, `git.cyr`, `color.cyr`, `render.cyr` |
 
 The `144` is *not* the same on every target — the `STAT_*` field offsets come
 from the stdlib per-target, so field reads are portable, but the buffer size

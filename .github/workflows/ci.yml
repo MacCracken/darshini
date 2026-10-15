@@ -60,22 +60,24 @@ jobs:
         run: cyrius deps
 
       - name: Lint
-        # Same tolerance policy as darshana/chakshu/owl/cyim: every
-        # src file clean; the only acceptable warning is the cosmetic
-        # "exceeds 120 characters" rule on comment-divider lines.
-        # cyrius lint exits non-zero on any output, so we wrap in
-        # `|| true` to coexist with the implicit `set -e`.
+        # v1.4.1: zero warnings, every file. Through v1.4.0 the gate
+        # exempted every "exceeds 120 characters" line (its comment said
+        # comment dividers only, but code lines in main.cyr took the
+        # exemption) and grepped only `warn `, so a lint `error` passed.
+        # Every src file is clean now; keep it that way. cyrius lint
+        # exits non-zero on any output, so it is wrapped in `|| true`.
         run: |
           fail=0
           for f in src/*.cyr; do
             out=$(cyrius lint "$f" 2>&1 || true)
             echo "$out"
-            bad=$(echo "$out" | grep -E '^\s*warn ' | grep -v 'exceeds 120 characters' || true)
+            bad=$(echo "$out" | grep -E '^\s*(warn|error)' || true)
             if [ -n "$bad" ]; then
               fail=1
             fi
+            echo "$out" | grep -q '0 warnings' || fail=1
           done
-          [ $fail -eq 0 ] || { echo "lint: non-cosmetic warnings present"; exit 1; }
+          [ $fail -eq 0 ] || { echo "lint: warnings or errors present"; exit 1; }
 
       - name: Vet includes
         # Audits the include graph from the entry point. Fails on
@@ -95,6 +97,26 @@ jobs:
         # stub didn't exist (Issue 1) and also wouldn't ever exercise
         # tests/${proj}.tcyr.
         run: cyrius test
+
+      - name: Fuzz
+        # v1.4.1: the harness (tests/darshini.fcyr) has called itself a CI
+        # gate since v1.3.3 but no step ran it. Six targets with named
+        # invariants, deterministic seed; exits 1 on any violation.
+        run: cyrius fuzz
+
+      - name: Cross-target compile (agnos, aarch64)
+        # agnos is a supported target and had no CI gate at all; the
+        # aarch64 build's output matches x86_64's byte-for-byte (verified
+        # per release under qemu-aarch64). Compile both, and the suite for
+        # each, so a target-specific break fails here rather than at the
+        # next manual cross-run. Running them needs mirshi / qemu — see
+        # docs/development/roadmap.md.
+        run: |
+          set -e
+          cyrius build --agnos src/main.cyr build/darshini-agnos
+          cyrius build --agnos tests/darshini.tcyr build/tests-agnos
+          cyrius build --aarch64 src/main.cyr build/darshini-aarch64
+          cyrius build --aarch64 tests/darshini.tcyr build/tests-aarch64
 
       - name: Smoke — listing of the checkout
         # M1 acceptance check: built binary actually lists the
@@ -146,6 +168,15 @@ jobs:
             grep -q "write error" /tmp/werr \
               || { echo "no write-error diagnostic for '$mode': $(cat /tmp/werr)"; exit 1; }
           done
+          # v1.4.1: --help / --version too — they returned before the
+          # write-error check, so `darshini --help > /dev/full` exited 0.
+          for meta in --help --version; do
+            set +e
+            $B $meta > /dev/full 2>/tmp/werr
+            rc=$?
+            set -e
+            test "$rc" -ne 0 || { echo "$meta to /dev/full exited 0"; exit 1; }
+          done
           set +e
           $B src >&- 2>/tmp/werr2
           rc=$?
@@ -182,9 +213,9 @@ jobs:
       - name: Smoke — --help / --version exit 0 with expected output
         # v1.1 contract: both meta flags exit 0 + print to stdout.
         # --version output is exactly "darshini X.Y.Z\n", where X.Y.Z
-        # is sourced from the VERSION file (single source of truth —
-        # this catches a stale _darshini_version_str() that was not
-        # bumped in lockstep with VERSION).
+        # is the VERSION file — since v1.4.1 the binary takes it from
+        # CYRIUS_PKG_VERSION (cyrius.cyml reads VERSION), so this checks
+        # that chain end to end.
         run: |
           set -e
           want="darshini $(cat VERSION)"
@@ -197,15 +228,83 @@ jobs:
             || { echo "--help missing -F flag doc:"; cat /tmp/help; exit 1; }
 
       - name: Smoke — -F appends classify indicators
-        # v1.1 contract: dirs get `/`, regular files no indicator,
-        # the column reserves a cell either way for alignment.
+        # v1.1 contract: dirs get `/`, executables `*`, symlinks `@`,
+        # fifos `|`, sockets `=`. v1.4.1: a file with no indicator gets
+        # NOTHING after its name outside the multi-column grid (through
+        # v1.4.0 a pad space trailed it — `darshini -F | while IFS= read
+        # -r f` read "CHANGELOG.md "), and path ARGUMENTS get their
+        # indicator too (through v1.4.0 they got none).
         run: |
           set -e
-          ./build/${{ github.event.repository.name }} -F > /tmp/classify
+          B="$PWD/build/${{ github.event.repository.name }}"
+          "$B" -F > /tmp/classify
           grep -q '^src/$' /tmp/classify \
             || { echo "no 'src/' classify in -F output:"; cat /tmp/classify; exit 1; }
-          grep -q '^CHANGELOG\.md $' /tmp/classify \
-            || { echo "regular file should have trailing space (no indicator):"; cat /tmp/classify; exit 1; }
+          grep -q '^CHANGELOG\.md$' /tmp/classify \
+            || { echo "plain file must have no indicator and no pad:"; cat -A /tmp/classify; exit 1; }
+          if grep -q ' $' /tmp/classify; then
+            echo "-F left trailing whitespace on a pipe:"; cat -A /tmp/classify; exit 1
+          fi
+          T="$(mktemp -d)"
+          printf '#!/bin/sh\n' > "$T/run.sh"; chmod +x "$T/run.sh"
+          mkfifo "$T/ff"; ln -s run.sh "$T/lnk"
+          out=$("$B" -F "$T/run.sh" "$T/ff" "$T/lnk" | sed "s|$T/||" | tr '\n' ' ')
+          test "$out" = "run.sh* ff| lnk@ " || { echo "argv -F indicators wrong: '$out'"; exit 1; }
+          out=$("$B" -dF "$T/run.sh" | sed "s|$T/||")
+          test "$out" = "run.sh*" || { echo "-dF on a file: '$out'"; exit 1; }
+
+      - name: Smoke — `--` ends the flags
+        # v1.4.1. Through v1.4.0 `--` was an unknown flag, so there was no
+        # way to hand darshini a glob holding a name that starts with `-`.
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d)"; cd "$T"
+          touch -- -l --help plain
+          out=$("$B" -- -l --help plain | tr '\n' ' ')
+          test "$out" = "-l --help plain " || { echo "-- mishandled: '$out'"; exit 1; }
+          out=$("$B" -- | tr '\n' ' ')
+          test "$out" = "--help -l plain " || { echo "bare -- should list cwd: '$out'"; exit 1; }
+
+      - name: Smoke — an unreadable directory fails the run
+        # v1.4.1. `-T` drew an unreadable subdirectory exactly like an
+        # empty one and exited 0, while `darshini <that dir>` reported it
+        # and exited 1. Now both report it on stderr and exit 1; the rest
+        # of the tree still prints. (CI runs unprivileged, so chmod 000
+        # is enforced.)
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d)"
+          mkdir -p "$T/top/ok" "$T/top/locked"; touch "$T/top/ok/f" "$T/top/locked/hidden"
+          chmod 000 "$T/top/locked"
+          set +e
+          "$B" -T "$T/top" > /tmp/tree_out 2> /tmp/tree_err
+          rc=$?
+          set -e
+          chmod 755 "$T/top/locked"
+          test "$rc" -eq 1 || { echo "unreadable subdir: expected exit 1, got $rc"; exit 1; }
+          grep -q 'locked: permission denied' /tmp/tree_err || { echo "no diagnostic:"; cat /tmp/tree_err; exit 1; }
+          grep -q 'f$' /tmp/tree_out || { echo "readable part of the tree missing:"; cat /tmp/tree_out; exit 1; }
+          if grep -q hidden /tmp/tree_out; then echo "listed a file it cannot read"; exit 1; fi
+
+      - name: Smoke — hostile mtimes render as a placeholder
+        # v1.4.1. A year past 9999 made `-l` emit raw terminal-control
+        # bytes from the date (ESC 7 / ESC 8 at year ~235,700) and spin
+        # for minutes per entry. Needs a filesystem that stores such an
+        # mtime: tmpfs does (/dev/shm); ext4 caps at 2446, so the gate
+        # skips if the timestamp did not stick.
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d -p /dev/shm 2>/dev/null || mktemp -d)"
+          touch -d @7376000000000 "$T/f" 2>/dev/null || true
+          if [ "$(stat -c %Y "$T/f" 2>/dev/null)" != "7376000000000" ]; then
+            echo "filesystem cannot hold the mtime; skipping"; exit 0
+          fi
+          timeout 10 "$B" -l "$T" > /tmp/mt
+          if od -An -tx1 /tmp/mt | grep -qE ' (1b|9b)( |$)'; then echo "control byte from an mtime:"; od -c /tmp/mt; exit 1; fi
+          grep -q '????-??-?? ??:?? f$' /tmp/mt || { echo "no placeholder:"; cat /tmp/mt; exit 1; }
 
       - name: Smoke — -d renders single entry for dir
         # v1.1 contract: -d echoes path verbatim, -dF appends /,
@@ -233,6 +332,17 @@ jobs:
             || { echo "no application/x-cyml for cyrius.cyml:"; cat /tmp/mime_long; exit 1; }
           grep -qE 'inode/directory +docs$' /tmp/mime_long \
             || { echo "no inode/directory for docs/:"; cat /tmp/mime_long; exit 1; }
+          # The rest of the M8 acceptance list (asserted since v1.4.1).
+          ./build/${{ github.event.repository.name }} -l --mime src > /tmp/mime_src
+          grep -qE 'application/x-cyrius +main\.cyr$' /tmp/mime_src \
+            || { echo "no application/x-cyrius for main.cyr:"; cat /tmp/mime_src; exit 1; }
+          ./build/${{ github.event.repository.name }} -l --mime build > /tmp/mime_build
+          grep -qE 'application/x-executable +${{ github.event.repository.name }}$' /tmp/mime_build \
+            || { echo "no application/x-executable for the binary:"; cat /tmp/mime_build; exit 1; }
+          # v1.4.1: -l --mime on a FILE argument shows the column too.
+          ./build/${{ github.event.repository.name }} -l --mime README.md > /tmp/mime_one
+          grep -qE 'text/markdown README\.md$' /tmp/mime_one \
+            || { echo "-l --mime <file> dropped the column:"; cat /tmp/mime_one; exit 1; }
           # --mime without -l: column suppressed; verify no mime
           # token leaked into the short-format listing.
           ./build/${{ github.event.repository.name }} --mime > /tmp/mime_short
@@ -266,6 +376,34 @@ jobs:
             cat /tmp/git_outside
             exit 1
           fi
+
+      - name: Smoke — --git agrees with git (index v2/v3/v4, sha256, file args, ..)
+        # v1.4.1. Through v1.4.0: a v3 / v4 / SHA-256 index produced a
+        # column of '?' (the parse failure was ignored); `-l --git <file>`
+        # showed '?' for every file; and a `..` in the path broke every
+        # lookup. Builds each case with real git and checks a tracked file
+        # reads '.'.
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d)"
+          mkrepo() {
+            git init -q "$@" && git -C "$1" config user.email ci@ci && git -C "$1" config user.name ci
+            mkdir -p "$1/src/sub"; echo a > "$1/a.txt"; echo c > "$1/src/c.txt"; echo d > "$1/src/sub/d.txt"
+            git -C "$1" add -A && git -C "$1" commit -qm init
+          }
+          for v in 2 3 4; do
+            mkrepo "$T/v$v"; git -C "$T/v$v" update-index --index-version $v
+            "$B" --git "$T/v$v" | grep -qx '\. a\.txt' || { echo "index v$v:"; "$B" --git "$T/v$v"; exit 1; }
+          done
+          if git init -q --object-format=sha256 "$T/probe" 2>/dev/null; then
+            mkrepo "$T/sha" --object-format=sha256
+            "$B" --git "$T/sha" | grep -qx '\. a\.txt' || { echo "sha256 repo:"; "$B" --git "$T/sha"; exit 1; }
+          fi
+          (cd "$T/v2" && "$B" -l --git a.txt src/c.txt) > /tmp/git_files
+          test "$(grep -c ' \. ' /tmp/git_files)" -eq 2 || { echo "-l --git <file>:"; cat /tmp/git_files; exit 1; }
+          (cd "$T/v2/src/sub" && "$B" --git ..) | grep -qx '\. c\.txt' \
+            || { echo "--git ..:"; (cd "$T/v2/src/sub" && "$B" --git ..); exit 1; }
 
       - name: Smoke — tree mode produces box-drawn output
         # M6 contract: `-T` recurses with box-drawing connectors.
@@ -388,7 +526,9 @@ jobs:
             fi
           }
           for mode in "" "-1" "-l" "-T" "-F" "-lF"; do
-            script -qec "$B --no-color --no-icons $mode" /dev/null > out
+            # `-T` exits 1 here since v1.4.1 (the mode-000 dir is reported,
+            # not drawn as empty); this gate is about bytes, not status.
+            script -qec "$B --no-color --no-icons $mode" /dev/null > out || true
             inject "listing '$mode'" out
           done
           script -qec "$B --no-color --no-icons ./a* ./c1* ./r*" /dev/null > out
@@ -480,21 +620,30 @@ jobs:
       - name: DCE parity check
         # darshana runs the equivalent gate: a dead-code-eliminated
         # build (CYRIUS_DCE=1) must behave identically to the debug
-        # build, or the DCE pass dropped a live symbol. darshini's
-        # normal build reports hundreds of unreachable fns; this
-        # proves eliminating them doesn't change observable output.
+        # build, or the DCE pass dropped a live symbol. The release
+        # ships the DCE build. v1.4.1: compares every byte and the exit
+        # code across a mode matrix, on a pipe and under a PTY — through
+        # v1.4.0 it grepped six names out of one plain listing.
         run: |
           set -e
-          CYRIUS_DCE=1 cyrius build src/main.cyr build/${{ github.event.repository.name }}-dce
-          echo "${{ github.event.repository.name }}-dce: $(wc -c < build/${{ github.event.repository.name }}-dce) bytes"
-          ./build/${{ github.event.repository.name }}-dce > /tmp/dce_listing
-          for expected in cyrius.cyml VERSION README.md CHANGELOG.md src tests; do
-            grep -qx "$expected" /tmp/dce_listing \
-              || { echo "DCE build dropped '$expected' from listing:"; cat /tmp/dce_listing; exit 1; }
+          N=build/${{ github.event.repository.name }}
+          CYRIUS_DCE=1 cyrius build src/main.cyr $N-dce
+          echo "$N-dce: $(wc -c < $N-dce) bytes"
+          fail=0
+          for mode in "" "-1" "-l" "-lh" "-lF" "-F" "-T" "-T -l" "-T --git" "-l --git" "--git" \
+                      "-l --mime" "-d src" "-dF src" "src docs" "-l README.md" "--help" "--version" \
+                      "--bogus" "/nonexistent"; do
+            set +e
+            ./$N $mode > /tmp/dce_a 2>&1; ra=$?
+            ./$N-dce $mode > /tmp/dce_b 2>&1; rb=$?
+            script -qec "./$N $mode" /dev/null > /tmp/dce_ta 2>&1
+            script -qec "./$N-dce $mode" /dev/null > /tmp/dce_tb 2>&1
+            set -e
+            if [ "$ra" != "$rb" ] || ! cmp -s /tmp/dce_a /tmp/dce_b || ! cmp -s /tmp/dce_ta /tmp/dce_tb; then
+              echo "DCE build differs for '$mode' (rc $ra vs $rb)"; fail=1
+            fi
           done
-          want="darshini $(cat VERSION)"
-          out=$(./build/${{ github.event.repository.name }}-dce --version)
-          test "$out" = "$want" || { echo "DCE --version mismatch: got '$out', want '$want'"; exit 1; }
+          [ $fail -eq 0 ]
 
   security:
     name: Security scan
@@ -521,7 +670,8 @@ jobs:
 
           # No raw ANSI escape literals — every SGR/cursor sequence
           # MUST route through darshana (CLAUDE.md "no raw ANSI inline").
-          ansi_hits=$(grep -rnE '\\x1b\[|\\033\[|\\e\[' src/ 2>/dev/null || true)
+          # v1.4.1: also the uppercase hex, OSC, and 8-bit CSI spellings.
+          ansi_hits=$(grep -rnE '\\x1[bB]|\\033|\\e\[|\\x9[bB]|\\233' src/ 2>/dev/null || true)
           if [ -n "$ansi_hits" ]; then
             echo "FAIL: raw ANSI escape literal in src/ — route via darshana tty_sgr"
             echo "$ansi_hits"
@@ -577,21 +727,22 @@ jobs:
                    cyrius.cyml CLAUDE.md \
                    CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md \
                    docs/development/roadmap.md docs/development/state.md \
-                   docs/adr/0001-color-scheme.md; do
+                   docs/adr/0001-color-scheme.md docs/adr/0002-icon-format.md \
+                   docs/adr/0003-mime-detection.md docs/adr/0004-tree-mode.md \
+                   docs/guides/getting-started.md icons/default.cyml mime/default.cyml; do
             if [ -f "$f" ]; then echo "  OK: $f"
             else echo "  MISSING: $f"; MISSING=1; fi
           done
           exit $MISSING
 
       - name: Verify version consistency
-        # Single source of truth is the VERSION file. Three derived
-        # surfaces must agree: the CHANGELOG section header, the
-        # cyrius.cyml file: indirection, and — unlike darshana, which
-        # generates its version header — darshini's baked
-        # _darshini_version_str() literal in src/main.cyr. The runtime
-        # --version smoke in build-and-test re-checks the built binary
-        # against VERSION; this static check catches the mismatch
-        # without a toolchain install.
+        # Single source of truth is the VERSION file. Derived surfaces:
+        # the CHANGELOG section header and the cyrius.cyml `${file:VERSION}`
+        # indirection, which `cyrius build` turns into CYRIUS_PKG_VERSION
+        # — what `--version` prints since v1.4.1 (it was a hand-bumped
+        # literal). So src/main.cyr must use the constant and carry no
+        # version literal of its own; the runtime --version smoke checks
+        # the built binary end to end.
         run: |
           VERSION=$(cat VERSION | tr -d '[:space:]')
           echo "VERSION file: $VERSION"
@@ -599,6 +750,9 @@ jobs:
             || { echo "FAIL: CHANGELOG.md missing section [${VERSION}]"; exit 1; }
           grep -qE '^version *= *"\$\{file:VERSION\}"' cyrius.cyml \
             || { echo "FAIL: cyrius.cyml version no longer pulls from VERSION"; exit 1; }
-          grep -qE "return \"darshini ${VERSION}\";" src/main.cyr \
-            || { echo "FAIL: _darshini_version_str() in src/main.cyr not bumped to ${VERSION}"; exit 1; }
-          echo "Version consistent: VERSION = CHANGELOG = cyrius.cyml = src literal = $VERSION"
+          grep -q 'CYRIUS_PKG_VERSION' src/main.cyr \
+            || { echo "FAIL: src/main.cyr no longer prints CYRIUS_PKG_VERSION"; exit 1; }
+          if grep -qE '"darshini [0-9]+\.[0-9]+\.[0-9]+' src/*.cyr; then
+            echo "FAIL: a hardcoded version literal is back in src/"; exit 1
+          fi
+          echo "Version consistent: VERSION = CHANGELOG = cyrius.cyml -> CYRIUS_PKG_VERSION = $VERSION"

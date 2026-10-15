@@ -1,0 +1,522 @@
+# darshini — gitignore(5) matching for the `--git` column (v1.5.0, ADR 0005).
+#
+# A port of git's own matcher, so the column answers what git answers:
+#   * `wildmatch` / `_wm_dowild` — git's wildmatch.c (`dowild`), the glob
+#     engine behind .gitignore: `*`, `?`, `[...]` with ranges, `!` / `^`
+#     negation and POSIX `[:class:]`, `\` escapes, and `**` under
+#     WM_PATHNAME (where `*` stops at `/`).
+#   * `_ig_parse` — git's dir.c `add_patterns_from_buffer` +
+#     `trim_trailing_spaces` + `parse_path_pattern`.
+#   * `_ig_match_one` / `_ig_list_match` — `match_basename`,
+#     `match_pathname`, `last_matching_pattern_from_list`.
+# Pure: no I/O. git.cyr loads the files and applies git's precedence
+# across them. Verified differentially against `git check-ignore`
+# (tests/git-parity.sh).
+
+enum IgWildResult {
+    IG_WM_NOMATCH = 0;
+    IG_WM_MATCH = 1;
+    IG_WM_ABORT_ALL = 2;
+    IG_WM_ABORT_TO_STARSTAR = 3;
+}
+
+enum IgPatternFlag {
+    IG_NEGATIVE = 1;
+    IG_MUSTBEDIR = 2;
+    IG_NODIR = 4;
+}
+
+# Byte `i` of an `n`-byte string, or 0 past either end — the C code's NUL.
+fn _wm_at(s, n, i): i64 {
+    if (i < 0) { return 0; }
+    if (i >= n) { return 0; }
+    return load8(s + i);
+}
+
+# git's is_glob_special: the bytes that make a pattern not a literal.
+fn _wm_special(c): i64 {
+    if (c == 42) { return 1; }     # *
+    if (c == 63) { return 1; }     # ?
+    if (c == 91) { return 1; }     # [
+    if (c == 92) { return 1; }     # backslash
+    return 0;
+}
+
+fn _wm_isdigit(c): i64 {
+    if (c >= 48) { if (c <= 57) { return 1; } }
+    return 0;
+}
+
+fn _wm_isupper(c): i64 {
+    if (c >= 65) { if (c <= 90) { return 1; } }
+    return 0;
+}
+
+fn _wm_islower(c): i64 {
+    if (c >= 97) { if (c <= 122) { return 1; } }
+    return 0;
+}
+
+# POSIX class membership for `[:name:]`, ASCII only (git's sane_ctype:
+# no byte >= 0x80 is in any class). 1 / 0, or -1 for an unknown class
+# name, which git treats as a malformed pattern (WM_ABORT_ALL).
+fn _wm_in_class(name, n, c): i64 {
+    var alpha = _wm_isupper(c) + _wm_islower(c);
+    var digit = _wm_isdigit(c);
+    var graph = 0;
+    if (c >= 33) { if (c <= 126) { graph = 1; } }
+    if (n == 5) {
+        if (memeq(name, "alnum", 5) == 1) { if (alpha + digit > 0) { return 1; } return 0; }
+        if (memeq(name, "alpha", 5) == 1) { if (alpha > 0) { return 1; } return 0; }
+        if (memeq(name, "blank", 5) == 1) {
+            if (c == 32) { return 1; }
+            if (c == 9) { return 1; }
+            return 0;
+        }
+        if (memeq(name, "cntrl", 5) == 1) {
+            if (c < 32) { return 1; }
+            if (c == 127) { return 1; }
+            return 0;
+        }
+        if (memeq(name, "digit", 5) == 1) { return digit; }
+        if (memeq(name, "graph", 5) == 1) { return graph; }
+        if (memeq(name, "lower", 5) == 1) { return _wm_islower(c); }
+        if (memeq(name, "print", 5) == 1) {
+            if (c == 32) { return 1; }
+            return graph;
+        }
+        if (memeq(name, "punct", 5) == 1) {
+            if (graph == 1) { if (alpha + digit == 0) { return 1; } }
+            return 0;
+        }
+        if (memeq(name, "space", 5) == 1) {
+            # git's sane_ctype space: TAB, LF, CR, SP (not VT / FF).
+            if (c == 9) { return 1; }
+            if (c == 10) { return 1; }
+            if (c == 13) { return 1; }
+            if (c == 32) { return 1; }
+            return 0;
+        }
+        if (memeq(name, "upper", 5) == 1) { return _wm_isupper(c); }
+    }
+    if (n == 6) {
+        if (memeq(name, "xdigit", 6) == 1) {
+            if (digit == 1) { return 1; }
+            if (c >= 97) { if (c <= 102) { return 1; } }
+            if (c >= 65) { if (c <= 70) { return 1; } }
+            return 0;
+        }
+    }
+    return 0 - 1;
+}
+
+# Index of the first '/' in t[ti..tn), or -1.
+fn _wm_slash_at(t, tn, ti): i64 {
+    var i = ti;
+    while (i < tn) {
+        if (load8(t + i) == 47) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# git's dowild(), over explicit lengths. `pstart` is where this call's
+# pattern begins (a `**` there counts as at a segment start), `pathname`
+# is WM_PATHNAME. Returns an IgWildResult. Each branch below is the case
+# of the same name in wildmatch.c, in the same order.
+fn _wm_dowild(p, pn, pstart, t, tn, tstart, pathname): i64 {
+    var pi = pstart;
+    var ti = tstart;
+    while (1 == 1) {
+        var p_ch = _wm_at(p, pn, pi);
+        if (p_ch == 0) {
+            if (ti < tn) { return IG_WM_NOMATCH; }
+            return IG_WM_MATCH;
+        }
+        var t_ch = _wm_at(t, tn, ti);
+        if (t_ch == 0) { if (p_ch != 42) { return IG_WM_ABORT_ALL; } }
+        if (p_ch == 92) {
+            # Literal match with the following byte.
+            pi = pi + 1;
+            p_ch = _wm_at(p, pn, pi);
+            if (t_ch != p_ch) { return IG_WM_NOMATCH; }
+            pi = pi + 1;
+            ti = ti + 1;
+        } else { if (p_ch == 63) {
+            # '?': anything but '/' under WM_PATHNAME.
+            if (pathname == 1) { if (t_ch == 47) { return IG_WM_NOMATCH; } }
+            pi = pi + 1;
+            ti = ti + 1;
+        } else { if (p_ch == 42) {
+            # _wm_star returns an IgWildResult, or -1 for "resume at the
+            # (pi, ti) it stored in `resume`" (one asterisk then a slash).
+            var resume[16];
+            var r = _wm_star(p, pn, pstart, pi, t, tn, ti, pathname, &resume);
+            if (r >= 0) { return r; }
+            pi = load64(&resume);
+            ti = load64(&resume + 8);
+        } else { if (p_ch == 91) {
+            var m = _wm_class(p, pn, pi, t_ch, pathname);
+            if (m < 0) {
+                # -1: no match; -2: malformed (abort).
+                if (m == 0 - 2) { return IG_WM_ABORT_ALL; }
+                return IG_WM_NOMATCH;
+            }
+            pi = m + 1;           # m = index of the closing ']'
+            ti = ti + 1;
+        } else {
+            if (t_ch != p_ch) { return IG_WM_NOMATCH; }
+            pi = pi + 1;
+            ti = ti + 1;
+        } } } }
+    }
+    return IG_WM_NOMATCH;
+}
+
+# The '*' case of dowild, with p[pi0] == '*'. Returns an IgWildResult,
+# or -1 with the resume position stored at `resume` (pi @0, ti @8) for
+# "one asterisk followed by a slash".
+fn _wm_star(p, pn, pstart, pi0, t, tn, ti0, pathname, resume): i64 {
+    var pi = pi0 + 1;
+    var ti = ti0;
+    var t_ch = _wm_at(t, tn, ti);
+    var match_slash = 0;
+    if (_wm_at(p, pn, pi) == 42) {
+        var prev_p = pi - 2;
+        pi = pi + 1;
+        while (_wm_at(p, pn, pi) == 42) { pi = pi + 1; }
+        if (pathname == 0) {
+            # Without WM_PATHNAME, '*' == '**'.
+            match_slash = 1;
+        } else {
+            var at_start = 0;
+            if (prev_p < pstart) { at_start = 1; }
+            else { if (load8(p + prev_p) == 47) { at_start = 1; } }
+            var nxt = _wm_at(p, pn, pi);
+            var at_end = 0;
+            if (nxt == 0) { at_end = 1; }
+            if (nxt == 47) { at_end = 1; }
+            if (nxt == 92) { if (_wm_at(p, pn, pi + 1) == 47) { at_end = 1; } }
+            if (at_start == 1) { if (at_end == 1) {
+                    # "**/" may match nothing: try the rest of the pattern
+                    # right here, so foo/**/bar matches foo/bar.
+                    if (nxt == 47) {
+                        if (_wm_dowild(p, pn, pi + 1, t, tn, ti, pathname) == IG_WM_MATCH) {
+                            return IG_WM_MATCH;
+                        }
+                    }
+                    match_slash = 1;
+                } }
+        }
+    } else {
+        if (pathname == 0) { match_slash = 1; }
+    }
+    var after = _wm_at(p, pn, pi);
+    if (after == 0) {
+        # Trailing "**" matches everything; trailing "*" only if no '/'
+        # remains.
+        if (match_slash == 0) {
+            if (_wm_slash_at(t, tn, ti) >= 0) { return IG_WM_NOMATCH; }
+        }
+        return IG_WM_MATCH;
+    }
+    if (match_slash == 0) { if (after == 47) {
+            # One asterisk followed by a slash matches up to the next '/'
+            # of the text; both slashes are consumed by the caller's step.
+            var sl = _wm_slash_at(t, tn, ti);
+            if (sl < 0) { return IG_WM_NOMATCH; }
+            store64(resume, pi + 1);
+            store64(resume + 8, sl + 1);
+            return 0 - 1;
+        } }
+    while (1 == 1) {
+        if (t_ch == 0) { return IG_WM_ABORT_ALL; }
+        # Advance quickly when the asterisk is followed by a literal: the
+        # text before that literal must belong to the '*'. Without
+        # match_slash, never look past the first '/'.
+        if (_wm_special(after) == 0) {
+            var fast = 1;
+            while (fast == 1) {
+                t_ch = _wm_at(t, tn, ti);
+                if (t_ch == 0) { fast = 0; }
+                else { if (match_slash == 0) { if (t_ch == 47) { fast = 0; } } }
+                if (fast == 1) {
+                    if (t_ch == after) { fast = 0; }
+                    else { ti = ti + 1; }
+                }
+            }
+            if (t_ch != after) { return IG_WM_NOMATCH; }
+        }
+        var m = _wm_dowild(p, pn, pi, t, tn, ti, pathname);
+        if (m != IG_WM_NOMATCH) {
+            if (match_slash == 0) { return m; }
+            if (m != IG_WM_ABORT_TO_STARSTAR) { return m; }
+        } else {
+            if (match_slash == 0) { if (t_ch == 47) { return IG_WM_ABORT_TO_STARSTAR; } }
+        }
+        ti = ti + 1;
+        t_ch = _wm_at(t, tn, ti);
+    }
+    return IG_WM_ABORT_ALL;
+}
+
+# The '[' case of dowild, with p[pi0] == '['. Returns the index of the
+# class's closing ']' when `t_ch` matches, -1 when it does not, -2 when
+# the class is malformed (unterminated, unknown [:name:]).
+fn _wm_class(p, pn, pi0, t_ch, pathname): i64 {
+    var pi = pi0 + 1;
+    var c = _wm_at(p, pn, pi);
+    if (c == 94) { c = 33; }                 # '^' is '!'
+    var negated = 0;
+    if (c == 33) {
+        negated = 1;
+        pi = pi + 1;
+        c = _wm_at(p, pn, pi);
+    }
+    var prev_ch = 0;
+    var matched = 0;
+    var looping = 1;
+    while (looping == 1) {
+        if (c == 0) { return 0 - 2; }
+        if (c == 92) {
+            pi = pi + 1;
+            c = _wm_at(p, pn, pi);
+            if (c == 0) { return 0 - 2; }
+            if (t_ch == c) { matched = 1; }
+        } else {
+            var nx = _wm_at(p, pn, pi + 1);
+            var is_range = 0;
+            if (c == 45) { if (prev_ch != 0) { if (nx != 0) { if (nx != 93) { is_range = 1; } } } }
+            if (is_range == 1) {
+                pi = pi + 1;
+                c = _wm_at(p, pn, pi);
+                if (c == 92) {
+                    pi = pi + 1;
+                    c = _wm_at(p, pn, pi);
+                    if (c == 0) { return 0 - 2; }
+                }
+                if (t_ch <= c) { if (t_ch >= prev_ch) { matched = 1; } }
+                c = 0;                       # so prev_ch becomes 0
+            } else { if (c == 91) { if (nx == 58) {
+                    var s = pi + 2;
+                    pi = s;
+                    var scan = 1;
+                    while (scan == 1) {
+                        c = _wm_at(p, pn, pi);
+                        if (c == 0) { scan = 0; }
+                        else { if (c == 93) { scan = 0; } else { pi = pi + 1; } }
+                    }
+                    if (c == 0) { return 0 - 2; }
+                    var clen = pi - s - 1;
+                    var proper = 1;
+                    if (clen < 0) { proper = 0; }
+                    else { if (_wm_at(p, pn, pi - 1) != 58) { proper = 0; } }
+                    if (proper == 0) {
+                        # No ":]": a plain '[' in the set; rescan from there.
+                        pi = s - 2;
+                        c = 91;
+                        if (t_ch == 91) { matched = 1; }
+                    } else {
+                        var r = _wm_in_class(p + s, clen, t_ch);
+                        if (r < 0) { return 0 - 2; }
+                        if (r == 1) { matched = 1; }
+                        c = 0;
+                    }
+                } else {
+                    if (t_ch == c) { matched = 1; }
+                } } else {
+                    if (t_ch == c) { matched = 1; }
+                } }
+        }
+        prev_ch = c;
+        pi = pi + 1;
+        c = _wm_at(p, pn, pi);
+        if (c == 93) { looping = 0; }
+    }
+    if (matched == negated) { return 0 - 1; }
+    if (pathname == 1) { if (t_ch == 47) { return 0 - 1; } }
+    return pi;
+}
+
+# 1 when pattern p[0..pn) matches text t[0..tn), else 0. `pathname` is
+# WM_PATHNAME: 1 for a pattern containing '/', 0 for a basename match.
+fn wildmatch(p, pn, t, tn, pathname): i64 {
+    if (_wm_dowild(p, pn, 0, t, tn, 0, pathname) == IG_WM_MATCH) { return 1; }
+    return 0;
+}
+
+# ================================================================
+# Patterns
+# ================================================================
+#
+# Pattern record, 32 bytes:
+#   +0  ptr     — the pattern bytes (after a leading '!', without a
+#                 trailing '/'), NUL-terminated copy
+#   +8  len
+#   +16 flags   — IG_NEGATIVE | IG_MUSTBEDIR | IG_NODIR
+#   +24 nowild  — length of the leading run free of glob specials
+#                 (git's simple_length); == len means a literal
+#
+# Pattern list, 24 bytes: { patterns vec @0, base ptr @8, base len @16 }.
+# `base` is the directory of the file the patterns came from, relative to
+# the worktree root, without a trailing '/' ("" for the root .gitignore,
+# info/exclude and core.excludesFile).
+
+fn _ig_rec_ptr(r): i64    { return load64(r); }
+fn _ig_rec_len(r): i64    { return load64(r + 8); }
+fn _ig_rec_flags(r): i64  { return load64(r + 16); }
+fn _ig_rec_nowild(r): i64 { return load64(r + 24); }
+
+fn _ig_list_new(base, blen): i64 {
+    var l = alloc(24);
+    store64(l, vec_new());
+    var b = alloc(blen + 1);
+    if (blen > 0) { memcpy(b, base, blen); }
+    store8(b + blen, 0);
+    store64(l + 8, b);
+    store64(l + 16, blen);
+    return l;
+}
+
+# Add one already-trimmed pattern line (git's parse_path_pattern).
+fn _ig_add(patterns, s, n): i64 {
+    var flags = 0;
+    if (n > 0) { if (load8(s) == 33) {
+            flags = flags | IG_NEGATIVE;
+            s = s + 1;
+            n = n - 1;
+        } }
+    if (n > 0) { if (load8(s + n - 1) == 47) {
+            flags = flags | IG_MUSTBEDIR;
+            n = n - 1;
+        } }
+    # An empty pattern can never match a non-empty name (git keeps it
+    # and it never fires); dropping it is equivalent.
+    if (n == 0) { return 0; }
+    var has_slash = 0;
+    var nowild = n;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        if (c == 47) { has_slash = 1; }
+        if (nowild == n) { if (_wm_special(c) == 1) { nowild = i; } }
+        i = i + 1;
+    }
+    if (has_slash == 0) { flags = flags | IG_NODIR; }
+    var copy = alloc(n + 1);
+    memcpy(copy, s, n);
+    store8(copy + n, 0);
+    var r = alloc(32);
+    store64(r, copy);
+    store64(r + 8, n);
+    store64(r + 16, flags);
+    store64(r + 24, nowild);
+    vec_push(patterns, r);
+    return 0;
+}
+
+# Length of line s[0..n) after git's trim_trailing_spaces: a run of
+# trailing ' ' is dropped unless the first of them is backslash-escaped.
+# (Spaces only — a trailing TAB is kept, as in git.)
+fn _ig_trim_trailing(s, n): i64 {
+    var last_space = 0 - 1;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        if (c == 32) {
+            if (last_space < 0) { last_space = i; }
+            i = i + 1;
+        } else { if (c == 92) {
+            i = i + 1;
+            if (i >= n) { return n; }
+            last_space = 0 - 1;
+            i = i + 1;
+        } else {
+            last_space = 0 - 1;
+            i = i + 1;
+        } }
+    }
+    if (last_space >= 0) { return last_space; }
+    return n;
+}
+
+# Parse a .gitignore-format buffer into pattern records appended to
+# `patterns` (git's add_patterns_from_buffer): a UTF-8 BOM is skipped;
+# each line loses one '\r' before its '\n' (the last line too — git
+# appends a '\n' when the file lacks one); a line whose first byte is '#'
+# is a comment; trailing spaces are trimmed per _ig_trim_trailing;
+# leading spaces are KEPT; blank lines are dropped.
+fn _ig_parse(buf, len, patterns): i64 {
+    var pos = 0;
+    if (len >= 3) {
+        if (load8(buf) == 0xEF) { if (load8(buf + 1) == 0xBB) { if (load8(buf + 2) == 0xBF) { pos = 3; } } }
+    }
+    while (pos < len) {
+        var e = pos;
+        var scanning = 1;
+        while (scanning == 1) {
+            if (e >= len) { scanning = 0; }
+            else { if (load8(buf + e) == 10) { scanning = 0; } else { e = e + 1; } }
+        }
+        var l = e - pos;
+        if (l > 0) { if (load8(buf + pos) != 35) {
+                if (load8(buf + pos + l - 1) == 13) { l = l - 1; }
+                l = _ig_trim_trailing(buf + pos, l);
+                _ig_add(patterns, buf + pos, l);
+            } }
+        pos = e + 1;
+    }
+    return 0;
+}
+
+# Does one pattern match the path rel[0..rlen) (relative to the worktree
+# root; basename at rel + boff), given the entry's directory flag and the
+# pattern's list base? git's match_basename / match_pathname.
+fn _ig_match_one(rec, rel, rlen, boff, is_dir, base, blen): i64 {
+    var flags = _ig_rec_flags(rec);
+    if ((flags & IG_MUSTBEDIR) != 0) { if (is_dir == 0) { return 0; } }
+    var pp = _ig_rec_ptr(rec);
+    var pl = _ig_rec_len(rec);
+    if ((flags & IG_NODIR) != 0) {
+        var bn = rel + boff;
+        var bl = rlen - boff;
+        if (_ig_rec_nowild(rec) == pl) {
+            if (pl != bl) { return 0; }
+            return memeq(pp, bn, pl);
+        }
+        return wildmatch(pp, pl, bn, bl, 0);
+    }
+    # Anchored or containing '/': relative to the list's directory.
+    if (load8(pp) == 47) {
+        pp = pp + 1;
+        pl = pl - 1;
+    }
+    var name = rel;
+    var nlen = rlen;
+    if (blen > 0) {
+        if (rlen < blen + 1) { return 0; }
+        if (load8(rel + blen) != 47) { return 0; }
+        if (memeq(rel, base, blen) == 0) { return 0; }
+        name = rel + blen + 1;
+        nlen = rlen - blen - 1;
+    }
+    return wildmatch(pp, pl, name, nlen, 1);
+}
+
+# The verdict of one list for a path: 1 excluded, 2 matched a negation
+# (re-included), 0 no pattern matched. The LAST matching pattern wins.
+fn _ig_list_match(list, rel, rlen, boff, is_dir): i64 {
+    var v = load64(list);
+    var base = load64(list + 8);
+    var blen = load64(list + 16);
+    var i = vec_len(v) - 1;
+    while (i >= 0) {
+        var rec = vec_get(v, i);
+        if (_ig_match_one(rec, rel, rlen, boff, is_dir, base, blen) == 1) {
+            if ((_ig_rec_flags(rec) & IG_NEGATIVE) != 0) { return 2; }
+            return 1;
+        }
+        i = i - 1;
+    }
+    return 0;
+}

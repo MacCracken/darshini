@@ -21,6 +21,9 @@ include "src/mime.cyr"
 # and columns.cyr call. Without it every bench build warned
 # "undefined function" for both (harmless only because no benchmark
 # reaches those paths). Same include order as src/main.cyr.
+include "src/cli.cyr"
+include "src/ignore.cyr"
+include "src/gitcfg.cyr"
 include "src/git.cyr"
 include "src/color.cyr"
 include "src/render.cyr"
@@ -198,6 +201,36 @@ fn main(): i64 {
     while (i < 100000) { mime_for_entry("README.md", name_md, mode_reg); i = i + 1; }
     bench_batch_stop(b10, 100000);
     bench_report(b10);
+
+    # v1.5.0: the gitignore engine (src/ignore.cyr). A list shaped like
+    # GitHub's Python template, against a path that matches nothing (the
+    # common case: every pattern is tried, last to first) and one that a
+    # class pattern matches.
+    var py_ign = "__pycache__/\n*.py[cod]\n*$py.class\n*.so\n.Python\nbuild/\ndevelop-eggs/\ndist/\n";
+    var ig_list = _ig_list_new("", 0);
+    _ig_parse(py_ign, strlen(py_ign), load64(ig_list));
+    var miss = "src/pkg/module/file.txt";
+    var hit = "src/pkg/module/file.pyc";
+    var b11 = bench_new("_ig_list_match python template, miss");
+    bench_batch_start(b11);
+    i = 0;
+    while (i < 100000) { _ig_list_match(ig_list, miss, 23, 15, 0); i = i + 1; }
+    bench_batch_stop(b11, 100000);
+    bench_report(b11);
+
+    var b12 = bench_new("_ig_list_match python template, *.py[cod] hit");
+    bench_batch_start(b12);
+    i = 0;
+    while (i < 100000) { _ig_list_match(ig_list, hit, 23, 15, 0); i = i + 1; }
+    bench_batch_stop(b12, 100000);
+    bench_report(b12);
+
+    var b13 = bench_new("wildmatch **/a*b/** vs 6-level path");
+    bench_batch_start(b13);
+    i = 0;
+    while (i < 100000) { wildmatch("**/a*b/**", 9, "x/y/z/aqqb/w/v", 14, 1); i = i + 1; }
+    bench_batch_stop(b13, 100000);
+    bench_report(b13);
 
     return 0;
 }

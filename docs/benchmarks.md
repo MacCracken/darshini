@@ -196,3 +196,23 @@ O(n log n) worst case. `-T /usr/share` peak RSS 24.8 → 22.7 MB — the
 merge sort's n-slot scratch vec per directory is gone. Whole-listing
 times move within noise (sorting was never the dominant cost; lstat is).
 
+## v1.5.0 refresh — 2026-10-15: the gitignore engine
+
+`--git` now runs git's full ignore rules (ADR 0005): a `wildmatch` port,
+one `.gitignore` read per directory (cached), and a memoized
+excluded-directory verdict per directory. New `cyrius bench` entries:
+
+| Path | Avg |
+|---|---|
+| `_ig_list_match`, Python-template list (8 patterns), no match | 846 ns |
+| `_ig_list_match`, same list, `*.py[cod]` hit | 653 ns |
+| `wildmatch` `**/a*b/**` vs a 6-level path | 389 ns |
+
+Whole listings (best of three, 1.4.2 vs 1.5.0): `-T --git` on a 20k-file
+repository with nested `.gitignore` files 95.1 → 98.0 ms; `--git` on one
+of its 100-entry directories 12.7 → 13.0 ms; `-T --git` on the cyrius
+repository 45.8 → 41.0 ms; `-T /usr/share` (no `--git`) 274.1 → 274.8 ms
+— all within noise. The per-directory memo is what keeps the ancestor
+rule (an excluded directory's contents are ignored) from costing a
+pattern scan per ancestor per entry.
+

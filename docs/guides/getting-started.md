@@ -41,11 +41,13 @@ See the README for the recommended zsh alias set
 | `src/color.cyr`   | Color picker, `compute_decor` (single lstat pass → colors / icons / git / mime / classify vecs), `_path_join_into`, `emit_decorated`, the untrusted-text writers (`_write_name_bytes` / `_write_err_bytes` / `_name_display_len`) |
 | `src/icons.cyr`   | Compile-baked icon lookup chain mirroring `icons/default.cyml` |
 | `src/mime.cyr`    | Inode → filename → ext → exec → magic precedence chain mirroring `mime/default.cyml` |
-| `src/git.cyr`     | Physical-path repo discovery, `.git/index` v2–v4 (SHA-1 / SHA-256) parser, minimal `.gitignore` matcher, hashmap-backed `git_status_for*` |
+| `src/ignore.cyr`  | git's `wildmatch` (port) and gitignore pattern parsing / matching — pure, no I/O (ADR 0005) |
+| `src/gitcfg.cyr`  | A minimal git-config reader for `core.excludesFile`, `safe.directory`, `extensions.objectFormat` |
+| `src/git.cyr`     | Repo discovery (physical path, `gitdir:` files, `commondir`), ownership, index v2–v4 parser, ignore precedence and inheritance, submodule `HEAD` status, `git_status_for*` |
 
 Include order in `main.cyr` is dependency order, kept for the reader
 (cycc resolves later definitions):
-`walk → cli → icons → mime → git → color → render → columns → long → tree`.
+`walk → cli → icons → mime → ignore → gitcfg → git → color → render → columns → long → tree`.
 
 ## Adding a feature (v1.x non-breaking additions)
 

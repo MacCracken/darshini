@@ -4,6 +4,107 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-15
+
+`--git` now answers what `git status` would. Minor bump: the column's
+answer changes for many entries, and every change is toward git's. Design:
+[ADR 0005](docs/adr/0005-git-status-semantics.md). Toolchain and darshana
+unchanged (cyrius 6.7.9, darshana 1.3.0). Outside `--git`, output is
+byte-identical to 1.4.2 (A/B: 276 / 276 non-`--git` captures, pipe and PTY);
+speed is unchanged within noise.
+
+**Verified against git.** A differential harness built 2,600 random
+repositories — random `.gitignore` files at several levels (globs, classes,
+`**`, anchors, negations, escapes, trailing spaces, CRLF, comments), random
+`info/exclude` and global ignore files, random trees — and required the set
+of paths darshini marks `!` to equal `git check-ignore`'s, path for path:
+**62,761 paths, 0 differences**. Mutation-checked: breaking negation, or `**/`
+matching zero directories, makes it fail. A fixed corpus of the tricky cases
+plus submodules, worktrees and ownership runs in CI (`tests/git-parity.sh`).
+
+### Changed
+
+- **Ignore rules are git's.** Through 1.4.2 the matcher was M7's subset —
+  the root `.gitignore` and `info/exclude` only, matched against an entry's
+  basename, in three shapes (exact name, `*suffix`, `name/`). It was wrong in
+  both directions:
+  - **`!` where git says `?`** (files you meant to commit, shown ignored):
+    negation was dropped (`*.log` + `!keep.log` left `keep.log` ignored); a
+    leading `/` was stripped (`/TODO` also matched `src/TODO`); leading spaces
+    were trimmed.
+  - **`?` where git says `!`**: classes (`*.py[cod]`, GitHub's Python
+    template), `?`, mid-pattern `*`, `**`, escapes (`\#`, `\!`, `\ `), path
+    patterns (`docs/build`), every nested `.gitignore`, `core.excludesFile` and
+    its default `$XDG_CONFIG_HOME/git/ignore`, and the contents of an ignored
+    directory (`build/out.o` under `build/`).
+
+  `src/ignore.cyr` is a port of git's `wildmatch` and its pattern parsing
+  (BOM, one CR per line, `#` comments, trailing-space rule, `!`, trailing
+  `/`, anchoring); `src/git.cyr` applies git's precedence (deepest
+  `.gitignore` first, then `info/exclude`, then `core.excludesFile`; last
+  match within a file) and git's rule that nothing below an excluded
+  directory can be re-included. A `.gitignore` that is a symlink is not
+  followed (git ≥ 2.32). The listing root is judged too (`-T --git build`,
+  `-ld --git build` show `!`), reversing v1.3.3's exemption, which would now
+  show `?` above a tree of `!`.
+- **`.git` and everything in it get no mark** (blank). Through 1.4.2 `.git`
+  showed `?`, and `-T --git` listed every object file under it as untracked.
+- **Submodules are read through their `gitdir:` file** (and linked worktrees,
+  with `commondir`) instead of being declined (1.4.1) or borrowing the
+  enclosing repository's index (≤ 1.4.0). In the superproject a submodule is
+  `.` when its checked-out `HEAD` is the commit the index records and `M` when
+  it moved — through 1.4.2 it compared the directory's mtime with the
+  gitlink's index mtime (0) and always showed `M`.
+
+### Security
+
+- **Repositories owned by another user are refused** (Linux), as git does:
+  if the worktree root, the `.git` file or the git dir is not owned by the
+  effective uid (as root: `$SUDO_UID`), the column does not appear unless a
+  protected `safe.directory` (system or global config, never the
+  repository's own) is `*`, the worktree path, or a `<path>/*` above it; an
+  empty value resets the list. Through 1.4.2 a `.git` planted in a shared
+  parent directory (`/tmp/.git`) applied to other users' listings below it.
+
+### Added
+
+- `src/gitcfg.cyr` — a minimal git-config reader for exactly
+  `core.excludesFile`, `safe.directory` and `extensions.objectFormat`, from
+  `/etc/gitconfig` (unless `GIT_CONFIG_NOSYSTEM`), `$XDG_CONFIG_HOME/git/config`,
+  `~/.gitconfig` and the repository's config. (`extensions.objectFormat` was
+  a two-word scan in 1.4.1.) Not supported, by decision: `include` /
+  `includeIf`, `GIT_DIR` / `GIT_WORK_TREE`, `core.ignoreCase`.
+
+### Tests
+
+- **401 → 463 assertions**: git's 137-row wildmatch table (t3070 — every row
+  matches with `WM_PATHNAME`, the mode every `/`-pattern uses), gitignore
+  semantics (anchoring, classes, `**`, negation order, escapes, whitespace,
+  nested bases), precedence and inheritance across nested lists and base
+  lists, `.git` marks, the listing root, git-config parsing, ownership and
+  `safe.directory` matching. aarch64 463 / 463; agnos 452 / 452 (no
+  ownership on agnos).
+- **Fuzz target 7, wildmatch**: 20,000 random pattern / text pairs against an
+  independent backtracking matcher for the `*` / `?` / literal subset, plus
+  literal and escaped-literal invariants. Mutation-checked (letting `?` match
+  `/` fails it). The `.gitignore` CRLF differential target now compares the
+  new parser's records, flags included.
+- **CI: `tests/git-parity.sh`** — the `!` set equals `git check-ignore`'s in
+  every directory of a repository holding every rule above; `.git` has no
+  mark; a submodule is `.` then `M` after its `HEAD` moves, and its files are
+  listed through `gitdir:`; a linked worktree uses the common `info/exclude`;
+  and with the runner's passwordless sudo, a root-owned repository gets no
+  column until `safe.directory` lists it.
+- `cyrius bench`: `_ig_list_match` on a Python-template list 846 ns (miss) /
+  653 ns (hit); `wildmatch` with `**` 389 ns.
+
+### Docs
+
+- ADR 0005 (git status semantics). README, SECURITY.md (ownership, symlinked
+  `.gitignore`, config files read), state.md, roadmap (1.5.0 done; next 1.6.0),
+  benchmarks.md, getting-started (the two new modules), architecture note 002
+  (no ownership check on agnos), golden examples regenerated.
+
 ## [1.4.2] - 2026-10-15
 
 Internals and CI, the 1.4.x step the 1.4.1 roadmap laid out. Patch bump.

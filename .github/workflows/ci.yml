@@ -119,8 +119,9 @@ jobs:
 
       - name: Fuzz
         # v1.4.1: the harness (tests/darshini.fcyr) has called itself a CI
-        # gate since v1.3.3 but no step ran it. Six targets with named
-        # invariants, deterministic seed; exits 1 on any violation.
+        # gate since v1.3.3 but no step ran it. Seven targets with named
+        # invariants (v1.5.0 added wildmatch against an independent
+        # reference matcher), deterministic seed; exits 1 on any violation.
         run: cyrius fuzz
 
       - name: Cross-target build (agnos, aarch64)
@@ -456,6 +457,18 @@ jobs:
           test "$(grep -c ' \. ' /tmp/git_files)" -eq 2 || { echo "-l --git <file>:"; cat /tmp/git_files; exit 1; }
           (cd "$T/v2/src/sub" && "$B" --git ..) | grep -qx '\. c\.txt' \
             || { echo "--git ..:"; (cd "$T/v2/src/sub" && "$B" --git ..); exit 1; }
+
+      - name: git parity — ignore rules, submodules, worktrees, ownership
+        # v1.5.0 (ADR 0005). tests/git-parity.sh builds repositories that
+        # exercise every ignore rule darshini reimplements (nested
+        # .gitignore files, negation, anchoring, classes, `**`, escapes,
+        # trailing spaces, CRLF, excluded-directory contents, info/exclude,
+        # core.excludesFile) and requires darshini's '!' set to equal
+        # `git check-ignore`'s in every directory; then checks `.git` (no
+        # status), a submodule ('.' / 'M' by HEAD, files via `gitdir:`),
+        # a linked worktree, and — with the runner's passwordless sudo — a
+        # root-owned repository (no column until safe.directory lists it).
+        run: sh tests/git-parity.sh
 
       - name: Smoke — tree mode produces box-drawn output
         # M6 contract: `-T` recurses with box-drawing connectors.

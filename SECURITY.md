@@ -59,12 +59,21 @@ filesystem beyond standard output. The realistic threats:
   answers. (That was claimed here before v1.4.1 but held only for the
   size ceiling: a parse failure was ignored and the column showed every
   file `?`. Through v1.3.1 an oversized index was silently truncated.)
-  A `.git` *file* (submodule, linked worktree) also declines rather
-  than falling through to the enclosing repository's index.
-  Not enforced: git's `safe.directory` ownership check. A `.git`
-  planted in a shared parent directory (`/tmp/.git`) applies to
-  listings below it — the effect is limited to wrong status characters
-  and the cost of parsing that index.
+  A `.git` *file* (submodule, linked worktree) is followed to its git
+  dir (v1.5.0; v1.4.1 declined it) rather than falling through to the
+  enclosing repository's index.
+  **Ownership** (v1.5.0, Linux): like git, darshini declines — no
+  column — a repository whose worktree root, `.git` file or git dir is
+  not owned by the effective uid (as root: `$SUDO_UID`), unless
+  `safe.directory` in the system or global config (never the
+  repository's own) allows it. Through v1.4.2 a `.git` planted in a
+  shared parent directory (`/tmp/.git`) applied to every other user's
+  listings below it. Not checked on AGNOS (no owner in its stat).
+  A `.gitignore` that is a symlink is not followed (git ≥ 2.32 refuses
+  those too); `info/exclude` and `core.excludesFile` are read wherever
+  they point. Config files are read from `/etc/gitconfig`,
+  `$XDG_CONFIG_HOME/git/config`, `~/.gitconfig` and the repository —
+  only the three keys ADR 0005 names, nothing executed.
 - **Opens cannot hang** — every file darshini opens was classified by a
   stat first, but can be swapped (for a FIFO, say) before the open.
   Since v1.4.1 opens on Linux are non-blocking and close-on-exec, the

@@ -58,6 +58,8 @@ include "src/walk.cyr"
 include "src/cli.cyr"
 include "src/icons.cyr"
 include "src/mime.cyr"
+include "src/ignore.cyr"
+include "src/gitcfg.cyr"
 include "src/git.cyr"
 include "src/color.cyr"
 include "src/render.cyr"
@@ -134,7 +136,9 @@ fn idx_entry_v4(buf, pos, mtime, size, strip, suffix, full_len): i64 {
 
 # A GitCtx as git_open builds one (tracked map + shared dir cell), over
 # the given parallel vecs, ignore patterns and listing prefix.
-fn mk_ctx(paths, mtimes, sizes, patterns, listing): i64 {
+# v1.5.0: the 80-byte GitCtx, with `root_ignore` (gitignore text, or 0)
+# installed as the worktree root's .gitignore and no worktree on disk.
+fn mk_ctx(paths, mtimes, sizes, root_ignore, listing): i64 {
     var m = map_new_str();
     var i = 0;
     while (i < vec_len(paths)) {
@@ -143,15 +147,46 @@ fn mk_ctx(paths, mtimes, sizes, patterns, listing): i64 {
     }
     var cell = alloc(8);
     store64(cell, 0);
-    var c = alloc(56);
+    var c = alloc(80);
     store64(c + 0, paths);
     store64(c + 8, mtimes);
     store64(c + 16, sizes);
-    store64(c + 24, patterns);
+    store64(c + 24, vec_new());
     store64(c + 32, make_str(listing));
     store64(c + 40, m);
     store64(c + 48, cell);
+    store64(c + 56, 0);
+    store64(c + 64, _git_ign_cell_new());
+    store64(c + 72, 0);
+    if (root_ignore != 0) { ctx_dir_ignore(c, "", root_ignore); }
     return c;
+}
+
+# Install `text` as directory `dir`'s .gitignore in a test context.
+fn ctx_dir_ignore(c, dir, text): i64 {
+    var dl = strlen(dir);
+    var l = _ig_list_new(dir, dl);
+    _ig_parse(text, strlen(text), load64(l));
+    map_set(load64(load64(c + 64) + 8), str_from_buf(dir, dl), l);
+    return 0;
+}
+
+# Install `text` as a base list (info/exclude-like) in a test context.
+fn ctx_base_ignore(c, text): i64 {
+    var l = _ig_list_new("", 0);
+    _ig_parse(text, strlen(text), load64(l));
+    vec_push(load64(c + 24), l);
+    return 0;
+}
+
+# The verdict of one pattern line for path `rel` (is_dir flag): the list
+# result 1 / 2 / 0 from a list holding just that line, based at `base`.
+fn ig1(line, rel, is_dir, base): i64 {
+    var l = _ig_list_new(base, strlen(base));
+    _ig_parse(line, strlen(line), load64(l));
+    var rl = strlen(rel);
+    var boff = _git_last_slash(rel, rl) + 1;
+    return _ig_list_match(l, rel, rl, boff, is_dir);
 }
 
 
@@ -1125,8 +1160,7 @@ fn main(): i64 {
     vec_push(gp, make_str("a.txt"));      vec_push(gm, 100); vec_push(gs, 10);
     vec_push(gp, make_str("src/b.txt"));  vec_push(gm, 200); vec_push(gs, 20);
     vec_push(gp, make_str("big.bin"));    vec_push(gm, 300); vec_push(gs, 1073741824);
-    var gpat = vec_new();
-    vec_push(gpat, make_str("*.log"));
+    var gpat = "*.log\n";
     var gctx = mk_ctx(gp, gm, gs, gpat, "");
     assert_eq(git_status_for(gctx, make_str("a.txt"), 0, 100, 10), 46, "tracked + matching stat -> '.'");
     assert_eq(git_status_for(gctx, make_str("a.txt"), 0, 101, 10), 77, "mtime differs -> 'M'");
@@ -1153,24 +1187,213 @@ fn main(): i64 {
     assert_eq(_git_dir_has_tracked(gctx, make_str("a.txt")), 0, "prefix set: a file is not a dir");
     assert_eq(load64(load64(gctx + 48)) != 0, 1, "prefix set built on first lookup");
 
-    test_group("_git_match_one");
-    # Exact basename
-    var pat_make = make_str("Makefile");
-    assert_eq(_git_match_one(pat_make, make_str("Makefile"), 0), 1, "Makefile == Makefile");
-    assert_eq(_git_match_one(pat_make, make_str("makefile"), 0), 0, "case-sensitive");
-    assert_eq(_git_match_one(pat_make, make_str("Makefile.in"), 0), 0, "no partial match");
-    # Suffix glob *.ext
-    var pat_swp = make_str("*.swp");
-    assert_eq(_git_match_one(pat_swp, make_str("foo.swp"), 0), 1, "*.swp matches foo.swp");
-    assert_eq(_git_match_one(pat_swp, make_str("foo.swp.bak"), 0), 0, "*.swp doesn't match foo.swp.bak");
-    assert_eq(_git_match_one(pat_swp, make_str(".swp"), 0), 1, "*.swp matches .swp itself");
-    # Directory-only pattern (trailing /)
-    var pat_build = make_str("build/");
-    assert_eq(_git_match_one(pat_build, make_str("build"), 1), 1, "build/ matches dir 'build'");
-    assert_eq(_git_match_one(pat_build, make_str("build"), 0), 0, "build/ doesn't match file 'build'");
-    assert_eq(_git_match_one(pat_build, make_str("builder"), 1), 0, "build/ doesn't match dir 'builder'");
-    # Empty pattern → no match
-    assert_eq(_git_match_one(make_str(""), make_str("foo"), 0), 0, "empty pattern -> 0");
+    test_group("wildmatch (git t3070 table)");
+    # v1.5.0: src/ignore.cyr ports git's wildmatch. These are git's own
+    # wildmatch test vectors: text, pattern, then the expected result WITH
+    # WM_PATHNAME (how every '/'-containing gitignore pattern is matched)
+    # and WITHOUT it — asserted only for slash-free patterns, the only
+    # kind git matches that way ('-' = not asserted).
+    var wm_rows = vec_new();
+    vec_push(wm_rows, "foo\tfoo\t11\n");
+    vec_push(wm_rows, "bar\tfoo\t00\n");
+    vec_push(wm_rows, "foo\t???\t11\n");
+    vec_push(wm_rows, "foo\t??\t00\n");
+    vec_push(wm_rows, "foo\t*\t11\n");
+    vec_push(wm_rows, "foo\tf*\t11\n");
+    vec_push(wm_rows, "foo\t*f\t00\n");
+    vec_push(wm_rows, "foo\t*foo*\t11\n");
+    vec_push(wm_rows, "foobar\t*ob*a*r*\t11\n");
+    vec_push(wm_rows, "aaaaaaabababab\t*ab\t11\n");
+    vec_push(wm_rows, "foo*\tfoo\\*\t11\n");
+    vec_push(wm_rows, "foobar\tfoo\\*bar\t00\n");
+    vec_push(wm_rows, "f\\oo\tf\\\\oo\t11\n");
+    vec_push(wm_rows, "ball\t*[al]?\t11\n");
+    vec_push(wm_rows, "ten\t[ten]\t00\n");
+    vec_push(wm_rows, "ten\t**[!te]\t11\n");
+    vec_push(wm_rows, "ten\t**[!ten]\t00\n");
+    vec_push(wm_rows, "ten\tt[a-g]n\t11\n");
+    vec_push(wm_rows, "ten\tt[!a-g]n\t00\n");
+    vec_push(wm_rows, "ton\tt[!a-g]n\t11\n");
+    vec_push(wm_rows, "ton\tt[^a-g]n\t11\n");
+    vec_push(wm_rows, "a]b\ta[]]b\t11\n");
+    vec_push(wm_rows, "a-b\ta[]-]b\t11\n");
+    vec_push(wm_rows, "a]b\ta[]-]b\t11\n");
+    vec_push(wm_rows, "aab\ta[]-]b\t00\n");
+    vec_push(wm_rows, "aab\ta[]a-]b\t11\n");
+    vec_push(wm_rows, "]\t]\t11\n");
+    vec_push(wm_rows, "foo/baz/bar\tfoo*bar\t01\n");
+    vec_push(wm_rows, "foo/baz/bar\tfoo**bar\t01\n");
+    vec_push(wm_rows, "foobazbar\tfoo**bar\t11\n");
+    vec_push(wm_rows, "foo/baz/bar\tfoo/**/bar\t1-\n");
+    vec_push(wm_rows, "foo/baz/bar\tfoo/**/**/bar\t1-\n");
+    vec_push(wm_rows, "foo/b/a/z/bar\tfoo/**/bar\t1-\n");
+    vec_push(wm_rows, "foo/b/a/z/bar\tfoo/**/**/bar\t1-\n");
+    vec_push(wm_rows, "foo/bar\tfoo/**/bar\t1-\n");
+    vec_push(wm_rows, "foo/bar\tfoo/**/**/bar\t1-\n");
+    vec_push(wm_rows, "foo/bar\tfoo?bar\t01\n");
+    vec_push(wm_rows, "foo/bar\tfoo[/]bar\t0-\n");
+    vec_push(wm_rows, "foo/bar\tf[^eiu][^eiu][^eiu][^eiu][^eiu]r\t01\n");
+    vec_push(wm_rows, "foo-bar\tf[^eiu][^eiu][^eiu][^eiu][^eiu]r\t11\n");
+    vec_push(wm_rows, "foo\t**/foo\t1-\n");
+    vec_push(wm_rows, "XXX/foo\t**/foo\t1-\n");
+    vec_push(wm_rows, "bar/baz/foo\t**/foo\t1-\n");
+    vec_push(wm_rows, "bar/baz/foo\t*/foo\t0-\n");
+    vec_push(wm_rows, "foo/bar/baz\t**/bar*\t0-\n");
+    vec_push(wm_rows, "deep/foo/bar/baz\t**/bar/*\t1-\n");
+    vec_push(wm_rows, "deep/foo/bar/baz/\t**/bar/*\t0-\n");
+    vec_push(wm_rows, "deep/foo/bar/baz/\t**/bar/**\t1-\n");
+    vec_push(wm_rows, "deep/foo/bar\t**/bar/*\t0-\n");
+    vec_push(wm_rows, "deep/foo/bar/\t**/bar/**\t1-\n");
+    vec_push(wm_rows, "foo/bar/baz\t**/bar**\t0-\n");
+    vec_push(wm_rows, "foo/bar/baz/x\t*/bar/**\t1-\n");
+    vec_push(wm_rows, "deep/foo/bar/baz/x\t*/bar/**\t0-\n");
+    vec_push(wm_rows, "deep/foo/bar/baz/x\t**/bar/*/*\t1-\n");
+    vec_push(wm_rows, "a1B\t[[:alpha:]][[:digit:]][[:upper:]]\t11\n");
+    vec_push(wm_rows, "a\t[[:digit:][:upper:][:space:]]\t00\n");
+    vec_push(wm_rows, "A\t[[:digit:][:upper:][:space:]]\t11\n");
+    vec_push(wm_rows, "1\t[[:digit:][:upper:][:space:]]\t11\n");
+    vec_push(wm_rows, "1\t[[:digit:][:upper:][:spaci:]]\t00\n");
+    vec_push(wm_rows, " \t[[:digit:][:upper:][:space:]]\t11\n");
+    vec_push(wm_rows, ".\t[[:digit:][:upper:][:space:]]\t00\n");
+    vec_push(wm_rows, ".\t[[:digit:][:punct:][:space:]]\t11\n");
+    vec_push(wm_rows, "5\t[[:xdigit:]]\t11\n");
+    vec_push(wm_rows, "f\t[[:xdigit:]]\t11\n");
+    vec_push(wm_rows, "D\t[[:xdigit:]]\t11\n");
+    vec_push(wm_rows, "_\t[[:alnum:][:alpha:][:blank:][:cntrl:][:digit:][:graph:][:lower:][:print:][:punct:][:space:][:upper:][:xdigit:]]\t11\n");
+    vec_push(wm_rows, ".\t[^[:alnum:][:alpha:][:blank:][:cntrl:][:digit:][:lower:][:space:][:upper:][:xdigit:]]\t11\n");
+    vec_push(wm_rows, "5\t[a-c[:digit:]x-z]\t11\n");
+    vec_push(wm_rows, "b\t[a-c[:digit:]x-z]\t11\n");
+    vec_push(wm_rows, "y\t[a-c[:digit:]x-z]\t11\n");
+    vec_push(wm_rows, "q\t[a-c[:digit:]x-z]\t00\n");
+    vec_push(wm_rows, "]\t[\\\\-^]\t11\n");
+    vec_push(wm_rows, "[\t[\\\\-^]\t00\n");
+    vec_push(wm_rows, "-\t[\\-_]\t11\n");
+    vec_push(wm_rows, "]\t[\\]]\t11\n");
+    vec_push(wm_rows, "\\]\t[\\]]\t00\n");
+    vec_push(wm_rows, "\\\t[\\]]\t00\n");
+    vec_push(wm_rows, "ab\ta[]b\t00\n");
+    vec_push(wm_rows, "a[]b\ta[]b\t00\n");
+    vec_push(wm_rows, "ab[\tab[\t00\n");
+    vec_push(wm_rows, "ab\t[!\t00\n");
+    vec_push(wm_rows, "ab\t[-\t00\n");
+    vec_push(wm_rows, "-\t[-]\t11\n");
+    vec_push(wm_rows, "-\t[a-\t00\n");
+    vec_push(wm_rows, "-\t[!a-\t00\n");
+    vec_push(wm_rows, "-\t[--A]\t11\n");
+    vec_push(wm_rows, "5\t[--A]\t11\n");
+    vec_push(wm_rows, " \t[ --]\t11\n");
+    vec_push(wm_rows, "$\t[ --]\t11\n");
+    vec_push(wm_rows, "-\t[ --]\t11\n");
+    vec_push(wm_rows, "0\t[ --]\t00\n");
+    vec_push(wm_rows, "-\t[---]\t11\n");
+    vec_push(wm_rows, "-\t[------]\t11\n");
+    vec_push(wm_rows, "j\t[a-e-n]\t00\n");
+    vec_push(wm_rows, "-\t[a-e-n]\t11\n");
+    vec_push(wm_rows, "a\t[!------]\t11\n");
+    vec_push(wm_rows, "[\t[]-a]\t00\n");
+    vec_push(wm_rows, "^\t[]-a]\t11\n");
+    vec_push(wm_rows, "^\t[!]-a]\t00\n");
+    vec_push(wm_rows, "[\t[!]-a]\t11\n");
+    vec_push(wm_rows, "^\t[a^bc]\t11\n");
+    vec_push(wm_rows, "-b]\t[a-]b]\t11\n");
+    vec_push(wm_rows, "\\\t[\\]\t00\n");
+    vec_push(wm_rows, "\\\t[\\\\]\t11\n");
+    vec_push(wm_rows, "\\\t[!\\\\]\t00\n");
+    vec_push(wm_rows, "G\t[A-\\\\]\t11\n");
+    vec_push(wm_rows, "aaabbb\tb*a\t00\n");
+    vec_push(wm_rows, "aabcaa\t*ba*\t00\n");
+    vec_push(wm_rows, ",\t[,]\t11\n");
+    vec_push(wm_rows, ",\t[\\\\,]\t11\n");
+    vec_push(wm_rows, "\\\t[\\\\,]\t11\n");
+    vec_push(wm_rows, "-\t[,-.]\t11\n");
+    vec_push(wm_rows, "+\t[,-.]\t00\n");
+    vec_push(wm_rows, "-.]\t[,-.]\t00\n");
+    vec_push(wm_rows, "2\t[\\1-\\3]\t11\n");
+    vec_push(wm_rows, "3\t[\\1-\\3]\t11\n");
+    vec_push(wm_rows, "4\t[\\1-\\3]\t00\n");
+    vec_push(wm_rows, "\\\t[[-\\]]\t11\n");
+    vec_push(wm_rows, "[\t[[-\\]]\t11\n");
+    vec_push(wm_rows, "]\t[[-\\]]\t11\n");
+    vec_push(wm_rows, "-\t[[-\\]]\t00\n");
+    vec_push(wm_rows, "-adobe-courier-bold-o-normal--12-120-75-75-m-70-iso8859-1\t-*-*-*-*-*-*-12-*-*-*-m-*-*-*\t11\n");
+    vec_push(wm_rows, "-adobe-courier-bold-o-normal--12-120-75-75-X-70-iso8859-1\t-*-*-*-*-*-*-12-*-*-*-m-*-*-*\t00\n");
+    vec_push(wm_rows, "-adobe-courier-bold-o-normal--12-120-75-75-/-70-iso8859-1\t-*-*-*-*-*-*-12-*-*-*-m-*-*-*\t00\n");
+    vec_push(wm_rows, "XXX/adobe/courier/bold/o/normal//12/120/75/75/m/70/iso8859/1\tXXX/*/*/*/*/*/*/12/*/*/*/m/*/*/*\t1-\n");
+    vec_push(wm_rows, "XXX/adobe/courier/bold/o/normal//12/120/75/75/X/70/iso8859/1\tXXX/*/*/*/*/*/*/12/*/*/*/m/*/*/*\t0-\n");
+    vec_push(wm_rows, "abcd/abcdefg/abcdefghijk/abcdefghijklmnop.txt\t**/*a*b*g*n*t\t1-\n");
+    vec_push(wm_rows, "abcd/abcdefg/abcdefghijk/abcdefghijklmnop.txtz\t**/*a*b*g*n*t\t0-\n");
+    vec_push(wm_rows, "foo\t*/*/*\t0-\n");
+    vec_push(wm_rows, "foo/bar\t*/*/*\t0-\n");
+    vec_push(wm_rows, "foo/bba/arr\t*/*/*\t1-\n");
+    vec_push(wm_rows, "foo/bb/aa/rr\t*/*/*\t0-\n");
+    vec_push(wm_rows, "foo/bb/aa/rr\t**/**/**\t1-\n");
+    vec_push(wm_rows, "abcXdefXghi\t*X*i\t11\n");
+    vec_push(wm_rows, "ab/cXd/efXg/hi\t*X*i\t01\n");
+    vec_push(wm_rows, "ab/cXd/efXg/hi\t*/*X*/*/*i\t1-\n");
+    vec_push(wm_rows, "ab/cXd/efXg/hi\t**/*X*/**/*i\t1-\n");
+    var wm_bad = 0;
+    var wi = 0;
+    while (wi < vec_len(wm_rows)) {
+        var row = vec_get(wm_rows, wi);
+        var rn = strlen(row);
+        var t1 = 0;
+        while (load8(row + t1) != 9) { t1 = t1 + 1; }
+        var t2 = t1 + 1;
+        while (load8(row + t2) != 9) { t2 = t2 + 1; }
+        var eg = load8(row + t2 + 1) - 48;
+        var ep = load8(row + t2 + 2);
+        if (wildmatch(row + t1 + 1, t2 - t1 - 1, row, t1, 1) != eg) {
+            wm_bad = wm_bad + 1;
+            d_write(STDERR_FD, "  wildmatch WM_PATHNAME mismatch: ", 34); d_write(STDERR_FD, row, rn);
+        }
+        if (ep != 45) {
+            if (wildmatch(row + t1 + 1, t2 - t1 - 1, row, t1, 0) != ep - 48) {
+                wm_bad = wm_bad + 1;
+                d_write(STDERR_FD, "  wildmatch basename mismatch: ", 31); d_write(STDERR_FD, row, rn);
+            }
+        }
+        wi = wi + 1;
+    }
+    assert_eq(vec_len(wm_rows), 137, "t3070 table: 137 rows");
+    assert_eq(wm_bad, 0, "t3070 table: every row matches git");
+
+    test_group("gitignore patterns (git semantics, v1.5.0)");
+    # Basename patterns match at any depth; '/' anchors to the file's dir.
+    assert_eq(ig1("*.log", "a/b/x.log", 0, ""), 1, "*.log matches at depth");
+    assert_eq(ig1("/TODO", "TODO", 0, ""), 1, "/TODO matches the root TODO");
+    assert_eq(ig1("/TODO", "src/TODO", 0, ""), 0, "/TODO does not match src/TODO (was stripped to TODO)");
+    assert_eq(ig1("doc/build", "doc/build", 0, ""), 1, "path pattern from the root");
+    assert_eq(ig1("doc/build", "x/doc/build", 0, ""), 0, "path pattern is anchored");
+    assert_eq(ig1("build", "x/doc/build", 1, ""), 1, "basename pattern at depth");
+    # Classes, '?', mid-pattern '*', '**'.
+    assert_eq(ig1("*.py[cod]", "m/x.pyc", 0, ""), 1, "*.py[cod] (GitHub's Python template)");
+    assert_eq(ig1("*.py[cod]", "m/x.py", 0, ""), 0, "*.py[cod] not .py");
+    assert_eq(ig1("foo?.txt", "foo1.txt", 0, ""), 1, "?");
+    assert_eq(ig1("a*b", "aXXb", 0, ""), 1, "mid-pattern *");
+    assert_eq(ig1("**/gen", "a/b/gen", 1, ""), 1, "**/gen at depth");
+    assert_eq(ig1("doc/**/x.md", "doc/x.md", 0, ""), 1, "a/**/b with zero dirs");
+    assert_eq(ig1("doc/**/x.md", "doc/a/b/x.md", 0, ""), 1, "a/**/b with two dirs");
+    assert_eq(ig1("logs/**", "logs/a/b", 0, ""), 1, "trailing /**");
+    assert_eq(ig1("logs/**", "logs", 1, ""), 0, "trailing /** does not match the dir itself");
+    # Directory-only.
+    assert_eq(ig1("build/", "build", 1, ""), 1, "build/ matches a dir");
+    assert_eq(ig1("build/", "build", 0, ""), 0, "build/ does not match a file");
+    # Negation and last-match-wins within one list.
+    assert_eq(ig1("*.log\n!keep.log\n", "keep.log", 0, ""), 2, "!keep.log re-includes (was '!')");
+    assert_eq(ig1("!keep.log\n*.log\n", "keep.log", 0, ""), 1, "a later *.log wins");
+    # Escapes, comments, whitespace.
+    assert_eq(ig1("\\#hash", "#hash", 0, ""), 1, "backslash-# is a literal #");
+    assert_eq(ig1("#hash", "#hash", 0, ""), 0, "#... is a comment");
+    assert_eq(ig1("\\!x", "!x", 0, ""), 1, "backslash-! is a literal !");
+    assert_eq(ig1("trail   ", "trail", 0, ""), 1, "trailing spaces trimmed");
+    assert_eq(ig1("sp\\ ", "sp ", 0, ""), 1, "an escaped trailing space is kept");
+    assert_eq(ig1(" lead", "lead", 0, ""), 0, "leading spaces are kept (no trim)");
+    assert_eq(ig1(" lead", " lead", 0, ""), 1, "... so ' lead' matches ' lead'");
+    assert_eq(ig1("tab\t", "tab", 0, ""), 0, "a trailing TAB is kept, as in git");
+    # A nested list's patterns are relative to its directory.
+    assert_eq(ig1("/x.txt", "sub/x.txt", 0, "sub"), 1, "anchored to the list's dir");
+    assert_eq(ig1("/x.txt", "x.txt", 0, "sub"), 0, "not outside the list's dir");
+    assert_eq(ig1("a/b", "sub/a/b", 0, "sub"), 1, "path pattern under the list's dir");
 
     test_group("_git_normalize_abs");
     # v1.3.2 (P(-1)): bare `darshini --git` in a repo subdirectory
@@ -1189,23 +1412,120 @@ fn main(): i64 {
     # it lexically would bind /a/link/.. to the wrong repo.
     assert_eq(buf_eq_cstr(_git_normalize_abs("/r/src/.."), 9, "/r/src/.."), 1, ".. left for the kernel");
 
-    test_group("_git_parse_ignore (CRLF)");
-    # v1.3.2 (P(-1)): the CR trim was undone by a restore that used
-    # `line_end` (still pointing at the '\n'). Every pattern in a
-    # CRLF-authored .gitignore kept a trailing 0x0D, so none matched.
+    test_group("_ig_parse (line endings, BOM)");
+    # v1.3.2 fixed CRLF; v1.5.0's parser is git's: one '\r' before each
+    # '\n' is dropped, the last line too, and a UTF-8 BOM is skipped.
     var crlf_pats = vec_new();
     var crlf_src = "*.swp\r\nbuild/\r\n";
-    _git_parse_ignore(crlf_src, strlen(crlf_src), crlf_pats);
+    _ig_parse(crlf_src, strlen(crlf_src), crlf_pats);
     assert_eq(vec_len(crlf_pats), 2, "CRLF: two patterns parsed");
-    assert_eq(_git_match_one(vec_get(crlf_pats, 0), make_str("foo.swp"), 0), 1, "CRLF *.swp matches foo.swp");
-    assert_eq(_git_match_one(vec_get(crlf_pats, 1), make_str("build"), 1), 1, "CRLF build/ matches dir build");
-    # LF must be completely unaffected.
-    var lf_pats = vec_new();
-    var lf_src = "*.swp\nbuild/\n";
-    _git_parse_ignore(lf_src, strlen(lf_src), lf_pats);
-    assert_eq(vec_len(lf_pats), 2, "LF: two patterns parsed");
-    assert_eq(_git_match_one(vec_get(lf_pats, 0), make_str("foo.swp"), 0), 1, "LF *.swp still matches");
-    assert_eq(_git_match_one(vec_get(lf_pats, 1), make_str("build"), 1), 1, "LF build/ still matches");
+    assert_eq(_ig_rec_len(vec_get(crlf_pats, 0)), 5, "CRLF: no trailing CR in *.swp");
+    assert_eq(_ig_rec_flags(vec_get(crlf_pats, 1)) & IG_MUSTBEDIR, IG_MUSTBEDIR, "CRLF: build/ is dir-only");
+    var lastcr = vec_new();
+    _ig_parse("a\nb\r", 4, lastcr);
+    assert_eq(_ig_rec_len(vec_get(lastcr, 1)), 1, "a final line without LF still loses its CR");
+    var bom = vec_new();
+    var bom_src = alloc(8);
+    store8(bom_src, 0xEF); store8(bom_src + 1, 0xBB); store8(bom_src + 2, 0xBF);
+    store8(bom_src + 3, 120); store8(bom_src + 4, 10);
+    _ig_parse(bom_src, 5, bom);
+    assert_eq(vec_len(bom), 1, "BOM: one pattern");
+    assert_eq(_ig_rec_len(vec_get(bom, 0)), 1, "BOM skipped, not part of the pattern");
+    var flg = vec_new();
+    _ig_parse("!/a/b/\n", 7, flg);
+    var fr = vec_get(flg, 0);
+    assert_eq(_ig_rec_flags(fr), IG_NEGATIVE | IG_MUSTBEDIR, "!/a/b/: negative, dir-only, has a slash");
+    assert_eq(_ig_rec_len(fr), 4, "!/a/b/ stored as /a/b");
+
+    test_group("gitignore precedence and inheritance (v1.5.0)");
+    var pr_p = vec_new(); var pr_m = vec_new(); var pr_s = vec_new();
+    vec_push(pr_p, make_str("build/keep.txt")); vec_push(pr_m, 1); vec_push(pr_s, 1);
+    var ictx = mk_ctx(pr_p, pr_m, pr_s, "build/\n*.log\n!keep.log\n", "");
+    ctx_dir_ignore(ictx, "sub", "!a.log\nlocal.txt\n");
+    ctx_dir_ignore(ictx, "build", "!out.o\n");
+    ctx_base_ignore(ictx, "*.tmp\n!root.log\n");
+    assert_eq(git_status_for_sub(ictx, make_str("a.log"), make_str("a.log"), 0, 1, 1), 33, "root *.log");
+    assert_eq(git_status_for_sub(ictx, make_str("keep.log"), make_str("keep.log"), 0, 1, 1), 63,
+      "!keep.log re-includes");
+    assert_eq(git_status_for_sub(ictx, make_str("sub/a.log"), make_str("a.log"), 0, 1, 1), 63,
+      "a deeper !a.log beats the root's *.log");
+    assert_eq(git_status_for_sub(ictx, make_str("sub/local.txt"), make_str("local.txt"), 0, 1, 1), 33,
+      "a nested .gitignore applies below its dir");
+    assert_eq(git_status_for_sub(ictx, make_str("local.txt"), make_str("local.txt"), 0, 1, 1), 63,
+      "... and not above it");
+    assert_eq(git_status_for_sub(ictx, make_str("build"), make_str("build"), 1, 1, 1), 46,
+      "a dir holding a tracked file stays '.'");
+    assert_eq(git_status_for_sub(ictx, make_str("build/out.o"), make_str("out.o"), 0, 1, 1), 33,
+      "inside an excluded dir: ignored, and build/.gitignore's !out.o cannot re-include");
+    assert_eq(git_status_for_sub(ictx, make_str("build/keep.log"), make_str("keep.log"), 0, 1, 1), 33,
+      "inside an excluded dir the root !keep.log cannot re-include either");
+    assert_eq(git_status_for_sub(ictx, make_str("build/keep.txt"), make_str("keep.txt"), 0, 1, 1), 46,
+      "tracked beats ignored");
+    assert_eq(git_status_for_sub(ictx, make_str("x.tmp"), make_str("x.tmp"), 0, 1, 1), 33, "a base list applies");
+    assert_eq(git_status_for_sub(ictx, make_str("root.log"), make_str("root.log"), 0, 1, 1), 33,
+      "the .gitignore outranks a base list's negation");
+    assert_eq(git_status_for_sub(ictx, make_str(".git"), make_str(".git"), 1, 1, 1), 32, ".git: no status");
+    assert_eq(git_status_for_sub(ictx, make_str(".git/HEAD"), make_str("HEAD"), 0, 1, 1), 32,
+      "inside .git: no status");
+    assert_eq(git_status_for_sub(ictx, make_str("v/.git/x"), make_str("x"), 0, 1, 1), 32, "a nested .git too");
+    assert_eq(git_status_for_sub(ictx, make_str(".github"), make_str(".github"), 1, 1, 1), 63,
+      ".github is not .git");
+    var bctx = mk_ctx(pr_p, pr_m, pr_s, "build/\n", "build");
+    assert_eq(git_status_for_root(bctx, make_str("build"), 1, 1, 1), 46, "listing root build/: tracked inside");
+    var octx = mk_ctx(vec_new(), vec_new(), vec_new(), "out/\n", "out");
+    assert_eq(git_status_for_root(octx, make_str("out"), 1, 1, 1), 33,
+      "an excluded listing root is '!' (v1.3.3 exempted dirs)");
+    assert_eq(git_status_for(octx, make_str("x"), 0, 1, 1), 33, "... and its contents inherit it");
+    var rctx = mk_ctx(vec_new(), vec_new(), vec_new(), "*\n", "");
+    assert_eq(git_status_for_root(rctx, make_str("."), 1, 1, 1), 63, "the worktree root itself is never ignored");
+
+    #ifndef CYRIUS_TARGET_AGNOS
+    test_group("ownership and safe.directory (v1.5.0)");
+    assert_eq(_git_owned("."), 1, "the checkout is the user's");
+    if (sys_geteuid() != 0) {
+        assert_eq(_git_owned("/usr"), 0, "/usr is root's, not the user's");
+    }
+    assert_eq(_git_owned("/no/such/dir"), 0, "a missing path is not owned");
+    var own_sv = vec_new();
+    vec_push(own_sv, "/srv/repo");
+    assert_eq(_git_safe_match(own_sv, "/srv/repo"), 1, "exact path");
+    assert_eq(_git_safe_match(own_sv, "/srv/repo/"), 1, "trailing slash ignored");
+    assert_eq(_git_safe_match(own_sv, "/srv/repo2"), 0, "not a prefix match");
+    var sv2 = vec_new();
+    vec_push(sv2, "/srv/*");
+    assert_eq(_git_safe_match(sv2, "/srv/a/b"), 1, "<path>/* covers repositories below");
+    assert_eq(_git_safe_match(sv2, "/srv"), 1, "<path>/* covers <path> itself");
+    assert_eq(_git_safe_match(sv2, "/srvx/a"), 0, "<path>/* is a directory prefix, not a string prefix");
+    var sv3 = vec_new();
+    vec_push(sv3, "*");
+    vec_push(sv3, "");
+    assert_eq(_git_safe_match(sv3, "/any"), 0, "an empty value resets an earlier *");
+    vec_push(sv3, "*");
+    assert_eq(_git_safe_match(sv3, "/any"), 1, "... and a later * sets it again");
+    #endif
+
+    test_group("gitcfg");
+    var gv = vec_new();
+    var gc1 = "[core]\n\texcludesFile = ~/.gi  # c\n[Core]\n  ExcludesFile=\"/a b\" ; x\n";
+    gitcfg_values(gc1, strlen(gc1), "core", "excludesfile", gv);
+    assert_eq(vec_len(gv), 2, "two values, case-insensitive section and key");
+    assert_eq(streq(vec_get(gv, 0), "~/.gi"), 1, "trailing comment and spaces dropped");
+    assert_eq(streq(vec_get(gv, 1), "/a b"), 1, "quoted value keeps its space");
+    var gv2 = vec_new();
+    var gc2 = "[core \"x\"]\nexcludesfile = no\n[core.y]\nexcludesfile = no\n[safe]\ndirectory = *\ndirectory =\n";
+    gitcfg_values(gc2, strlen(gc2), "core", "excludesfile", gv2);
+    assert_eq(vec_len(gv2), 0, "subsections never match");
+    var gv3 = vec_new();
+    gitcfg_values(gc2, strlen(gc2), "safe", "directory", gv3);
+    assert_eq(vec_len(gv3), 2, "multi-valued key, in order");
+    assert_eq(strlen(vec_get(gv3, 1)), 0, "an empty value is kept (it resets safe.directory)");
+    var gv4 = vec_new();
+    var gc4 = "[core] excludesfile = a\\\n  b\n[x]\nk\n";
+    gitcfg_values(gc4, strlen(gc4), "core", "excludesfile", gv4);
+    assert_eq(streq(vec_get(gv4, 0), "a  b"), 1, "key on the header line; backslash-newline continues");
+    var gv5 = vec_new();
+    gitcfg_values(gc4, strlen(gc4), "x", "k", gv5);
+    assert_eq(streq(vec_get(gv5, 0), "true"), 1, "a bare key is boolean true");
 
     test_group("_git_listing_rel");
     # Equal abs paths → empty rel

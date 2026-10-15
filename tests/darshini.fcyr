@@ -24,7 +24,10 @@
 
 include "src/walk.cyr"
 include "src/icons.cyr"
+include "src/cli.cyr"
 include "src/mime.cyr"
+include "src/ignore.cyr"
+include "src/gitcfg.cyr"
 include "src/git.cyr"
 include "src/color.cyr"
 include "src/render.cyr"
@@ -161,9 +164,9 @@ fn fz_index(iters): i64 {
 # In both cases the parser was right and the harness was wrong,
 # verified against the parser directly before weakening anything.
 #
-# An empty pattern is likewise not a defect: `_git_match_one` returns 0
-# for one (asserted in darshini.tcyr), so it matches nothing. Confirmed
-# unreachable by exhaustive search over the steering alphabet anyway.
+# v1.5.0: the parser is src/ignore.cyr's `_ig_parse` (git's rules), and
+# records carry flags as well as bytes, so the twins must agree on both.
+# An empty pattern is never recorded (it could not match a name).
 fn fz_ignore(iters): i64 {
     var body_cap = 24;
     var lf_buf = alloc(256);
@@ -205,8 +208,8 @@ fn fz_ignore(iters): i64 {
         }
         var lf_pats = vec_new();
         var crlf_pats = vec_new();
-        _git_parse_ignore(lf_buf, lf_n, lf_pats);
-        _git_parse_ignore(crlf_buf, crlf_n, crlf_pats);
+        _ig_parse(lf_buf, lf_n, lf_pats);
+        _ig_parse(crlf_buf, crlf_n, crlf_pats);
         var a = vec_len(lf_pats);
         var b2 = vec_len(crlf_pats);
         var same_count = 0;
@@ -218,8 +221,10 @@ fn fz_ignore(iters): i64 {
                 var pa = vec_get(lf_pats, k);
                 var pb = vec_get(crlf_pats, k);
                 var eq = 0;
-                if (str_len(pa) == str_len(pb)) {
-                    if (memeq(str_data(pa), str_data(pb), str_len(pa)) == 1) { eq = 1; }
+                if (_ig_rec_len(pa) == _ig_rec_len(pb)) {
+                    if (_ig_rec_flags(pa) == _ig_rec_flags(pb)) {
+                        if (memeq(_ig_rec_ptr(pa), _ig_rec_ptr(pb), _ig_rec_len(pa)) == 1) { eq = 1; }
+                    }
                 }
                 fz_check(eq, "ignore: CRLF pattern differs from its LF twin");
                 k = k + 1;
@@ -229,7 +234,7 @@ fn fz_ignore(iters): i64 {
         var q = 0;
         while (q < b2) {
             var bounded = 0;
-            if (str_len(vec_get(crlf_pats, q)) <= crlf_n) { bounded = 1; }
+            if (_ig_rec_len(vec_get(crlf_pats, q)) <= crlf_n) { bounded = 1; }
             fz_check(bounded, "ignore: pattern longer than the input");
             q = q + 1;
         }
@@ -470,6 +475,100 @@ fn fz_mtime(iters): i64 {
     return 0;
 }
 
+# ---------------------------------------------- 7. wildmatch (v1.5.0)
+# src/ignore.cyr ports git's wildmatch; its unit tests pin git's own
+# vectors. This target checks it against an INDEPENDENT matcher written
+# here — a naive backtracking one for the WM_PATHNAME subset of `*` (not
+# across '/'), `?` (not '/') and literals — on random pattern / text
+# pairs over a small alphabet, plus two invariants for every pattern:
+#   * a pattern with no special byte matches exactly its own text;
+#   * a text with every byte backslash-escaped matches itself.
+fn fz_ref_match(p, pn, pi, t, tn, ti): i64 {
+    if (pi == pn) {
+        if (ti == tn) { return 1; }
+        return 0;
+    }
+    var c = load8(p + pi);
+    if (c == 42) {
+        var k = ti;
+        var going = 1;
+        while (going == 1) {
+            if (fz_ref_match(p, pn, pi + 1, t, tn, k) == 1) { return 1; }
+            if (k >= tn) { going = 0; }
+            else { if (load8(t + k) == 47) { going = 0; } else { k = k + 1; } }
+        }
+        return 0;
+    }
+    if (ti >= tn) { return 0; }
+    if (c == 63) {
+        if (load8(t + ti) == 47) { return 0; }
+        return fz_ref_match(p, pn, pi + 1, t, tn, ti + 1);
+    }
+    if (load8(t + ti) != c) { return 0; }
+    return fz_ref_match(p, pn, pi + 1, t, tn, ti + 1);
+}
+
+fn fz_wild(iters): i64 {
+    var p = alloc(32);
+    var t = alloc(32);
+    var esc = alloc(64);
+    var i = 0;
+    while (i < iters) {
+        var pn = fz_range(0, 10);
+        var tn = fz_range(0, 12);
+        var j = 0;
+        var has_star2 = 0;
+        var plain = 1;
+        while (j < pn) {
+            var r = fz_range(0, 6);
+            var c = 97 + fz_range(0, 3);          # a b c
+            if (r == 0) { c = 42; }
+            if (r == 1) { c = 63; }
+            if (r == 2) { c = 47; }
+            store8(p + j, c);
+            if (c == 42) { plain = 0; if (j > 0) { if (load8(p + j - 1) == 42) { has_star2 = 1; } } }
+            if (c == 63) { plain = 0; }
+            j = j + 1;
+        }
+        j = 0;
+        while (j < tn) {
+            var tc = 97 + fz_range(0, 3);
+            if (fz_range(0, 4) == 0) { tc = 47; }
+            store8(t + j, tc);
+            j = j + 1;
+        }
+        var got = wildmatch(p, pn, t, tn, 1);
+        var ok01 = 0;
+        if (got == 0) { ok01 = 1; }
+        if (got == 1) { ok01 = 1; }
+        fz_check(ok01, "wild: result neither 0 nor 1");
+        if (has_star2 == 0) {
+            var same = 0;
+            if (got == fz_ref_match(p, pn, 0, t, tn, 0)) { same = 1; }
+            fz_check(same, "wild: disagrees with the reference matcher");
+        }
+        if (plain == 1) {
+            var lit = 0;
+            if (pn == tn) { if (memeq(p, t, pn) == 1) { lit = 1; } }
+            var lsame = 0;
+            if (got == lit) { lsame = 1; }
+            fz_check(lsame, "wild: a literal pattern is not exact equality");
+        }
+        var en = 0;
+        j = 0;
+        while (j < tn) {
+            store8(esc + en, 92);
+            store8(esc + en + 1, load8(t + j));
+            en = en + 2;
+            j = j + 1;
+        }
+        fz_check(wildmatch(esc, en, t, tn, 1), "wild: escaped text does not match itself (pathname)");
+        fz_check(wildmatch(esc, en, t, tn, 0), "wild: escaped text does not match itself");
+        i = i + 1;
+    }
+    return 0;
+}
+
 fn main(): i64 {
     alloc_init();
     fz_seed(0x2545F4914F6CDD1D);
@@ -479,11 +578,12 @@ fn main(): i64 {
     fz_path_join(60);
     fz_sanitize(2000);
     fz_mtime(4000);
+    fz_wild(20000);
     if (_fz_fail == 1) {
         fz_say(STDERR_FD, "fuzz: FAILED (seed 0x2545F4914F6CDD1D)\n");
         return 1;
     }
-    fz_say(STDOUT_FD, "fuzz: ok (index/ignore/magic/path_join/sanitize/mtime)\n");
+    fz_say(STDOUT_FD, "fuzz: ok (index/ignore/magic/path_join/sanitize/mtime/wild)\n");
     d_flush();                    # stdout is buffered since v1.4.1 (walk.cyr)
     return 0;
 }

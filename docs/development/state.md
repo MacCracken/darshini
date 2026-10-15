@@ -7,29 +7,31 @@
 
 ## Version
 
-**1.4.2** — internals and CI, shipped 2026-10-15. Patch bump; no output
-byte changes on any target (A/B: 304 / 304 captures identical to 1.4.1,
-plus ~230k lines of real trees). Toolchain and darshana unchanged
-(cyrius 6.7.9, darshana 1.3.0).
+**1.5.0** — `--git` accuracy, shipped 2026-10-15
+([ADR 0005](../adr/0005-git-status-semantics.md)). Minor bump: the
+column's answers change for many entries, every change toward git's.
+Toolchain and darshana unchanged (cyrius 6.7.9, darshana 1.3.0).
 
-- `sort_entries` is the stdlib's `vec_sort_by` (introsort, no
-  allocation) instead of darshini's merge sort — unblocked by 1.4.1's
-  total order. Already-sorted 1k entries 499 → 87 µs; `-T /usr/share`
-  peak RSS 24.8 → 22.7 MB (no scratch vec per directory).
-- CI now *runs* the cross targets: aarch64 suite + fuzz + a 21-mode
-  output-parity matrix against x86_64 under qemu; agnos suite + fuzz
-  under a pinned, checksum-verified mirshi release. The agnos suite is
-  401 / 401 — its two errno assertions now assert agnos's flat `-1`.
-- New CI gates: icon / mime CYML vs compiled tables
-  (`tests/table-drift.sh`), golden examples (`tests/examples.sh`), and a
-  shared parity matrix (`tests/parity.sh`) for the DCE and aarch64 gates.
+- **Ignore rules are git's**: a port of git's `wildmatch`
+  (`src/ignore.cyr`) and its pattern parsing — negation, anchoring,
+  path patterns, classes, `**`, escapes, trailing spaces, BOM / CRLF —
+  from every directory's `.gitignore`, `info/exclude` and
+  `core.excludesFile` (default `$XDG_CONFIG_HOME/git/ignore`), in git's
+  precedence; an excluded directory's contents are ignored.
+- **Repositories**: `gitdir:` files are followed (submodules, linked
+  worktrees, `commondir`); a submodule reads `.` / `M` by its checked-out
+  `HEAD`; `.git` and its contents get no mark; a repository not owned by
+  the user gets no column unless `safe.directory` allows it.
+- Verified: the `!` set equals `git check-ignore`'s on 62,761 random
+  paths (2,600 random repositories) and on the fixed corpus in
+  `tests/git-parity.sh`, which CI runs; outside `--git` the output is
+  byte-identical to 1.4.2 (A/B 276 / 276 non-git captures); speed is
+  unchanged within noise.
 
-Prior: **1.4.1** (2026-10-15) — audit and repair sweep: hostile-mtime
-injection fixed, `--git` corrected (file args, `..`, index v3/v4/SHA-256,
-u32 compare, submodules declined), `-F` / `--` / tree-error / write-error
-fixes, buffered stdout. Report:
-[`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md). Earlier
-releases: see the CHANGELOG.
+Prior: **1.4.2** — stdlib sort, CI runs the cross targets, table-drift
+and golden-examples gates. **1.4.1** — audit and repair sweep
+([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md)).
+Earlier releases: see the CHANGELOG.
 
 ## Toolchain
 
@@ -67,9 +69,15 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 - `src/icons.cyr` — compile-baked icon table mirroring
   `icons/default.cyml`
 - `src/tree.cyr` — `-T`: depth-stack recursion, read-error reporting
-- `src/git.cyr` — physical-path repo discovery, `.git/index` v2/v3/v4
-  (SHA-1 / SHA-256) parser, ignore-subset parser, status classifier,
-  per-repo parse cache, directory prefix set
+- `src/ignore.cyr` — git's `wildmatch` (port) and gitignore pattern
+  parsing / list matching; pure (v1.5.0)
+- `src/gitcfg.cyr` — minimal git-config reader for the three keys
+  `--git` needs (v1.5.0)
+- `src/git.cyr` — repo discovery (physical path, `gitdir:` files,
+  `commondir`), ownership (`safe.directory`), config, index v2/v3/v4
+  (SHA-1 / SHA-256) parser with gitlink capture, ignore precedence and
+  excluded-directory inheritance (memoized per directory), submodule
+  `HEAD` status, status classifier, per-repo parse cache, prefix set
 - `src/mime.cyr` — inode / filename / extension / exec / magic chain
   (ADR 0003), compile-baked table mirroring `mime/default.cyml`
 
@@ -92,9 +100,10 @@ matrix on every push since v1.4.2) but is not declared supported
 
 ## Tests
 
-- `tests/darshini.tcyr` — **401** assertions (v1.4.2; 400 at v1.4.1,
-  301 at v1.4.0). v1.4.2 added a randomized differential check of the
-  stdlib sort against an insertion-sort reference.
+- `tests/darshini.tcyr` — **463** assertions (v1.5.0; 401 at v1.4.2,
+  301 at v1.4.0). v1.5.0: git's 137-row wildmatch table (t3070),
+  gitignore pattern semantics, precedence and inheritance, `.git`
+  marks, git-config parsing, ownership / `safe.directory` matching.
   Pure helpers per module, the sanitizer rule, column math, the chrono
   layout pin, and since v1.4.1: the sort tiebreak and merge path,
   `classify_indicator`, the mtime bound, P / E sizes, `--level` bounds,
@@ -102,22 +111,26 @@ matrix on every push since v1.4.2) but is not declared supported
   extended flags, v4 prefix compression, long names, SHA-256, misframing),
   `_git_oid_len`, every `--git` status outcome including the u32 compare
   and `git_status_for_root`, the hardened magic probe. Cross-targets,
-  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 401 / 401;
-  agnos under mirshi 401 / 401 (its errno assertions expect agnos's flat
-  `-1`).
-- `tests/darshini.fcyr` — 6 fuzz targets with named invariants:
+  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 463 / 463;
+  agnos under mirshi 452 / 452 (no ownership tests there; its errno
+  assertions expect agnos's flat `-1`).
+- `tests/darshini.fcyr` — 7 fuzz targets with named invariants
+  (v1.5.0 added wildmatch vs an independent reference matcher):
   `.git/index` (v2/v3/v4, SHA-1/SHA-256 framing), `.gitignore` (CRLF
   differential), magic bytes, `_path_join_into` (canary), the name
   sanitizer, the mtime formatter (v1.4.1, mutation-validated). Runs in
   CI since v1.4.1.
 - `tests/darshini.bcyr` — micro-benchmarks (`cyrius bench`).
-- `tests/parity.sh` (two builds, 21 modes, pipe + PTY),
+- `tests/git-parity.sh` (v1.5.0: `--git` vs real git — ignore sets,
+  `.git`, submodules, worktrees, ownership with sudo),
+  `tests/parity.sh` (two builds, 21 modes, pipe + PTY),
   `tests/table-drift.sh` (CYML vs compiled tables),
   `tests/examples.sh` (regenerates the golden `docs/examples/README.md`)
   — CI helpers, runnable locally from the repo root.
 - CI (`.github/workflows/ci.yml`) — build, golden examples, strict lint,
   tests, fuzz, agnos (mirshi) + aarch64 (qemu) suite / fuzz runs and
-  aarch64 output parity, 22 smoke gates, DCE parity, security scan,
+  aarch64 output parity, git parity, 22 smoke gates, DCE parity,
+  security scan,
   table drift, docs / version consistency.
 
 ## Dependencies
@@ -136,8 +149,8 @@ sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md): 1.5.0 (`--git` accuracy, ADR 0005),
-1.6.0 (display correctness), 1.7.0 (platforms).
+See [`roadmap.md`](roadmap.md): 1.6.0 (display correctness), 1.7.0
+(platforms), and the owner decisions listed there.
 
 ## Known gotchas
 
@@ -176,3 +189,13 @@ See [`roadmap.md`](roadmap.md): 1.5.0 (`--git` accuracy, ADR 0005),
   fails the build at every stale call site.
 - **The stdlib has a `path_basename`** that keeps trailing slashes;
   darshini's is `d_basename`.
+- **`--git` reads the environment** (v1.5.0): `HOME`,
+  `XDG_CONFIG_HOME`, `GIT_CONFIG_NOSYSTEM`, `SUDO_UID` — as git does for
+  the same settings. It does not honor `GIT_DIR` / `GIT_WORK_TREE`, and
+  matching is case-sensitive (`core.ignoreCase` is not read). A test
+  that must not see the user's own git config sets `HOME` /
+  `XDG_CONFIG_HOME` to a temp dir and `GIT_CONFIG_NOSYSTEM=1`, as
+  `tests/git-parity.sh` does.
+- **Directory marks don't aggregate**: a directory whose untracked
+  contents are all ignored, but which matches no pattern itself, shows
+  `?` (git shows nothing for it). ADR 0005 §6.

@@ -6,12 +6,13 @@
 
 ## Where we are
 
-**v1.4.2** (2026-10-15). The v1.0 contract (M0–M10, shipped
+**v1.5.0** (2026-10-15). The v1.0 contract (M0–M10, shipped
 2026-05-19 → 05-23) is intact: eza-style listing with long format,
 multi-column layout, color, icons, tree mode, a git-status column and a
 mime column, pipe-aware. The 1.x line since has added `--help` /
 `--version` / `-F` / `-d` / multi-path / `--`, AGNOS as a target,
-darshana's terminal primitives, two security sweeps
+darshana's terminal primitives, a `--git` column that answers what git
+answers (1.5.0), two security sweeps
 ([2026-08-23](../audit/2026-08-23-audit.md),
 [2026-10-15](../audit/2026-10-15-audit.md)) and the hot-path work in
 [`benchmarks.md`](../benchmarks.md).
@@ -41,30 +42,16 @@ darshana's terminal primitives, two security sweeps
   output parity under qemu; agnos suite + fuzz under mirshi), the
   icon / mime table-drift gate, and golden examples.
 
-### 1.5.0 — `--git` accuracy (ADR 0005)
+### 1.5.0 — ✅ `--git` accuracy ([ADR 0005](../adr/0005-git-status-semantics.md))
 
-The column's answers change for many entries, so a minor bump and an
-ADR, even though every change is a fix.
-
-- **Full `.gitignore` semantics**, checked against
-  `git status --ignored`: `!` negation with last-match-wins; `/`
-  anchoring and mid-path patterns matched against the repo-relative
-  path (not the basename); `?`, `[...]`, mid-pattern `*`, `**`;
-  backslash escapes; git's trailing-space rule (and no leading-space
-  trim). Today: exact name, `*suffix`, `name/` only.
-- **Every ignore source**: nested `.gitignore` files scoped to their
-  directory; `core.excludesFile` and `$XDG_CONFIG_HOME/git/ignore`.
-- **Inheritance**: the contents of an ignored directory are `!`
-  (`-T`, `darshini --git build`); today they show `?`.
-- **`gitdir:` files** — submodules and linked worktrees: index from the
-  gitdir, `info/exclude` via `commondir`. Declined since v1.4.1 (no
-  column), which beats the wrong repo's index but is not an answer.
-- **`.git` itself** in a listing shows `?`. Pick the right mark.
-- **Ownership**: git's `safe.directory` rule — decline a repository
-  owned by another user (a planted `/tmp/.git`).
-- Considered, not planned: staged-vs-unstaged (needs HEAD's tree:
-  object decompression); per-directory dirty aggregation (a stat of
-  every tracked file below each directory).
+git's ignore rules in full (a `wildmatch` port), every ignore source in
+git's precedence, excluded-directory inheritance, `gitdir:` submodules
+and worktrees (submodule status by `HEAD`), no mark for `.git`,
+`safe.directory` ownership — verified against `git check-ignore` (63k
+random paths locally; `tests/git-parity.sh` in CI). Left out by
+decision (ADR 0005): staged-vs-unstaged, per-directory dirty
+aggregation, `include` / `includeIf`, `GIT_DIR` / `GIT_WORK_TREE`,
+`core.ignoreCase`.
 
 ### 1.6.0 — display correctness
 

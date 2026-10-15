@@ -25,6 +25,7 @@ Decisions about darshini — what we chose, the context, and the consequences we
 | [0002 — icon format](0002-icon-format.md) | The icon mapping is authored as CYML in `icons/default.cyml` but **compile-baked** into `src/icons.cyr`; the CYML is the human-readable spec, not a file the binary reads at runtime. Adding an icon means editing both. | accepted |
 | [0003 — mime type detection](0003-mime-detection.md) | `--mime` resolves through a fixed precedence chain — inode type, then exact filename, then extension, then executable bit, then magic bytes — rather than consulting a system mime database. | accepted |
 | [0004 — tree mode](0004-tree-mode.md) | `-T` renders a `tree(1)`-shaped recursion driven by a depth-stack of sibling flags, opt-in rather than default, and does not follow symlinks into directories. | accepted (back-filled during the M9 audit) |
+| [0005 — git status semantics](0005-git-status-semantics.md) | `--git` reimplements git's rules where the column depends on them — a `wildmatch` port, every ignore source in git's precedence, excluded-directory inheritance, `gitdir:` worktrees and submodules, `safe.directory` ownership — and is verified differentially against `git check-ignore`. | accepted (v1.5.0) |
 
 Corrected at v1.3.2: this index read "_No ADRs yet_" from v0.1.0 through
 v1.3.1 while all four ADRs sat beside it. The set was correctly indexed in

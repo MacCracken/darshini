@@ -1,0 +1,216 @@
+# darshini — a minimal git-config reader (v1.5.0, ADR 0005).
+#
+# `--git` needs three settings: `core.excludesFile` (a user-wide ignore
+# file), `safe.directory` (git's ownership allowlist) and
+# `extensions.objectFormat` (SHA-1 vs SHA-256 index entries). This reads
+# git-config text well enough for those, and no more:
+#   * `[section]` headers, case-insensitive; `[section "sub"]` and the
+#     legacy `[section.sub]` are subsections and never match (none of the
+#     three keys lives in one); a key may follow the header on its line;
+#   * `key = value` and a bare `key` (git's boolean true); keys are
+#     case-insensitive;
+#   * values: leading whitespace skipped, trailing whitespace dropped,
+#     interior whitespace kept (one space per byte, as git does), `"..."`
+#     quoting, `\"` `\\` `\n` `\t` `\b` escapes, a trailing `\` continues
+#     the line, `#` / `;` start a comment outside quotes.
+# Not supported (ADR 0005): `include` / `includeIf`.
+# Pure: git.cyr reads the files and applies their precedence.
+
+fn _gc_lower(c): i64 {
+    if (c >= 65) { if (c <= 90) { return c + 32; } }
+    return c;
+}
+
+fn _gc_keychar(c): i64 {
+    if (c == 45) { return 1; }                       # '-'
+    if (c >= 48) { if (c <= 57) { return 1; } }
+    if (c >= 65) { if (c <= 90) { return 1; } }
+    if (c >= 97) { if (c <= 122) { return 1; } }
+    return 0;
+}
+
+# Case-insensitive compare of buf[s..s+n) with the lowercase cstr `lit`.
+fn _gc_eq_ci(buf, s, n, lit): i64 {
+    if (n != strlen(lit)) { return 0; }
+    var i = 0;
+    while (i < n) {
+        if (_gc_lower(load8(buf + s + i)) != load8(lit + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Index of the next '\n' at or after `pos`, or `len`.
+fn _gc_eol(buf, len, pos): i64 {
+    var i = pos;
+    while (i < len) {
+        if (load8(buf + i) == 10) { return i; }
+        i = i + 1;
+    }
+    return len;
+}
+
+# Parse a value starting at `pos` (just past '='). Stores the end position
+# at `out_pos` and returns the value as a fresh cstr.
+fn _gc_value(buf, len, pos, out_pos): i64 {
+    var out = alloc(len - pos + 1);
+    var w = 0;
+    var keep = 0;          # length up to the last byte that is not trailing space
+    var spaces = 0;        # pending whitespace outside quotes
+    var quoted = 0;
+    var going = 1;
+    # Skip leading whitespace.
+    while (going == 1) {
+        if (pos >= len) { going = 0; }
+        else {
+            var lc = load8(buf + pos);
+            if (lc == 32) { pos = pos + 1; } else { if (lc == 9) { pos = pos + 1; } else { going = 0; } }
+        }
+    }
+    going = 1;
+    while (going == 1) {
+        if (pos >= len) { going = 0; }
+        else {
+            var c = load8(buf + pos);
+            if (c == 10) {
+                going = 0;
+            } else { if (c == 92) {
+                var nx = 0;
+                if (pos + 1 < len) { nx = load8(buf + pos + 1); }
+                if (nx == 10) {
+                    pos = pos + 2;               # line continuation
+                } else {
+                    var ec = nx;
+                    if (nx == 110) { ec = 10; }  # \n
+                    if (nx == 116) { ec = 9; }   # \t
+                    if (nx == 98) { ec = 8; }    # \b
+                    while (spaces > 0) { store8(out + w, 32); w = w + 1; spaces = spaces - 1; }
+                    store8(out + w, ec);
+                    w = w + 1;
+                    keep = w;
+                    pos = pos + 2;
+                }
+            } else { if (c == 34) {
+                quoted = 1 - quoted;
+                pos = pos + 1;
+            } else {
+                var is_space = 0;
+                if (c == 32) { is_space = 1; }
+                if (c == 9) { is_space = 1; }
+                var is_comment = 0;
+                if (c == 35) { is_comment = 1; }
+                if (c == 59) { is_comment = 1; }
+                if (quoted == 0) {
+                    if (is_comment == 1) {
+                        pos = _gc_eol(buf, len, pos);
+                        going = 0;
+                    } else { if (is_space == 1) {
+                        spaces = spaces + 1;
+                        pos = pos + 1;
+                    } else {
+                        while (spaces > 0) { store8(out + w, 32); w = w + 1; spaces = spaces - 1; }
+                        store8(out + w, c);
+                        w = w + 1;
+                        keep = w;
+                        pos = pos + 1;
+                    } }
+                } else {
+                    while (spaces > 0) { store8(out + w, 32); w = w + 1; spaces = spaces - 1; }
+                    store8(out + w, c);
+                    w = w + 1;
+                    keep = w;
+                    pos = pos + 1;
+                }
+            } } }
+        }
+    }
+    store8(out + keep, 0);
+    store64(out_pos, pos);
+    return out;
+}
+
+# Append to `out` (a vec of cstrs), in file order, every value of
+# `section.key` (both lowercase cstrs) in the git-config text buf[0..len).
+# A bare `key` (no '=') yields "true".
+fn gitcfg_values(buf, len, section, key, out): i64 {
+    var pos = 0;
+    var in_sec = 0;
+    var np[8];
+    while (pos < len) {
+        var c = load8(buf + pos);
+        if (c == 32) { pos = pos + 1; }
+        else { if (c == 9) { pos = pos + 1; }
+        else { if (c == 10) { pos = pos + 1; }
+        else { if (c == 13) { pos = pos + 1; }
+        else { if (c == 35) { pos = _gc_eol(buf, len, pos); }
+        else { if (c == 59) { pos = _gc_eol(buf, len, pos); }
+        else { if (c == 91) {
+            # [section], [section "sub"], [section.sub]
+            var s = pos + 1;
+            var e = s;
+            var scan = 1;
+            while (scan == 1) {
+                if (e >= len) { scan = 0; }
+                else {
+                    var hc = load8(buf + e);
+                    if (_gc_keychar(hc) == 1) { e = e + 1; } else { scan = 0; }
+                }
+            }
+            var plain = 0;
+            if (e < len) { if (load8(buf + e) == 93) { plain = 1; } }
+            in_sec = 0;
+            if (plain == 1) { in_sec = _gc_eq_ci(buf, s, e - s, section); }
+            # Skip to the closing ']' (a quoted subsection may hold one).
+            var q = 0;
+            var hunt = 1;
+            while (hunt == 1) {
+                if (e >= len) { hunt = 0; }
+                else {
+                    var bc = load8(buf + e);
+                    if (bc == 10) { hunt = 0; }
+                    else { if (bc == 92) { e = e + 2; }
+                    else { if (bc == 34) { q = 1 - q; e = e + 1; }
+                    else { if (bc == 93) { if (q == 0) { hunt = 0; e = e + 1; } else { e = e + 1; } }
+                    else { e = e + 1; } } } }
+                }
+            }
+            pos = e;
+        } else { if (_gc_keychar(c) == 1) {
+            var ks = pos;
+            var kscan = 1;
+            while (kscan == 1) {
+                if (pos >= len) { kscan = 0; }
+                else { if (_gc_keychar(load8(buf + pos)) == 1) { pos = pos + 1; } else { kscan = 0; } }
+            }
+            var ke = pos;
+            var wscan = 1;
+            while (wscan == 1) {
+                if (pos >= len) { wscan = 0; }
+                else {
+                    var wc = load8(buf + pos);
+                    if (wc == 32) { pos = pos + 1; }
+                    else { if (wc == 9) { pos = pos + 1; } else { wscan = 0; } }
+                }
+            }
+            var val = "true";
+            if (pos < len) { if (load8(buf + pos) == 61) {
+                    val = _gc_value(buf, len, pos + 1, &np);
+                    pos = load64(&np);
+                } }
+            if (in_sec == 1) {
+                if (_gc_eq_ci(buf, ks, ke - ks, key) == 1) { vec_push(out, val); }
+            }
+            pos = _gc_eol(buf, len, pos);
+        } else {
+            pos = _gc_eol(buf, len, pos);        # not a config line
+        } } } } } } } }
+    }
+    return 0;
+}
+
+# The last value of `section.key` across `vals`, or 0 when there is none.
+fn gitcfg_last(vals): i64 {
+    var n = vec_len(vals);
+    if (n == 0) { return 0; }
+    return vec_get(vals, n - 1);
+}

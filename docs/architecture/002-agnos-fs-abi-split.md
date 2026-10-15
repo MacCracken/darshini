@@ -46,7 +46,8 @@ longer names.
 `--git` on agnos works only when given an absolute path: `_git_make_absolute`
 returns a relative path unchanged, the repo-root walk-up finds no anchor, and
 the column silently does not appear — the same degradation as the
-out-of-a-repo case.
+out-of-a-repo case. (agnos's stat also has no owner field, so the
+v1.5.0 `safe.directory` ownership check is compiled out there.)
 
 **Terminal detection is console-wide, not per-fd.** There is no
 `ioctl`/`TIOCGWINSZ`; agnos reports the console grid through `winsize#60`,

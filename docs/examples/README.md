@@ -44,6 +44,7 @@ docs
 │   ├── 0002-icon-format.md
 │   ├── 0003-mime-detection.md
 │   ├── 0004-tree-mode.md
+│   ├── 0005-git-status-semantics.md
 │   ├── README.md
 │   └── template.md
 ├── architecture
@@ -75,7 +76,9 @@ cli.cyr
 color.cyr
 columns.cyr
 git.cyr
+gitcfg.cyr
 icons.cyr
+ignore.cyr
 long.cyr
 main.cyr
 mime.cyr
@@ -89,6 +92,7 @@ darshini.bcyr
 darshini.fcyr
 darshini.tcyr
 examples.sh
+git-parity.sh
 parity.sh
 table-drift.sh
 ```

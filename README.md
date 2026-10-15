@@ -45,7 +45,7 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-**v1.4.2 stable** — current state in
+**v1.5.0 stable** — current state in
 [state.md](docs/development/state.md), the plan in
 [roadmap.md](docs/development/roadmap.md). v1.0 contract frozen
 ([ADR 0001](docs/adr/0001-color-scheme.md) /
@@ -82,13 +82,15 @@ Feature surface:
   standard box-drawing connectors; composes with long +
   color + icons; doesn't follow symlinks-to-dirs.
 - **`--git` status column** — `.`/`M`/`?`/`!` per entry,
-  read directly from `.git/index` (v2–v4, SHA-1 or SHA-256)
-  plus the root `.gitignore` and `.git/info/exclude` (no `git`
-  subprocess). Ignore rules are a subset — exact name,
-  `*suffix`, `dir/`; no negation, nested `.gitignore` or
-  mid-pattern globs yet (roadmap 1.5.0). Silent outside a
-  repo, and declines (no column) for an index it can't read
-  or a submodule / worktree `.git` file.
+  answering what `git status` would: the index (v2–v4, SHA-1
+  or SHA-256) read directly — no `git` subprocess — and git's
+  full ignore rules (a port of git's `wildmatch`) from every
+  `.gitignore`, `info/exclude` and `core.excludesFile`, with
+  an ignored directory's contents ignored. Submodules (by
+  checked-out `HEAD`) and linked worktrees work; `.git` itself
+  gets no mark. Silent outside a repo, and no column for an
+  index it can't read or a repository owned by another user
+  (git's `safe.directory`). See [ADR 0005](docs/adr/0005-git-status-semantics.md).
 - **`--mime` type column** — `text/markdown`,
   `application/x-cyrius`, `application/x-executable`,
   etc; human-readable mapping in `mime/default.cyml`.
@@ -106,8 +108,8 @@ Feature surface:
   name starts with `-`.
 - **`--help` / `--version`** — standard meta flags.
 
-Next: see the [roadmap](docs/development/roadmap.md) — 1.5.0
-`--git` accuracy, 1.6.0 display correctness, 1.7.0 platforms.
+Next: see the [roadmap](docs/development/roadmap.md) — 1.6.0
+display correctness, 1.7.0 platforms.
 
 ## Build
 
@@ -126,7 +128,7 @@ toolchain on PATH; the version is pinned in `cyrius.cyml`.
 
 ```sh
 cp build/darshini ~/.local/bin/                       # or wherever your PATH points
-darshini --version                                     # → "darshini 1.4.2"
+darshini --version                                     # → "darshini 1.5.0"
 ```
 
 Suggested zsh aliases (the maintainer's

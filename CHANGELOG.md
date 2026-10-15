@@ -4,6 +4,109 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-15
+
+Display correctness. Minor bump: one new flag and visible output changes,
+each a fix or opt-in. Toolchain and darshana unchanged (cyrius 6.7.9,
+darshana 1.3.0).
+
+**Verified.** A/B against 1.5.0 over the 304-capture matrix (pipe and PTY):
+every changed pipe byte is one of the fixes below — multi-file `-l`
+alignment, a 1960 mtime rendered as a date, the help / usage text — and every
+PTY-only change is path-argument decoration. `--local-time` was compared with
+`date(1)` at 10,550 instants (3,000 random across 1901..2242 plus every DST
+transition `zdump` reports for five zones, ± 1 s) for each of 31 zones and TZ
+forms; at the 2,560 of them before 2007 for the two no-rule strings; and at
+3,633 hourly instants around New York's 173 transitions of 1918–2006 for
+three no-rule strings: 0 differences. A real 80-column PTY grid of CJK, accented,
+combining, emoji and fullwidth names is aligned (1.5.0's was off by up to 5
+cells). aarch64 output equals x86_64's (parity matrix and `--local-time`); the
+DCE build equals the normal one.
+
+### Added
+
+- **`--local-time`**: `-l` mtimes in the user's zone instead of UTC, which
+  stays the default (the v1.0 locale-free contract). The zone is chosen as
+  glibc chooses it: `TZ` unset → `/etc/localtime`; empty → UTC; otherwise
+  (one leading `:` dropped) a TZif file — the path itself if absolute, else
+  under `$TZDIR` or `/usr/share/zoneinfo` — or, failing that, a POSIX TZ
+  string (`EST5EDT,M3.2.0,M11.1.0`, `<+0530>-5:30`, `Jn` / `n` / `Mm.w.d`
+  dates, hours past 24). `src/tz.cyr` reads TZif v1–v4 (the 64-bit section;
+  the footer rule past the last transition; glibc's first-non-DST type
+  before the first) and evaluates POSIX rules with glibc's semantics,
+  deliberately including its quirks so the column agrees with `date` and
+  `ls -l`: a bare rule string applies no DST before 1970 under a northern
+  rule (glibc's `compute_change` floors the year at 1970), the rule year is
+  the UTC year, and a DST name with no rule borrows `$TZDIR/posixrules`'
+  transition history exactly as glibc's `__tzfile_default` shifts it. One
+  glibc defect is not copied: past posixrules' last transition glibc keeps
+  that file's own offsets (New York's, for `TZ=XST8XDT`); darshini uses the
+  string's. Leap-second ("right/") zones are read as their plain twins.
+
+### Fixed
+
+- **Multibyte names misaligned the grid.** Columns were sized by bytes, so
+  `é` (2 bytes, 1 cell), CJK (3 bytes, 2 cells) and combining marks (2 bytes,
+  0 cells) pushed every column to their right out of line. Widths are now
+  terminal cells: UTF-8 decoded (malformed bytes count one cell — the
+  sanitizer's `?`) against a table generated from Unicode 16 (East Asian
+  Wide / Fullwidth = 2; Mn / Me / Cf and the Hangul medial / final jamo = 0;
+  `src/width_table.cyr`, from `tests/gen-width-table.py`). An all-ASCII
+  listing (nearly all of them) still costs one byte scan per name.
+- **`-l a b c` was not one table.** Each file argument was rendered on its
+  own, so its size column was as wide as its own size; `ls -l` aligns them.
+  Path arguments — every non-directory argument, or every argument under
+  `-d` — now go through the same listing code as a directory's entries, in
+  argv order. This changes pipe bytes for multi-file `-l` (padding), and for
+  `--git` with file arguments: they get the status column without `-l` too
+  (1.5.0 showed it only under `-l`), from each argument's own repository —
+  blank for one outside any, and no column when none is in one.
+- **`-T -l --mime` ignored `--mime`** (ADR 0004 promised it; tree.cyr had no
+  mime path). The type follows the mtime at its natural width.
+- **Pre-1970 mtimes render as dates.** v1.3.2 replaced them with
+  `????-??-?? ??:??` because chrono's `epoch_to_date` garbled negative times
+  (`1970-01-\xD4+ /.:00`); `format_mtime` now uses Howard Hinnant's
+  constant-time `civil_from_days` (`src/tz.cyr`), exact across the calendar,
+  so a 1960 file shows `1960-01-01 00:00` as `ls -l` does. Anything outside
+  0000..9999 (after the zone offset) still gets the placeholder — the v1.4.1
+  terminal-injection bound. chrono's once-per-year loop (which 1.4.1 had to
+  bound) is gone with it.
+
+### Changed
+
+- **Path arguments are decorated on a terminal**: `darshini *` colors and
+  icons the files it was handed (through 1.5.0, plain, one per line) and lays
+  them out in the grid; `-d */` likewise. Icons and mime types come from each
+  argument's last component.
+- Errors are reported before the argument listing (they were interleaved
+  with file arguments in argv order); stdout bytes are unaffected.
+- `render_long_one` and `_echo_path` are gone (the argument listing replaces
+  them); chrono's `epoch_to_date` and the v1.3.3 DateTime-layout pin with it.
+
+### Tests
+
+- **463 → 527 assertions**: terminal cells (ASCII, accents, CJK, combining,
+  emoji, fullwidth, Hangul, ZWJ, soft hyphen, malformed / overlong /
+  surrogate bytes), the cells grid (fits 3 columns where bytes fit 2),
+  path-argument decoration, civil dates (known days, the 0000..9999 bounds,
+  a round trip across 11,000 years), POSIX rules (transitions to the second,
+  southern hemisphere, permanent DST, malformed strings), TZif zones (New
+  York's LMT, transitions and footer; Kathmandu +5:45), pre-1970 dates,
+  `--local-time` in the flag table. aarch64 527 / 527; agnos 508 / 508.
+- **Fuzz target 8, civil dates**: 20,000 random day numbers over ±27,000
+  years — exact round trip, valid month / day, consecutive days one apart.
+- **CI**: `tests/tz-parity.sh` (`--local-time` vs `date`); smokes for the
+  multibyte grid (exact layout at 40 columns), path arguments as one listing
+  (one aligned `-l` table; decorated on a TTY) and `-T -l --mime`.
+- `cyrius bench`: `format_mtime` 58 ns UTC, 123 ns with a zone, 196 ns past
+  the transition table.
+
+### Docs
+
+- README, state.md, roadmap (1.6.0 done; next 1.7.0), benchmarks.md, ADR
+  0004 (`--mime` under `-T -l`), SECURITY.md (zone files read), the
+  getting-started module table, golden examples regenerated.
+
 ## [1.5.0] - 2026-10-15
 
 `--git` now answers what `git status` would. Minor bump: the column's

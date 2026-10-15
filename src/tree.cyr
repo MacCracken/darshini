@@ -94,7 +94,11 @@ fn _tree_connector_buf(is_last, buf): i64 {
 # v1.4.1: the scratch buffers are stack locals. They were four
 # alloc()s per entry, and the default allocator never frees, so
 # `-T -l` over a big tree carried ~60 dead bytes per entry to exit.
-fn _tree_emit_long_prefix(stat_buf, want_long, want_human, stat_ok): i64 {
+#
+# v1.6.0: `mime` (a cstr, or 0) is the --mime column, written after the
+# mtime at its natural width — ADR 0004 promised `-T -l --mime` and
+# tree.cyr had no mime path, so the flag was silently ignored under -T.
+fn _tree_emit_long_prefix(stat_buf, want_long, want_human, stat_ok, mime): i64 {
     if (want_long == 0) { return 0; }
     # v1.3.2 (P(-1)): through v1.3.1 this was called BEFORE the
     # caller's `rc >= 0` guard, so a failed lstat left it reading a
@@ -117,9 +121,10 @@ fn _tree_emit_long_prefix(stat_buf, want_long, want_human, stat_ok): i64 {
         d_write(STDOUT_FD, " ", 1);
         d_write(STDOUT_FD, "?", 1);
         d_write(STDOUT_FD, " ", 1);
-        format_mtime(0 - 1, &mtime_buf);
+        _tree_placeholder_mtime(&mtime_buf);
         d_write(STDOUT_FD, &mtime_buf, 16);
         d_write(STDOUT_FD, " ", 1);
+        _tree_emit_mime(mime);
         return 0;
     }
     var mode = load32(stat_buf + STAT_MODE);
@@ -137,6 +142,20 @@ fn _tree_emit_long_prefix(stat_buf, want_long, want_human, stat_ok): i64 {
     format_mtime(load64(stat_buf + STAT_MTIME), &mtime_buf);
     d_write(STDOUT_FD, &mtime_buf, 16);
     d_write(STDOUT_FD, " ", 1);
+    _tree_emit_mime(mime);
+    return 0;
+}
+
+fn _tree_emit_mime(mime): i64 {
+    if (mime == 0) { return 0; }
+    print_cstr_fd(STDOUT_FD, mime);
+    d_write(STDOUT_FD, " ", 1);
+    return 0;
+}
+
+# The `????-??-?? ??:??` placeholder for a row whose lstat failed.
+fn _tree_placeholder_mtime(buf): i64 {
+    memcpy(buf, "????-??-?? ??:??", 16);
     return 0;
 }
 
@@ -222,7 +241,7 @@ fn _tree_decor(stat_buf, full_path_cstr, name_str,
 # while `darshini <that dir>` reported "permission denied" and exit 1.
 fn _tree_recurse(dir_str, depth, max_depth, depth_stack,
   want_long, want_human, want_color, want_icons,
-  git_ctx, want_classify, rel_prefix): i64 {
+  git_ctx, want_classify, rel_prefix, want_mime): i64 {
     if (max_depth > 0) { if (depth >= max_depth) { return 0; } }
     var entries = vec_new();
     var lrc = list_dir_checked(dir_str, entries);
@@ -246,7 +265,12 @@ fn _tree_recurse(dir_str, depth, max_depth, depth_stack,
         var rc = lstat_path(str_data(full), &stat_buf);
         var stat_ok = 0;
         if (rc >= 0) { stat_ok = 1; }
-        _tree_emit_long_prefix(&stat_buf, want_long, want_human, stat_ok);
+        var mime = 0;
+        if (want_mime == 1) {
+            mime = "application/octet-stream";
+            if (stat_ok == 1) { mime = mime_for_entry(str_data(full), name, load32(&stat_buf + STAT_MODE)); }
+        }
+        _tree_emit_long_prefix(&stat_buf, want_long, want_human, stat_ok, mime);
         _tree_emit_prefix(depth_stack);
         _tree_emit_connector(is_last);
         var col_slot[8];
@@ -278,7 +302,7 @@ fn _tree_recurse(dir_str, depth, max_depth, depth_stack,
                 vec_push(depth_stack, 1 - is_last);
                 failures = failures + _tree_recurse(full, depth + 1, max_depth, depth_stack,
                   want_long, want_human, want_color, want_icons, git_ctx, want_classify,
-                  sub_rel);
+                  sub_rel, want_mime);
                 vec_pop(depth_stack);
             }
         }
@@ -290,7 +314,8 @@ fn _tree_recurse(dir_str, depth, max_depth, depth_stack,
 # Top-level: emit the root path, then recurse. `max_depth = 0`
 # means unlimited; otherwise stop at depth `max_depth`. Returns 1 when
 # any directory in the tree could not be read (v1.4.1), else 0.
-fn render_tree(root_cstr, max_depth, want_long, want_human, want_color, want_icons, git_ctx, want_classify): i64 {
+fn render_tree(root_cstr, max_depth, want_long, want_human, want_color, want_icons, git_ctx, want_classify,
+  want_mime): i64 {
     var stat_buf = alloc(144);
     var rc = lstat_path(root_cstr, stat_buf);
     var col_slot[8];
@@ -319,7 +344,7 @@ fn render_tree(root_cstr, max_depth, want_long, want_human, want_color, want_ico
     var depth_stack = vec_new();
     var failures = _tree_recurse(str_from(root_cstr), 0, max_depth, depth_stack,
       want_long, want_human, want_color, want_icons, git_ctx, want_classify,
-      str_from(""));
+      str_from(""), want_mime);
     if (failures > 0) { return 1; }
     return 0;
 }

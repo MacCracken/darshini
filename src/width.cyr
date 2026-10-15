@@ -1,0 +1,107 @@
+# darshini — terminal cell width of UTF-8 text (v1.6.0).
+#
+# Through v1.5.0 the multi-column grid measured a name by the bytes it
+# writes, so every well-formed multibyte name misaligned the columns to
+# its right: `é` is 2 bytes but 1 cell, a CJK character 3 bytes but 2
+# cells, a combining accent 2 bytes but 0 cells. The grid now measures
+# cells: decode UTF-8 and add each code point's width from the generated
+# table (width_table.cyr — East Asian Wide / Fullwidth = 2, combining and
+# format characters = 0, the rest 1; wcwidth(3)'s rules).
+#
+# Only the grid needs this: `-1`, `-l` and `-T` put nothing after the
+# name. On a terminal every name reaches here already sanitized
+# (color.cyr), so it is well-formed UTF-8 with no control bytes; a byte
+# that is not part of a valid sequence still counts as one cell, which is
+# what the sanitizer's `?` for it occupies.
+
+# The value of the `n` hex digits at s.
+fn _wt_hex(s, n): i64 {
+    var v = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        var d = c - 48;
+        if (c >= 65) { d = c - 55; }
+        v = v * 16 + d;
+        i = i + 1;
+    }
+    return v;
+}
+
+# Cell width of code point `cp` >= 0x80.
+fn _wc_width(cp): i64 {
+    if (cp < 0x300) { return 1; }            # below the table's first range
+    var t = _wt_table();
+    var lo = 0;
+    var hi = WT_COUNT - 1;
+    while (lo <= hi) {
+        var mid = (lo + hi) / 2;
+        var rec = vec_get(t, mid / WT_PER) + (mid % WT_PER) * 13;
+        var first = _wt_hex(rec, 6);
+        if (cp < first) { hi = mid - 1; }
+        else {
+            var last = _wt_hex(rec + 6, 6);
+            if (cp > last) { lo = mid + 1; }
+            else { return load8(rec + 12) - 48; }
+        }
+    }
+    return 1;
+}
+
+# Length of the well-formed UTF-8 sequence at buf[i] (2..4), with its code
+# point stored at `out_cp`, or 0 when the bytes there are not one.
+fn _utf8_seq(buf, n, i, out_cp): i64 {
+    var b = load8(buf + i);
+    var len = 0;
+    var cp = 0;
+    var lo = 0x80;
+    var hi = 0xBF;
+    if (b >= 0xC2) { if (b <= 0xDF) { len = 2; cp = b & 0x1F; } }
+    if (b >= 0xE0) { if (b <= 0xEF) { len = 3; cp = b & 0x0F; } }
+    if (b >= 0xF0) { if (b <= 0xF4) { len = 4; cp = b & 0x07; } }
+    if (len == 0) { return 0; }
+    if (i + len > n) { return 0; }
+    # The second byte's range excludes overlongs and surrogates (as the
+    # UTF-8 spec's well-formed table does).
+    if (b == 0xE0) { lo = 0xA0; }
+    if (b == 0xED) { hi = 0x9F; }
+    if (b == 0xF0) { lo = 0x90; }
+    if (b == 0xF4) { hi = 0x8F; }
+    var k = 1;
+    while (k < len) {
+        var c = load8(buf + i + k);
+        var clo = 0x80;
+        var chi = 0xBF;
+        if (k == 1) { clo = lo; chi = hi; }
+        if (c < clo) { return 0; }
+        if (c > chi) { return 0; }
+        cp = (cp << 6) | (c & 0x3F);
+        k = k + 1;
+    }
+    store64(out_cp, cp);
+    return len;
+}
+
+# Terminal cells occupied by the n bytes at buf.
+fn utf8_cells(buf, n): i64 {
+    var w = 0;
+    var i = 0;
+    var cp[8];
+    while (i < n) {
+        var b = load8(buf + i);
+        if (b < 0x80) {
+            w = w + 1;
+            i = i + 1;
+        } else {
+            var len = _utf8_seq(buf, n, i, &cp);
+            if (len == 0) {
+                w = w + 1;
+                i = i + 1;
+            } else {
+                w = w + _wc_width(load64(&cp));
+                i = i + len;
+            }
+        }
+    }
+    return w;
+}

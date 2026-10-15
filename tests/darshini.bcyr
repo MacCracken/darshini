@@ -15,6 +15,8 @@
 # (~240 ns per start/stop pair on x86_64 Linux).
 
 include "src/walk.cyr"
+include "src/width_table.cyr"
+include "src/width.cyr"
 include "src/icons.cyr"
 include "src/mime.cyr"
 # git.cyr defines git_status_for / git_display_width, which color.cyr
@@ -25,6 +27,7 @@ include "src/cli.cyr"
 include "src/ignore.cyr"
 include "src/gitcfg.cyr"
 include "src/git.cyr"
+include "src/tz.cyr"
 include "src/color.cyr"
 include "src/render.cyr"
 include "src/columns.cyr"
@@ -231,6 +234,32 @@ fn main(): i64 {
     while (i < 100000) { wildmatch("**/a*b/**", 9, "x/y/z/aqqb/w/v", 14, 1); i = i + 1; }
     bench_batch_stop(b13, 100000);
     bench_report(b13);
+
+    # v1.6.0: format_mtime on Hinnant's civil_from_days (was chrono's
+    # per-year-looping epoch_to_date), in UTC and with a zone loaded.
+    var mtb = alloc(16);
+    var b14 = bench_new("format_mtime UTC");
+    bench_batch_start(b14);
+    i = 0;
+    while (i < 100000) { format_mtime(1700000000 + i, mtb); i = i + 1; }
+    bench_batch_stop(b14, 100000);
+    bench_report(b14);
+    if (_tz_load_file("/usr/share/zoneinfo/America/New_York") == 1) {
+        set_mtime_local(1);
+        var b15 = bench_new("format_mtime --local-time America/New_York");
+        bench_batch_start(b15);
+        i = 0;
+        while (i < 100000) { format_mtime(1700000000 + i * 997, mtb); i = i + 1; }
+        bench_batch_stop(b15, 100000);
+        bench_report(b15);
+        var b16 = bench_new("format_mtime --local-time, 2100 (footer rule)");
+        bench_batch_start(b16);
+        i = 0;
+        while (i < 100000) { format_mtime(4102444800 + i * 997, mtb); i = i + 1; }
+        bench_batch_stop(b16, 100000);
+        bench_report(b16);
+        set_mtime_local(0);
+    }
 
     return 0;
 }

@@ -23,12 +23,15 @@
 # an exploratory session.
 
 include "src/walk.cyr"
+include "src/width_table.cyr"
+include "src/width.cyr"
 include "src/icons.cyr"
 include "src/cli.cyr"
 include "src/mime.cyr"
 include "src/ignore.cyr"
 include "src/gitcfg.cyr"
 include "src/git.cyr"
+include "src/tz.cyr"
 include "src/color.cyr"
 include "src/render.cyr"
 
@@ -569,6 +572,45 @@ fn fz_wild(iters): i64 {
     return 0;
 }
 
+# ------------------------------------------ 8. civil dates (v1.6.0)
+# format_mtime's dates come from Hinnant's civil_from_days (tz.cyr), as
+# does every --local-time computation. Invariants over random day
+# numbers spanning ~ +-27,000 years:
+#   * days_from_civil inverts civil_from_days exactly;
+#   * month is 1..12 and day 1..(days in that month);
+#   * consecutive days advance the date by exactly one day.
+fn fz_civil(iters): i64 {
+    var a = alloc(24);
+    var b = alloc(24);
+    var i = 0;
+    while (i < iters) {
+        var z = fz_range(0, 20000000) - 10000000;
+        civil_from_days(z, a);
+        var y = load64(a);
+        var m = load64(a + 8);
+        var d = load64(a + 16);
+        var rt = 0;
+        if (days_from_civil(y, m, d) == z) { rt = 1; }
+        fz_check(rt, "civil: days_from_civil does not invert civil_from_days");
+        var okm = 0;
+        if (m >= 1) { if (m <= 12) { okm = 1; } }
+        fz_check(okm, "civil: month out of 1..12");
+        var okd = 0;
+        if (okm == 1) { if (d >= 1) { if (d <= _tz_mdays(y, m)) { okd = 1; } } }
+        fz_check(okd, "civil: day out of range for its month");
+        civil_from_days(z + 1, b);
+        var next = 0;
+        if (load64(b + 16) == d + 1) { if (load64(b + 8) == m) { next = 1; } }
+        if (load64(b + 16) == 1) {
+            if (load64(b + 8) == m + 1) { if (d == _tz_mdays(y, m)) { next = 1; } }
+            if (load64(b + 8) == 1) { if (m == 12) { if (d == 31) { if (load64(b) == y + 1) { next = 1; } } } }
+        }
+        fz_check(next, "civil: the next day is not one day later");
+        i = i + 1;
+    }
+    return 0;
+}
+
 fn main(): i64 {
     alloc_init();
     fz_seed(0x2545F4914F6CDD1D);
@@ -579,11 +621,12 @@ fn main(): i64 {
     fz_sanitize(2000);
     fz_mtime(4000);
     fz_wild(20000);
+    fz_civil(20000);
     if (_fz_fail == 1) {
         fz_say(STDERR_FD, "fuzz: FAILED (seed 0x2545F4914F6CDD1D)\n");
         return 1;
     }
-    fz_say(STDOUT_FD, "fuzz: ok (index/ignore/magic/path_join/sanitize/mtime/wild)\n");
+    fz_say(STDOUT_FD, "fuzz: ok (index/ignore/magic/path_join/sanitize/mtime/wild/civil)\n");
     d_flush();                    # stdout is buffered since v1.4.1 (walk.cyr)
     return 0;
 }

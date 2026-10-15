@@ -53,30 +53,28 @@ fn term_width(): i64 {
     #endif
 }
 
-# v1.4.0: per-entry display widths for the column layout, or 0 when
-# every entry's width is just its `str_len`. Names are measured by the
-# bytes actually written (`_name_display_len`, color.cyr), which differs
-# from `str_len` only on a terminal and only for a name holding an
-# encoded C1 control, which sanitizes two bytes to one `?`. Returning 0
-# for the normal case keeps the layout math exactly as cheap as before:
-# one `tty_has_ctl` scan per entry per listing, no vec.
+# Per-entry display widths for the column layout, in terminal CELLS
+# (v1.6.0; v1.4.0 measured written bytes), or 0 when every entry's width
+# is just its `str_len` — every name plain ASCII with nothing for the
+# sanitizer to rewrite, which keeps the common case exactly as cheap as
+# before: one byte scan per entry, no vec. Otherwise each name is
+# measured by `_name_display_cells` (color.cyr): its sanitized bytes,
+# decoded as UTF-8, with wide characters counted 2 and combining marks 0.
 fn _display_widths(entries): i64 {
-    if (_sanitize_names == 0) { return 0; }
     var n = vec_len(entries);
-    var differs = 0;
+    var need = 0;
     var i = 0;
     while (i < n) {
-        var name = vec_get(entries, i);
-        if (differs == 0) {
-            if (_name_display_len(name) != str_len(name)) { differs = 1; }
+        if (need == 0) {
+            if (_name_needs_cells(vec_get(entries, i)) == 1) { need = 1; }
         }
         i = i + 1;
     }
-    if (differs == 0) { return 0; }
+    if (need == 0) { return 0; }
     var w = vec_new();
     i = 0;
     while (i < n) {
-        vec_push(w, _name_display_len(vec_get(entries, i)));
+        vec_push(w, _name_display_cells(vec_get(entries, i)));
         i = i + 1;
     }
     return w;

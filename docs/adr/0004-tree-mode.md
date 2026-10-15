@@ -68,10 +68,10 @@ line is one entry. It composes with:
   `<perms> <size> <mtime> <ancestor-prefix><connector><git><icon><name>`
 - `-h`: human-size formatting within the `-l` prefix.
 - `--git`: status decoration emitted per entry.
-- `--mime`: **not rendered under `-T`**, with or without `-l` —
-  tree.cyr has no mime path (the v1.0 text claimed otherwise;
-  corrected at v1.4.1). A mime column in the tree is a roadmap
-  item.
+- `--mime`: under `-T -l`, after the mtime at its natural width
+  (v1.6.0 — through v1.5.0 tree.cyr had no mime path and the flag
+  was silently ignored under `-T`). Not padded: the tree is
+  single-pass, as with the size column.
 - `-F`: the indicator follows the name with no padding cell
   (v1.4.1 — nothing follows the name on a tree line).
 - An unreadable subdirectory is drawn, then reported on stderr,

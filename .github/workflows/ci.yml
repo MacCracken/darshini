@@ -119,9 +119,10 @@ jobs:
 
       - name: Fuzz
         # v1.4.1: the harness (tests/darshini.fcyr) has called itself a CI
-        # gate since v1.3.3 but no step ran it. Seven targets with named
+        # gate since v1.3.3 but no step ran it. Eight targets with named
         # invariants (v1.5.0 added wildmatch against an independent
-        # reference matcher), deterministic seed; exits 1 on any violation.
+        # reference matcher, v1.6.0 the civil-date round trip), deterministic
+        # seed; exits 1 on any violation.
         run: cyrius fuzz
 
       - name: Cross-target build (agnos, aarch64)
@@ -469,6 +470,51 @@ jobs:
         # a linked worktree, and — with the runner's passwordless sudo — a
         # root-owned repository (no column until safe.directory lists it).
         run: sh tests/git-parity.sh
+
+      - name: tz parity — --local-time against date(1)
+        # v1.6.0. tests/tz-parity.sh gives files mtimes at random instants
+        # across 1901..2242 plus every DST transition zdump reports (and one
+        # second either side), and requires `-l --local-time`'s column to equal
+        # `date -d @EPOCH '+%Y-%m-%d %H:%M'` for ~30 zones and TZ forms: 30- and
+        # 45-minute offsets, southern-hemisphere and negative DST, Casablanca,
+        # Samoa's skipped day, POSIX rule strings in every date form, a no-rule
+        # string (glibc's posixrules), ":name", an absolute path, TZ empty and
+        # unset.
+        run: sh tests/tz-parity.sh
+
+      - name: Smoke — multibyte names align in the grid
+        # v1.6.0. Column widths are terminal cells (wide = 2, combining = 0),
+        # not bytes; through v1.5.0 every CJK or accented name pushed the
+        # columns to its right out of line. Exact layout at 40 columns.
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d)"; mkdir "$T/g"; cd "$T/g"
+          for n in "日本語.md" "café.txt" a plain_name x "中文.txt" ok zz; do : > "$n"; done
+          script -qec "stty cols 40 rows 24 2>/dev/null; $B --no-icons --no-color" /dev/null | tr -d '\r' > "$T/out"
+          printf '%s\n' 'a         ok          x   中文.txt' 'café.txt  plain_name  zz  日本語.md' > "$T/want"
+          diff -u "$T/want" "$T/out" || { echo "grid misaligned for multibyte names"; exit 1; }
+
+      - name: Smoke — path arguments are one listing
+        # v1.6.0. `darshini -l a b c` renders ONE table (sizes right-aligned
+        # across the arguments, as ls -l does) and, on a terminal, `darshini *`
+        # decorates the files it was handed (through v1.5.0 they were echoed
+        # plain, one per line).
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d)"; cd "$T"
+          printf 'x' > small; head -c 12345 /dev/zero > big
+          out="$("$B" -l small big | awk '{ print index($0, $NF) }' | sort -u | wc -l)"
+          test "$out" -eq 1 || { echo "-l across arguments is not one aligned table:"; "$B" -l small big; exit 1; }
+          script -qec "$B --no-color small big" /dev/null > tty_out
+          od -An -tx1 tty_out | grep -q -E ' (ee|ef) ' || { echo "file arguments not decorated on a TTY"; exit 1; }
+
+      - name: Smoke — -T -l --mime shows the mime column
+        # v1.6.0: ADR 0004 promised it; through v1.5.0 tree.cyr had no mime path.
+        run: |
+          ./build/${{ github.event.repository.name }} -T -l --mime --level 1 src | grep -q 'application/x-cyrius' \
+            || { echo "-T -l --mime printed no mime column"; exit 1; }
 
       - name: Smoke — tree mode produces box-drawn output
         # M6 contract: `-T` recurses with box-drawing connectors.

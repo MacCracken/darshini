@@ -45,7 +45,7 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-**v1.5.0 stable** — current state in
+**v1.6.0 stable** — current state in
 [state.md](docs/development/state.md), the plan in
 [roadmap.md](docs/development/roadmap.md). v1.0 contract frozen
 ([ADR 0001](docs/adr/0001-color-scheme.md) /
@@ -66,11 +66,13 @@ Feature surface:
 - **Basic listing** — `darshini` / `darshini <path>`,
   case-insensitive alphabetical, error-discriminated.
 - **Long format** (`-l` / `-lh` / `-l <file>`) — aligned
-  4-column `permissions size mtime name`, UTC.
+  4-column `permissions size mtime name`; mtimes in UTC, or in
+  your zone with `--local-time` (TZ, else `/etc/localtime`).
 - **Multi-column auto-layout** — bare `darshini` on a TTY
   packs entries into the widest fit
-  (vertical-then-horizontal); `-1` forces single-column;
-  pipe is single-column automatically.
+  (vertical-then-horizontal), measuring names in terminal
+  cells (CJK and emoji 2, combining marks 0); `-1` forces
+  single-column; pipe is single-column automatically.
 - **Per-entry color** — dirs blue, executables green,
   symlinks cyan (broken red), fifos yellow, etc.
   `--no-color` forces plain.
@@ -101,15 +103,16 @@ Feature surface:
 - **`-d` list-dir-as-self** — emit the path as a single
   entry instead of listing its contents.
 - **Multi-path** — `darshini dir1 dir2 dir3`. Errors first,
-  then non-dirs (one section, no header), then dirs (each
-  with `path:` header + blank between). Composes with all
-  format flags.
+  then the non-directory arguments as one listing (decorated
+  like any other — color, icons, `--git`, `-F`, the grid, one
+  aligned `-l` table), then dirs (each with `path:` header +
+  blank between). Composes with all format flags.
 - **`--`** — end of flags, so `darshini -- *` is safe when a
   name starts with `-`.
 - **`--help` / `--version`** — standard meta flags.
 
-Next: see the [roadmap](docs/development/roadmap.md) — 1.6.0
-display correctness, 1.7.0 platforms.
+Next: see the [roadmap](docs/development/roadmap.md) — 1.7.0
+platforms, and the open owner decisions.
 
 ## Build
 
@@ -128,7 +131,7 @@ toolchain on PATH; the version is pinned in `cyrius.cyml`.
 
 ```sh
 cp build/darshini ~/.local/bin/                       # or wherever your PATH points
-darshini --version                                     # → "darshini 1.5.0"
+darshini --version                                     # → "darshini 1.6.0"
 ```
 
 Suggested zsh aliases (the maintainer's
@@ -150,6 +153,7 @@ darshini                       # multi-column, colored, icons (on TTY)
 darshini -l                    # long format
 darshini -lh                   # + human-readable sizes
 darshini -lhT --level 2        # + tree view, depth 2
+darshini -l --local-time       # mtimes in your time zone (default UTC)
 darshini -l --git              # + git status column (silent outside a repo)
 darshini -l --git --mime       # + mime types
 darshini src tests docs        # multi-path, each dir gets a header

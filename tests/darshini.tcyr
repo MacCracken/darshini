@@ -56,11 +56,14 @@
 
 include "src/walk.cyr"
 include "src/cli.cyr"
+include "src/width_table.cyr"
+include "src/width.cyr"
 include "src/icons.cyr"
 include "src/mime.cyr"
 include "src/ignore.cyr"
 include "src/gitcfg.cyr"
 include "src/git.cyr"
+include "src/tz.cyr"
 include "src/color.cyr"
 include "src/render.cyr"
 include "src/columns.cyr"
@@ -509,17 +512,23 @@ fn main(): i64 {
     # Leap-year boundary: 2000-02-29 00:00:00 UTC = 951782400
     format_mtime(951782400, mb);
     assert_eq(buf_eq_cstr(mb, 16, "2000-02-29 00:00"), 1, "leap day 2000 -> 2000-02-29 00:00");
-    # v1.3.2 (P(-1)): pre-1970 epochs. Before the guard these drove
-    # epoch_to_date negative and _chrono_w2 wrote `48 + n` for a
-    # negative n — emitting bytes below '0', including non-ASCII
-    # (0xD4 observed), and contracting the fixed 16-byte field.
-    # Reachable via `touch -d`, restored backups, extracted tarballs.
+    # Pre-1970 epochs. v1.3.2 showed the placeholder for every one
+    # (chrono's epoch_to_date emitted bytes below '0' for them, 0xD4 into
+    # the terminal); v1.6.0's civil_from_days renders the date, as ls does.
     format_mtime(0 - 1, mb);
-    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "epoch -1 -> placeholder, not garbage");
+    assert_eq(buf_eq_cstr(mb, 16, "1969-12-31 23:59"), 1, "epoch -1 -> 1969-12-31 23:59 (v1.6.0)");
     format_mtime(0 - 3600, mb);
-    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "1969-12-31 23:00 -> placeholder");
-    format_mtime(0 - 301233600, mb);
-    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "1960 mtime -> placeholder (was 0xD4 leak)");
+    assert_eq(buf_eq_cstr(mb, 16, "1969-12-31 23:00"), 1, "-3600 -> 1969-12-31 23:00");
+    format_mtime(0 - 315619200, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "1960-01-01 00:00"), 1, "1960-01-01 renders (was the placeholder)");
+    format_mtime(0 - 2208988800, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "1900-01-01 00:00"), 1, "1900-01-01 (not a leap year)");
+    format_mtime(0 - 62167219200, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "0000-01-01 00:00"), 1, "0000-01-01 00:00, the lower bound");
+    format_mtime(0 - 62167219201, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "before year 0 -> placeholder");
+    format_mtime(0 - 9000000000000000000, mb);
+    assert_eq(buf_eq_cstr(mb, 16, "????-??-?? ??:??"), 1, "-9e18 -> placeholder");
     # The boundary itself must still format normally.
     format_mtime(0, mb);
     assert_eq(buf_eq_cstr(mb, 16, "1970-01-01 00:00"), 1, "epoch 0 still formats (boundary)");
@@ -641,34 +650,92 @@ fn main(): i64 {
     # v1.3.2 — control-character sanitization (P(-1) security sweep)
     # ============================================================
 
-    test_group("chrono DateTime layout pin");
-    # v1.3.3: format_mtime reads epoch_to_date's struct by named offset
-    # (DT_YEAR..DT_SECOND in render.cyr) rather than through the dt_*
-    # accessors, because each accessor re-runs the whole conversion —
-    # using all five would cost 5 civil-date computations and 5
-    # alloc(48)s per entry on the `-l` hot path.
-    #
-    # The price of that choice is a dependency on a layout cycc 6.4.67
-    # declared private. This group is that dependency made loud: each
-    # offset is cross-checked against the matching accessor, so a
-    # reordered struct fails HERE instead of `-l` silently rendering
-    # the wrong date. dt_* take nanoseconds; epoch_to_date takes seconds.
-    var _pin_epoch = 1700000000;
-    var _pin_dt = _pin_epoch * 1000000000;
-    var _pin = epoch_to_date(_pin_epoch);
-    assert_eq(load64(_pin + DT_YEAR),   dt_year(_pin_dt),   "DT_YEAR matches dt_year");
-    assert_eq(load64(_pin + DT_MONTH),  dt_month(_pin_dt),  "DT_MONTH matches dt_month");
-    assert_eq(load64(_pin + DT_DAY),    dt_day(_pin_dt),    "DT_DAY matches dt_day");
-    assert_eq(load64(_pin + DT_HOUR),   dt_hour(_pin_dt),   "DT_HOUR matches dt_hour");
-    assert_eq(load64(_pin + DT_MINUTE), dt_minute(_pin_dt), "DT_MINUTE matches dt_minute");
-    assert_eq(load64(_pin + DT_SECOND), dt_second(_pin_dt), "DT_SECOND matches dt_second");
-    # And the values themselves, so a layout change that happens to
-    # keep the accessors consistent still gets caught.
-    assert_eq(load64(_pin + DT_YEAR),   2023, "pin epoch -> year 2023");
-    assert_eq(load64(_pin + DT_MONTH),  11,   "pin epoch -> month 11");
-    assert_eq(load64(_pin + DT_DAY),    14,   "pin epoch -> day 14");
-    assert_eq(load64(_pin + DT_HOUR),   22,   "pin epoch -> hour 22");
-    assert_eq(load64(_pin + DT_MINUTE), 13,   "pin epoch -> minute 13");
+    test_group("path arguments as one listing (v1.6.0)");
+    var av = vec_new();
+    vec_push(av, str_from("README.md"));
+    vec_push(av, str_from("src"));
+    vec_push(av, str_from("src/main.cyr"));
+    vec_push(av, str_from("no/such/path"));
+    var ad = compute_decor_args(av, 1, 1, 0, 1, 1);
+    assert_eq(vec_get(load64(ad), 1), TTY_FG_BLUE, "a directory argument is blue");
+    assert_eq(vec_get(load64(ad), 0), 0, "a plain file argument is uncolored");
+    assert_eq(streq(vec_get(load64(ad + 8), 0), icon_for_entry(str_from("README.md"), 0x81A4)), 1,
+      "icons come from the basename (README glyph)");
+    assert_eq(streq(vec_get(load64(ad + 24), 2), "application/x-cyrius"), 1,
+      "mime from src/main.cyr's basename");
+    assert_eq(vec_get(load64(ad + 32), 1), 47, "-F: '/' for the directory");
+    assert_eq(vec_get(load64(ad + 40), 3), 0, "an unstat-able argument has no stat buffer");
+    assert_eq(load64(ad + 16), 0, "no --git: no git column");
+
+    test_group("civil dates (v1.6.0)");
+    # Hinnant's algorithms replace chrono's epoch_to_date (whose private
+    # DateTime layout v1.3.3 pinned — nothing reads it any more).
+    var ymd = alloc(24);
+    civil_from_days(0, ymd);
+    assert_eq(load64(ymd) * 10000 + load64(ymd + 8) * 100 + load64(ymd + 16), 19700101, "day 0 = 1970-01-01");
+    civil_from_days(0 - 1, ymd);
+    assert_eq(load64(ymd) * 10000 + load64(ymd + 8) * 100 + load64(ymd + 16), 19691231, "day -1 = 1969-12-31");
+    civil_from_days(11016, ymd);
+    assert_eq(load64(ymd) * 10000 + load64(ymd + 8) * 100 + load64(ymd + 16), 20000229, "day 11016 = 2000-02-29");
+    civil_from_days(0 - 719528, ymd);
+    assert_eq(load64(ymd) * 10000 + load64(ymd + 8) * 100 + load64(ymd + 16), 101, "day -719528 = 0000-01-01");
+    assert_eq(days_from_civil(1970, 1, 1), 0, "1970-01-01 = day 0");
+    assert_eq(days_from_civil(2000, 3, 1), 11017, "2000-03-01 = day 11017");
+    assert_eq(days_from_civil(1900, 3, 1), 0 - 25508, "1900-03-01 (1900 not leap)");
+    assert_eq(days_from_civil(9999, 12, 31), 2932896, "9999-12-31");
+    var rt_ok = 1;
+    var rtd = 0 - 800000;
+    while (rtd < 3000000) {
+        civil_from_days(rtd, ymd);
+        if (days_from_civil(load64(ymd), load64(ymd + 8), load64(ymd + 16)) != rtd) { rt_ok = 0; }
+        rtd = rtd + 997;
+    }
+    assert_eq(rt_ok, 1, "civil_from_days / days_from_civil round-trip, years -220..10183");
+    assert_eq(_tz_fdiv(0 - 1, 86400), 0 - 1, "floor division of a negative");
+    assert_eq(_tz_fdiv(86400, 86400), 1, "floor division, exact");
+
+    test_group("POSIX TZ rules (v1.6.0)");
+    var ra = _tz_parse_rule("EST5EDT,M3.2.0,M11.1.0", 22);
+    assert_eq(ra != 0, 1, "EST5EDT,M3.2.0,M11.1.0 parses");
+    assert_eq(load64(ra), 0 - 18000, "std offset is EAST (-5h)");
+    assert_eq(load64(ra + 16), 0 - 14400, "dst offset defaults to std + 1h");
+    assert_eq(_tz_rule_offset(ra, 1720000000), 0 - 14400, "2024-07-03: EDT");
+    assert_eq(_tz_rule_offset(ra, 1700000000), 0 - 18000, "2023-11-14: EST");
+    # 2024: DST from 2024-03-10 07:00 UTC to 2024-11-03 06:00 UTC.
+    assert_eq(_tz_rule_offset(ra, 1710054000 - 1), 0 - 18000, "one second before the 2024 start");
+    assert_eq(_tz_rule_offset(ra, 1710054000), 0 - 14400, "at the 2024 start");
+    assert_eq(_tz_rule_offset(ra, 1730613600 - 1), 0 - 14400, "one second before the 2024 end");
+    assert_eq(_tz_rule_offset(ra, 1730613600), 0 - 18000, "at the 2024 end");
+    assert_eq(_tz_rule_offset(ra, 0 - 1500000000), 0 - 18000,
+      "1922: no DST before 1970 under a northern rule (glibc's compute_change)");
+    var rs = _tz_parse_rule("AEST-10AEDT,M10.1.0,M4.1.0/3", 28);
+    assert_eq(_tz_rule_offset(rs, 1704067200), 39600, "Sydney rule, January: AEDT +11");
+    assert_eq(_tz_rule_offset(rs, 1720000000), 36000, "Sydney rule, July: AEST +10");
+    var rq = _tz_parse_rule("<+0330>-3:30", 12);
+    assert_eq(_tz_rule_offset(rq, 1700000000), 12600, "<+0330>-3:30 = +3:30, no DST");
+    var rp = _tz_parse_rule("EST5EDT4,0/0,J365/25", 20);
+    assert_eq(_tz_rule_offset(rp, 1700000000), 0 - 14400, "permanent DST (TZif v3 hours > 24)");
+    assert_eq(_tz_parse_rule("EST", 3), 0, "no offset -> not a rule");
+    assert_eq(_tz_parse_rule("ES5", 3), 0, "a 2-letter name -> not a rule");
+    assert_eq(_tz_parse_rule("EST5EDT,M13.1.0,M11.1.0", 23), 0, "month 13 -> not a rule");
+    assert_eq(_tz_parse_rule("EST5EDT,M3.2.0", 14), 0, "a start without an end -> not a rule");
+
+    #ifndef CYRIUS_TARGET_AGNOS
+    test_group("TZif zones (v1.6.0)");
+    if (_tz_load_file("/usr/share/zoneinfo/America/New_York") == 1) {
+        assert_eq(tz_offset(1720000000), 0 - 14400, "New York, July 2024: EDT");
+        assert_eq(tz_offset(1700000000), 0 - 18000, "New York, November 2023: EST");
+        assert_eq(tz_offset(0 - 2717668236), 0 - 17762, "New York, 1883: LMT -4:56:02");
+        assert_eq(tz_offset(4102444800), 0 - 18000, "New York, 2100 (footer rule): EST");
+        assert_eq(tz_offset(4118083200), 0 - 14400, "New York, July 2100 (footer rule): EDT");
+    }
+    if (_tz_load_file("/usr/share/zoneinfo/Asia/Kathmandu") == 1) {
+        assert_eq(tz_offset(1700000000), 20700, "Kathmandu: +5:45");
+    }
+    assert_eq(_tz_load_file("/usr/share/zoneinfo/no/such/zone"), 0, "a missing zone file does not load");
+    assert_eq(_tz_tzif("TZif2", 5), 0, "a truncated TZif image is refused");
+    _tz_on = 0;
+    #endif
 
     test_group("git_status_for_root");
     # v1.3.3: the `-T` root line. Its repo-relative path is the ctx
@@ -779,7 +846,12 @@ fn main(): i64 {
     var clean2 = vec_new();
     vec_push(clean2, make_str("abcd"));
     vec_push(clean2, make_str("x"));
-    assert_eq(_display_widths(dirty), 0, "sanitize off -> no widths vec (str_len math)");
+    # v1.6.0: any multibyte name gets a cells vec, sanitized or not; raw
+    # C2 9B decodes to U+009B, one cell.
+    var dw_off = _display_widths(dirty);
+    assert_eq(dw_off != 0, 1, "sanitize off, a multibyte name -> cells vec");
+    assert_eq(vec_get(dw_off, 0), 5, "sanitize off: ab U+009B cd = 5 cells");
+    assert_eq(_display_widths(clean2), 0, "sanitize off, all ASCII -> no widths vec");
     set_sanitize_names(1);
     assert_eq(_display_widths(clean2), 0, "sanitize on, all clean -> no widths vec");
     var dw = _display_widths(dirty);
@@ -790,6 +862,45 @@ fn main(): i64 {
     assert_eq(_columns_total_width(dirty, 2, 2, 1, 0), 9, "2x1 by str_len: 6 + 2 + 1");
     assert_eq(_pick_cols_w(dirty, dw, 8, 0), 2, "tw=8: written widths fit 2 cols");
     assert_eq(pick_cols(dirty, 8, 0), 1, "tw=8: str_len widths would not");
+    set_sanitize_names(0);
+
+    test_group("terminal cells (v1.6.0)");
+    # wcwidth(3) rules from the generated Unicode 16 table: East Asian Wide
+    # / Fullwidth 2, combining / format 0, the rest 1; a byte outside any
+    # well-formed sequence is one cell (the sanitizer's ? for it).
+    assert_eq(utf8_cells("plain.txt", 9), 9, "ASCII: one cell per byte");
+    assert_eq(utf8_cells("caf\xc3\xa9", 5), 4, "e-acute: 2 bytes, 1 cell");
+    assert_eq(utf8_cells("\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e", 9), 6, "CJK: 3 bytes, 2 cells each");
+    assert_eq(utf8_cells("e\xcc\x81", 3), 1, "e + combining acute: 1 cell");
+    assert_eq(utf8_cells("\xf0\x9f\x8e\x89", 4), 2, "emoji U+1F389: 2 cells");
+    assert_eq(utf8_cells("\xef\xbc\xa1", 3), 2, "fullwidth A U+FF21: 2 cells");
+    assert_eq(utf8_cells("\xed\x95\x9c", 3), 2, "Hangul syllable U+D55C: 2 cells");
+    assert_eq(utf8_cells("\xe1\x85\xa1", 3), 0, "Hangul medial jamo U+1161: 0");
+    assert_eq(utf8_cells("\xe2\x80\x8d", 3), 0, "zero width joiner U+200D: 0");
+    assert_eq(utf8_cells("\xc2\xad", 2), 1, "soft hyphen U+00AD: drawn, 1");
+    assert_eq(utf8_cells("\xf4\x8f\xbf\xbf", 4), 1, "U+10FFFF: 1");
+    assert_eq(utf8_cells("\xe6\x97", 2), 2, "truncated sequence: 1 cell per byte");
+    assert_eq(utf8_cells("\xc0\xaf", 2), 2, "overlong: 1 cell per byte");
+    assert_eq(utf8_cells("\xed\xa0\x80", 3), 3, "encoded surrogate: 1 cell per byte");
+    assert_eq(_wc_width(0x2FF), 1, "below the table: 1");
+    assert_eq(_wc_width(0x300), 0, "first table range (combining grave): 0");
+    assert_eq(_wc_width(0x4E00), 2, "CJK unified ideograph: 2");
+    # The grid: the CJK name is 12 bytes but 9 cells (3 x 2 + ".md").
+    var cjk = vec_new();
+    vec_push(cjk, make_str("\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e.md"));
+    vec_push(cjk, make_str("ab"));
+    vec_push(cjk, make_str("caf\xc3\xa9"));
+    var cw = _display_widths(cjk);
+    assert_eq(vec_get(cw, 0), 9, "grid width of the CJK name = 9 cells");
+    assert_eq(vec_get(cw, 1), 2, "ASCII name = 2");
+    assert_eq(vec_get(cw, 2), 4, "cafe-acute = 4");
+    assert_eq(_columns_total_width_w(cjk, cw, 3, 3, 1, 0), 19, "3x1 in cells: 9 + 2 + 2 + 2 + 4");
+    assert_eq(_pick_cols_w(cjk, cw, 19, 0), 3, "tw=19: fits 3 columns by cells");
+    assert_eq(pick_cols(cjk, 19, 0), 2, "tw=19: by bytes only 2 columns (3 would need 23)");
+    set_sanitize_names(1);
+    var c1 = vec_new();
+    vec_push(c1, make_str("ab\xc2\x9b\xe6\x97\xa5"));
+    assert_eq(vec_get(_display_widths(c1), 0), 5, "TTY: encoded C1 -> ? (1) + ab (2) + CJK (2)");
     set_sanitize_names(0);
 
     test_group("term_width pipe-awareness contract");
@@ -1015,6 +1126,7 @@ fn main(): i64 {
     assert_eq(_long_flag_code("---"), LF_UNKNOWN, "'---' unknown");
     assert_eq(_long_flag_code("--gitx"), LF_UNKNOWN, "no prefix match");
     assert_eq(_long_flag_code("--level=2"), LF_UNKNOWN, "--level=N form not accepted");
+    assert_eq(_long_flag_code("--local-time"), LF_LOCAL_TIME, "--local-time (v1.6.0)");
 
     # ============================================================
     # M7 — git status (helpers + classifier)

@@ -216,3 +216,21 @@ repository 45.8 → 41.0 ms; `-T /usr/share` (no `--git`) 274.1 → 274.8 ms
 rule (an excluded directory's contents are ignored) from costing a
 pattern scan per ancestor per entry.
 
+## v1.6.0 refresh — 2026-10-15: dates and widths
+
+`format_mtime` now computes the civil date with Howard Hinnant's
+constant-time algorithm instead of chrono's per-year-looping
+`epoch_to_date`; `--local-time` adds a zone lookup (binary search over
+the TZif transitions; past the last one, the footer rule):
+
+| Path | Avg |
+|---|---|
+| `format_mtime` UTC | 58 ns |
+| `format_mtime --local-time` (America/New_York, transition table) | 123 ns |
+| `format_mtime --local-time` (year 2100, footer rule) | 196 ns |
+
+Whole listings, 1.5.0 vs 1.6.0 (best of three): `-l` on 5,000 entries
+20.6 → 19.3 ms; `-T -l /usr/share` 295.5 → 277.8 ms — within noise. The
+grid's cell widths cost nothing for ASCII names (one byte scan, no vec);
+only a listing holding a multibyte name decodes UTF-8.
+

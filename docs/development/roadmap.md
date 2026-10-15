@@ -6,13 +6,14 @@
 
 ## Where we are
 
-**v1.5.0** (2026-10-15). The v1.0 contract (M0–M10, shipped
+**v1.6.0** (2026-10-15). The v1.0 contract (M0–M10, shipped
 2026-05-19 → 05-23) is intact: eza-style listing with long format,
 multi-column layout, color, icons, tree mode, a git-status column and a
 mime column, pipe-aware. The 1.x line since has added `--help` /
 `--version` / `-F` / `-d` / multi-path / `--`, AGNOS as a target,
 darshana's terminal primitives, a `--git` column that answers what git
-answers (1.5.0), two security sweeps
+answers (1.5.0), cell-accurate columns and `--local-time` (1.6.0), two
+security sweeps
 ([2026-08-23](../audit/2026-08-23-audit.md),
 [2026-10-15](../audit/2026-10-15-audit.md)) and the hot-path work in
 [`benchmarks.md`](../benchmarks.md).
@@ -53,22 +54,13 @@ decision (ADR 0005): staged-vs-unstaged, per-directory dirty
 aggregation, `include` / `includeIf`, `GIT_DIR` / `GIT_WORK_TREE`,
 `core.ignoreCase`.
 
-### 1.6.0 — display correctness
+### 1.6.0 — ✅ display correctness
 
-- **Column widths in cells, not bytes.** The grid measures a name by
-  bytes written, so well-formed multibyte names misalign the columns to
-  their right (`é` 2 bytes / 1 cell, CJK 3 / 2). Needs UTF-8 decoding
-  plus an East Asian Width table (wide = 2, combining = 0). TTY grid
-  only; pipe output is unaffected.
-- **Decorate path arguments** like listing entries on a TTY:
-  `darshini *` colors and icons the directories' contents but prints
-  the files it was handed plain. (`-F` on arguments landed in 1.4.1.)
-- **One `-l` table across file arguments**: `darshini -l a b c` sizes
-  each row on its own, so sizes don't line up as `ls -l` does.
-- **`--mime` under `-T -l`** (ADR 0004 promised it; tree.cyr has no
-  mime path).
-- **mtime localization** — opt-in flag; UTC stays the default (the v1.0
-  locale-free contract).
+Column widths in terminal cells (a generated Unicode 16 width table);
+path arguments rendered as one decorated listing (color, icons, `--git`,
+`-F`, the grid, one aligned `-l` table); `--mime` under `-T -l`;
+`--local-time` (TZif + POSIX TZ strings, verified against `date(1)`);
+pre-1970 mtimes rendered as dates.
 
 ### 1.7.0 — platforms
 

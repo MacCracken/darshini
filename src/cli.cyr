@@ -58,6 +58,7 @@ enum LongFlag {
     LF_VERSION = 7;
     LF_LEVEL = 8;
     LF_END_OPTS = 9;
+    LF_LOCAL_TIME = 10;
 }
 
 # Map a `--...` argument to its LongFlag. A bare `--` is LF_END_OPTS
@@ -76,5 +77,6 @@ fn _long_flag_code(arg): i64 {
     if (_arg_eq(arg, "--help") == 1)     { return LF_HELP; }
     if (_arg_eq(arg, "--version") == 1)  { return LF_VERSION; }
     if (_arg_eq(arg, "--level") == 1)    { return LF_LEVEL; }
+    if (_arg_eq(arg, "--local-time") == 1) { return LF_LOCAL_TIME; }
     return LF_UNKNOWN;
 }

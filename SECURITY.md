@@ -38,7 +38,14 @@ filesystem beyond standard output. The realistic threats:
   date — `ESC 7` / `ESC 8` (save / restore cursor) among them — raw to
   the terminal, and made the date conversion loop for minutes per entry.
   Since v1.4.1 such an mtime renders as the `????-??-?? ??:??`
-  placeholder. Sizes and modes are formatted from fixed alphabets.
+  placeholder (since v1.6.0 any date outside 0000..9999, after the
+  `--local-time` offset). Sizes and modes are formatted from fixed
+  alphabets. `--local-time` reads the zone file `TZ` names (under
+  `$TZDIR` or `/usr/share/zoneinfo`, or an absolute path) or
+  `/etc/localtime`: size-capped at 1 MB and parsed with every count
+  and index bounds-checked; anything that is not a valid TZif file
+  falls back to a POSIX rule string or UTC. darshini is not setuid, so
+  `TZ` naming an arbitrary file reads nothing the user couldn't.
 
   History: before v1.3.2 names went to the terminal raw in every case
   (and this section claimed otherwise; see

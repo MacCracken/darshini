@@ -85,16 +85,21 @@ mime.cyr
 render.cyr
 test.cyr
 tree.cyr
+tz.cyr
 walk.cyr
+width.cyr
+width_table.cyr
 
 tests:
 darshini.bcyr
 darshini.fcyr
 darshini.tcyr
 examples.sh
+gen-width-table.py
 git-parity.sh
 parity.sh
 table-drift.sh
+tz-parity.sh
 ```
 
 ## Classify (`-F`)

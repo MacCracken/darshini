@@ -33,6 +33,8 @@ See the README for the recommended zsh alias set
 |-------------------|------|
 | `src/main.cyr`    | Entry, argv parsing, multi-path dispatch (`run_all`), per-path orchestration (`run`) |
 | `src/cli.cyr`     | Pure argv helpers (`_arg_eq`, `_parse_pos_int`, `_long_flag_code`) — includable by the test suite |
+| `src/width.cyr` / `src/width_table.cyr` | Terminal cell width of UTF-8 (the table is generated: `tests/gen-width-table.py`) |
+| `src/tz.cyr`      | Civil-date arithmetic (Hinnant) and `--local-time`: TZif reader, POSIX TZ rules |
 | `src/walk.cyr`    | Buffered checked writer (`d_write` / `d_flush`), stat / open wrappers, `classify_path`, `check_dir_readable`, `list_dir_checked`, `d_basename`, `ModeBit` enum, `-F` classify indicator |
 | `src/render.cyr`  | Pure formatters: `lower_byte`, `_str_cmp_ci` / `str_lt_ci` (the listing order), `sort_entries` (stdlib `vec_sort_by`), `print_entries`, `format_perms`/`size_*`/`mtime` |
 | `src/columns.cyr` | TTY width probe (darshana `tty_winsize`), column-fit picker over written widths, `_columns_emit` (vertical-then-horizontal) |
@@ -47,7 +49,7 @@ See the README for the recommended zsh alias set
 
 Include order in `main.cyr` is dependency order, kept for the reader
 (cycc resolves later definitions):
-`walk → cli → icons → mime → ignore → gitcfg → git → color → render → columns → long → tree`.
+`walk → cli → width_table → width → icons → mime → ignore → gitcfg → git → tz → color → render → columns → long → tree`.
 
 ## Adding a feature (v1.x non-breaking additions)
 

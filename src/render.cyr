@@ -256,84 +256,61 @@ fn format_size_human(size, buf): i64 {
     return n + 3;
 }
 
-# Render mtime epoch seconds as `YYYY-MM-DD HH:MM` (16 bytes, UTC).
-# Locale-free per the v1.0 contract; the seconds component is
-# dropped vs ISO-8601 to match ls(1) -l width expectations. UTC
-# (no zone offset) keeps the column stable across machines and
-# crucially makes tests deterministic — the M2 acceptance check
-# fixtures have known epoch values.
-# v1.3.3: named offsets into the struct `epoch_to_date` returns.
+# Render mtime epoch seconds as `YYYY-MM-DD HH:MM` (16 bytes). UTC by
+# default — locale-free per the v1.0 contract, stable across machines,
+# deterministic in tests; the user's zone with `--local-time` (v1.6.0,
+# tz.cyr). The seconds component is dropped to match ls(1) -l widths.
 #
-# cycc 6.4.67 added `dt_year` / `dt_month` / ... accessors whose stated
-# purpose is to keep this layout private, and the v1.3.2 audit recorded
-# reading it by raw offset as a latent risk. Migrating to the accessors
-# was investigated and REJECTED: each one is
-# `load64(epoch_to_date(dt / 1000000000) + K)`, so it re-runs the full
-# civil-date conversion and a fresh alloc(48) per field. Using all five
-# would turn one conversion per entry into FIVE — on the `-l` hot path,
-# against a bump allocator that never frees. They also take a
-# nanosecond DateTime, not the epoch seconds `stat` gives us, so every
-# call would need a multiply that can overflow at the far end of the
-# range.
-#
-# So the offsets stay, but they are no longer anonymous magic numbers:
-# they are named here and PINNED by an assertion group in
-# tests/darshini.tcyr that cross-checks each one against the matching
-# `dt_*` accessor. If upstream ever reorders the struct, that group
-# fails loudly instead of `-l` silently rendering the wrong date.
-enum DateTimeField {
-    DT_YEAR = 0;
-    DT_MONTH = 8;
-    DT_DAY = 16;
-    DT_HOUR = 24;
-    DT_MINUTE = 32;
-    DT_SECOND = 40;
+# v1.6.0: the civil date comes from Howard Hinnant's constant-time
+# algorithm (`civil_from_days`, tz.cyr) instead of chrono's
+# `epoch_to_date`. That retires three workarounds at once:
+#   * pre-1970 mtimes render as dates. epoch_to_date drove negative
+#     times into negative month/day components (v1.3.2 measured
+#     `1970-01-\xD4+ /.:00` for a 1960 mtime), so v1.3.2 showed the
+#     `????` placeholder for every one; `ls -l` shows the date.
+#   * epoch_to_date looped once per year (a 9e18 mtime: ~19 minutes per
+#     entry, v1.4.1); this is O(1).
+#   * the v1.3.3 pin on chrono's private DateTime layout (DT_YEAR...)
+#     has nothing left to pin.
+# What stays is v1.4.1's bound: the field has four year digits, and
+# `_chrono_w4` writes `48 + year / 1000` through store8, so a five-digit
+# year would emit a raw control byte (ESC 7 / ESC 8 at year ~235,700 —
+# terminal injection through a hostile tar's timestamps). Anything
+# outside 0000-01-01 .. 9999-12-31 (after the zone offset) renders the
+# placeholder.
+var _mtime_local = 0;
+
+fn set_mtime_local(v): i64 {
+    _mtime_local = v;
+    return 0;
+}
+
+fn _mtime_placeholder(buf): i64 {
+    memcpy(buf, "????-??-?? ??:??", 16);
+    return 16;
 }
 
 fn format_mtime(epoch, buf): i64 {
-    # v1.3.2 (P(-1)): pre-1970 mtimes drive `epoch_to_date` into
-    # negative month/day/hour/minute components. `_chrono_w2` then
-    # writes `48 + n` for a negative n, emitting bytes BELOW '0' —
-    # including non-ASCII. Measured on a 1960 mtime, the column read
-    # `1970-01-\xD4+ /.:00`: 0xD4 straight into the user's terminal,
-    # and the field contracted below its fixed 16 bytes, which
-    # misaligns every following column in the `-l` row.
-    #
-    # Reachable from restored backups, extracted tarballs that
-    # preserve timestamps, and `touch -d`. Degrade to the same
-    # placeholder long.cyr already emits for a failed stat, so the
-    # field keeps its exact 16-byte width. Epochs >= 0 are untouched
-    # and byte-identical.
-    # v1.4.1: and years past 9999. `_chrono_w4` writes `48 + year / 1000`
-    # through store8, so a five-digit year emits whatever byte that
-    # truncates to: year 10000 renders `:000-01-01`, years 235,7xx and
-    # 235,8xx emit ESC 7 / ESC 8 (save / restore cursor) raw into the
-    # terminal — a later row then overwrites an earlier one, the same
-    # hide-a-sibling effect v1.3.2 closed for names — and other ranges
-    # emit raw C1 (0x9B, CSI) and C0 (CR) bytes. `epoch_to_date` also
-    # loops once per year: an mtime of 1e16 took 1.1 s per entry, 9e18
-    # an estimated ~19 minutes. Such mtimes survive extraction from a
-    # hostile tar onto tmpfs. 253402300799 is 9999-12-31 23:59:59 UTC;
-    # anything later gets the same placeholder as a pre-1970 mtime.
-    if (epoch > 253402300799) { epoch = 0 - 1; }
-    if (epoch < 0) {
-        store8(buf + 0, 63);  store8(buf + 1, 63);  store8(buf + 2, 63);
-        store8(buf + 3, 63);  store8(buf + 4, 45);  store8(buf + 5, 63);
-        store8(buf + 6, 63);  store8(buf + 7, 45);  store8(buf + 8, 63);
-        store8(buf + 9, 63);  store8(buf + 10, 32); store8(buf + 11, 63);
-        store8(buf + 12, 63); store8(buf + 13, 58); store8(buf + 14, 63);
-        store8(buf + 15, 63);
-        return 16;
-    }
-    var d = epoch_to_date(epoch);
-    _chrono_w4(buf, 0, load64(d + DT_YEAR));
+    # A day of margin either side keeps the offset addition far from i64
+    # overflow; the exact bounds are checked after it.
+    if (epoch > 253402387199) { return _mtime_placeholder(buf); }
+    if (epoch < 0 - 62167305600) { return _mtime_placeholder(buf); }
+    var t = epoch;
+    if (_mtime_local == 1) { t = epoch + tz_offset(epoch); }
+    if (t > 253402300799) { return _mtime_placeholder(buf); }     # 9999-12-31 23:59:59
+    if (t < 0 - 62167219200) { return _mtime_placeholder(buf); }  # 0000-01-01 00:00:00
+    var days = _tz_fdiv(t, 86400);
+    var secs = t - days * 86400;
+    var ymd[24];
+    civil_from_days(days, &ymd);
+    _chrono_w4(buf, 0, load64(&ymd));
     store8(buf + 4, 45);                       # '-'
-    _chrono_w2(buf, 5, load64(d + DT_MONTH));
+    _chrono_w2(buf, 5, load64(&ymd + 8));
     store8(buf + 7, 45);                       # '-'
-    _chrono_w2(buf, 8, load64(d + DT_DAY));
+    _chrono_w2(buf, 8, load64(&ymd + 16));
     store8(buf + 10, 32);                      # ' '
-    _chrono_w2(buf, 11, load64(d + DT_HOUR));
+    _chrono_w2(buf, 11, secs / 3600);
     store8(buf + 13, 58);                      # ':'
-    _chrono_w2(buf, 14, load64(d + DT_MINUTE));
+    _chrono_w2(buf, 14, (secs % 3600) / 60);
     return 16;
 }

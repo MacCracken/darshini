@@ -7,31 +7,26 @@
 
 ## Version
 
-**1.5.0** — `--git` accuracy, shipped 2026-10-15
-([ADR 0005](../adr/0005-git-status-semantics.md)). Minor bump: the
-column's answers change for many entries, every change toward git's.
+**1.6.0** — display correctness, shipped 2026-10-15. Minor bump: a new
+flag and visible output changes, every one a fix or an opt-in.
 Toolchain and darshana unchanged (cyrius 6.7.9, darshana 1.3.0).
 
-- **Ignore rules are git's**: a port of git's `wildmatch`
-  (`src/ignore.cyr`) and its pattern parsing — negation, anchoring,
-  path patterns, classes, `**`, escapes, trailing spaces, BOM / CRLF —
-  from every directory's `.gitignore`, `info/exclude` and
-  `core.excludesFile` (default `$XDG_CONFIG_HOME/git/ignore`), in git's
-  precedence; an excluded directory's contents are ignored.
-- **Repositories**: `gitdir:` files are followed (submodules, linked
-  worktrees, `commondir`); a submodule reads `.` / `M` by its checked-out
-  `HEAD`; `.git` and its contents get no mark; a repository not owned by
-  the user gets no column unless `safe.directory` allows it.
-- Verified: the `!` set equals `git check-ignore`'s on 62,761 random
-  paths (2,600 random repositories) and on the fixed corpus in
-  `tests/git-parity.sh`, which CI runs; outside `--git` the output is
-  byte-identical to 1.4.2 (A/B 276 / 276 non-git captures); speed is
-  unchanged within noise.
+- **Columns measured in terminal cells**: UTF-8 decoded against a
+  generated Unicode 16 width table (`src/width_table.cyr`, from
+  `tests/gen-width-table.py`); CJK / emoji 2, combining marks 0.
+- **Path arguments are one listing**: color, icons, `--git`, `-F`, the
+  grid, one aligned `-l` table (`darshini *`, `-l a b c`, `-d */`).
+- **`--mime` under `-T -l`** (was silently ignored).
+- **`--local-time`** (opt-in; UTC stays default): TZif files and POSIX
+  TZ strings with glibc's semantics, verified against `date(1)` for ~30
+  zones and TZ forms (`tests/tz-parity.sh`).
+- **Pre-1970 mtimes render as dates** (Hinnant's civil algorithm; was
+  the `????` placeholder since v1.3.2).
 
-Prior: **1.4.2** — stdlib sort, CI runs the cross targets, table-drift
-and golden-examples gates. **1.4.1** — audit and repair sweep
-([`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md)).
-Earlier releases: see the CHANGELOG.
+Prior: **1.5.0** — `--git` reimplements git's rules
+([ADR 0005](../adr/0005-git-status-semantics.md)). **1.4.x** — audit
+and repair sweep, stdlib sort, CI cross-target runs. Earlier releases:
+see the CHANGELOG.
 
 ## Toolchain
 
@@ -57,7 +52,12 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
   `dir_list_checked`, all targets), `d_basename`, `ModeBit` enum
 - `src/render.cyr` — `_str_cmp_ci` / `str_lt_ci` (case-insensitive,
   raw-byte tiebreak: a strict total order), `sort_entries` (stdlib
-  `vec_sort_by`), `print_entries`, `format_perms` / `_size_*` / `_mtime`
+  `vec_sort_by`), `print_entries`, `format_perms` / `_size_*` /
+  `format_mtime` (Hinnant civil dates; UTC or `--local-time`)
+- `src/width.cyr` / `src/width_table.cyr` — terminal cell width of
+  UTF-8 (v1.6.0; the table is generated)
+- `src/tz.cyr` — civil-date arithmetic and `--local-time`: TZif reader,
+  POSIX TZ rules, glibc's posixrules fallback (v1.6.0)
 - `src/long.cyr` — `-l` (two-pass: collect, then emit aligned) and
   `render_long_one` for a single path
 - `src/columns.cyr` — `term_width` (darshana `tty_winsize`; 0 on agnos
@@ -100,8 +100,10 @@ matrix on every push since v1.4.2) but is not declared supported
 
 ## Tests
 
-- `tests/darshini.tcyr` — **463** assertions (v1.5.0; 401 at v1.4.2,
-  301 at v1.4.0). v1.5.0: git's 137-row wildmatch table (t3070),
+- `tests/darshini.tcyr` — **527** assertions (v1.6.0; 463 at v1.5.0,
+  301 at v1.4.0). v1.6.0: terminal cells (CJK, combining, emoji,
+  malformed), the cells grid, path-argument decoration, civil dates and
+  their round trip, POSIX TZ rules, TZif zones. Earlier: v1.5.0: git's 137-row wildmatch table (t3070),
   gitignore pattern semantics, precedence and inheritance, `.git`
   marks, git-config parsing, ownership / `safe.directory` matching.
   Pure helpers per module, the sanitizer rule, column math, the chrono
@@ -111,17 +113,20 @@ matrix on every push since v1.4.2) but is not declared supported
   extended flags, v4 prefix compression, long names, SHA-256, misframing),
   `_git_oid_len`, every `--git` status outcome including the u32 compare
   and `git_status_for_root`, the hardened magic probe. Cross-targets,
-  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 463 / 463;
-  agnos under mirshi 452 / 452 (no ownership tests there; its errno
-  assertions expect agnos's flat `-1`).
-- `tests/darshini.fcyr` — 7 fuzz targets with named invariants
-  (v1.5.0 added wildmatch vs an independent reference matcher):
+  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 527 / 527;
+  agnos under mirshi 508 / 508 (no ownership or TZif tests there; its
+  errno assertions expect agnos's flat `-1`).
+- `tests/darshini.fcyr` — 8 fuzz targets with named invariants
+  (v1.5.0 added wildmatch vs an independent reference matcher, v1.6.0
+  the civil-date round trip):
   `.git/index` (v2/v3/v4, SHA-1/SHA-256 framing), `.gitignore` (CRLF
   differential), magic bytes, `_path_join_into` (canary), the name
   sanitizer, the mtime formatter (v1.4.1, mutation-validated). Runs in
   CI since v1.4.1.
 - `tests/darshini.bcyr` — micro-benchmarks (`cyrius bench`).
-- `tests/git-parity.sh` (v1.5.0: `--git` vs real git — ignore sets,
+- `tests/tz-parity.sh` (v1.6.0: `--local-time` vs `date(1)` across ~30
+  zones and TZ forms, random instants and every DST transition),
+  `tests/git-parity.sh` (v1.5.0: `--git` vs real git — ignore sets,
   `.git`, submodules, worktrees, ownership with sudo or as root; run it
   locally with the ownership part via
   `unshare --map-root-user --map-auto sh tests/git-parity.sh`),
@@ -131,7 +136,8 @@ matrix on every push since v1.4.2) but is not declared supported
   — CI helpers, runnable locally from the repo root.
 - CI (`.github/workflows/ci.yml`) — build, golden examples, strict lint,
   tests, fuzz, agnos (mirshi) + aarch64 (qemu) suite / fuzz runs and
-  aarch64 output parity, git parity, 22 smoke gates, DCE parity,
+  aarch64 output parity, git parity, tz parity, 25 smoke gates, DCE
+  parity,
   security scan,
   table drift, docs / version consistency.
 
@@ -151,8 +157,8 @@ sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md): 1.6.0 (display correctness), 1.7.0
-(platforms), and the owner decisions listed there.
+See [`roadmap.md`](roadmap.md): 1.7.0 (platforms), and the owner
+decisions listed there.
 
 ## Known gotchas
 
@@ -169,7 +175,16 @@ See [`roadmap.md`](roadmap.md): 1.6.0 (display correctness), 1.7.0
   darshini prints that it did not author goes through one of them.
   Metadata is untrusted too — `format_mtime` bounds the year for that
   reason.
-- **mtime is UTC**, not local time (the v1.0 locale-free contract).
+- **mtime is UTC by default** (the v1.0 locale-free contract);
+  `--local-time` opts into the user's zone. For POSIX TZ strings it
+  follows glibc deliberately — including glibc's rule that such a
+  string applies no DST before 1970 (northern rules), and its
+  posixrules history for a DST name with no rule — so it agrees with
+  `date` and `ls -l`; past posixrules' last transition darshini uses the
+  string's own offsets where glibc (a defect) uses the file's.
+- **Grid widths are cells, from a generated table**: regenerate
+  `src/width_table.cyr` with `tests/gen-width-table.py` (deliberately,
+  not in CI — a runner's Python may carry another Unicode version).
 - **AGNOS terminal detection is console-wide**: `term_width` returns 0
   there (no decoration even on the console), while sanitization keys on
   `tty_isatty` and is on whenever the console is up. Opposite defaults,

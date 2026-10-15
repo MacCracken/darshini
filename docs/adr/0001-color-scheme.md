@@ -115,7 +115,7 @@ test below is darshana's `tty_winsize` on fd 1 — the same
 
 ## References
 
-- [roadmap.md M4](../development/roadmap.md) — "Color via darshana (v0.5.0)"
+- [CHANGELOG 0.5.0](../../CHANGELOG.md) — M4: color via darshana
 - [CLAUDE.md "Hard Constraints"](../../CLAUDE.md) — no raw ANSI inline
 - [darshana ansi.cyr](https://github.com/MacCracken/darshana/blob/0.5.3/src/ansi.cyr) — primitive surface
 - [GNU `ls` LS_COLORS defaults](https://www.gnu.org/software/coreutils/manual/html_node/General-output-formatting.html) — comparison baseline

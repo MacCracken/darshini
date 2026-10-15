@@ -178,7 +178,7 @@ files) is N opens. Acceptable trade for the opt-in flag.
 
 ## References
 
-- [roadmap.md M8](../development/roadmap.md) — "Mime-type recognition (v0.9.0)"
+- [CHANGELOG 0.9.0](../../CHANGELOG.md) — M8: `--mime` type column
 - [ADR 0001 color scheme](0001-color-scheme.md), [ADR 0002 icon format](0002-icon-format.md) — same compile-baked-mapping pattern
 - [IANA mime registry](https://www.iana.org/assignments/media-types/media-types.xhtml) — canonical mime names
 - [file(1) source magic db](https://github.com/file/file/blob/master/magic/Magdir) — reference for the magic-byte set

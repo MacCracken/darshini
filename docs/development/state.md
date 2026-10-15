@@ -18,7 +18,7 @@ Toolchain and darshana unchanged (cyrius 6.7.9, darshana 1.3.0).
   grid, one aligned `-l` table (`darshini *`, `-l a b c`, `-d */`).
 - **`--mime` under `-T -l`** (was silently ignored).
 - **`--local-time`** (opt-in; UTC stays default): TZif files and POSIX
-  TZ strings with glibc's semantics, verified against `date(1)` for ~30
+  TZ strings with glibc's semantics, verified against `date(1)` for 33
   zones and TZ forms (`tests/tz-parity.sh`).
 - **Pre-1970 mtimes render as dates** (Hinnant's civil algorithm; was
   the `????` placeholder since v1.3.2).
@@ -42,7 +42,8 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 ## Source
 
 - `src/main.cyr` — entry point, argv parser (`parse_cli`), per-path
-  dispatch (`run` / `run_all`), help / usage text
+  dispatch (`run` / `run_all`), the path-argument listing
+  (`render_args`), help / usage text
 - `src/cli.cyr` — pure argv helpers (`_arg_eq`, `_parse_pos_int`,
   `_long_flag_code`); split out at v1.4.1 so the suite can include them
 - `src/walk.cyr` — the buffered checked writer (`d_write` / `d_flush` /
@@ -58,12 +59,13 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
   UTF-8 (v1.6.0; the table is generated)
 - `src/tz.cyr` — civil-date arithmetic and `--local-time`: TZif reader,
   POSIX TZ rules, glibc's posixrules fallback (v1.6.0)
-- `src/long.cyr` — `-l` (two-pass: collect, then emit aligned) and
-  `render_long_one` for a single path
+- `src/long.cyr` — `-l` (two-pass: collect, then emit aligned), for a
+  directory's entries and path arguments alike
 - `src/columns.cyr` — `term_width` (darshana `tty_winsize`; 0 on agnos
   by decision), `pick_cols`, `render_columns`
 - `src/color.cyr` — `color_for_mode`, `compute_decor` (one lstat pass
-  for every decoration), `emit_decorated`, the untrusted-text writers
+  for every decoration) and `compute_decor_args` (the same for path
+  arguments), `emit_decorated`, the untrusted-text writers
   (`_write_name_bytes` / `_write_err_bytes` over darshana's
   `tty_sanitize_buf`), `emit_error` / `emit_dir_error`
 - `src/icons.cyr` — compile-baked icon table mirroring
@@ -92,11 +94,13 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 | Checked writes (write error → exit 1) | v1.3.3 |
 | Terminal sanitization of every untrusted name / path | v1.3.2, complete v1.4.0 |
 | `--` end of options; `-F` on path arguments; read errors reported | v1.4.1 |
+| `--git` with git's own rules: full ignore precedence, submodules, worktrees, `safe.directory` ([ADR 0005](../adr/0005-git-status-semantics.md)) | v1.5.0 |
+| Columns in terminal cells; path arguments as one decorated listing; `-T -l --mime`; `--local-time`; pre-1970 dates | v1.6.0 |
 
 Supported targets: **Linux x86_64, AGNOS**. The aarch64 build matches
 x86_64 byte-for-byte (304 / 304 A/B captures; CI checks a 21-mode
 matrix on every push since v1.4.2) but is not declared supported
-(roadmap 1.7.0).
+(roadmap 1.8.0).
 
 ## Tests
 
@@ -157,8 +161,9 @@ sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md): 1.7.0 (platforms), and the owner
-decisions listed there.
+See [`roadmap.md`](roadmap.md): 1.7.0 (symlink targets on a terminal,
+`NO_COLOR`, exit 1 for unstat-able entries, folder icon for directories,
+icon / mime tables generated from CYML), then 1.8.0 (platforms).
 
 ## Known gotchas
 

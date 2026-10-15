@@ -14,7 +14,7 @@ filesystem beyond standard output. The realistic threats:
   escape sequences can alter terminal state when displayed, and so can
   a path argument (`darshini *` turns every name in a directory into
   one). **On a terminal**, every untrusted name or path darshini writes
-  — listing entries, argv paths echoed as non-directories or by `-d`,
+  — listing entries, path arguments listed as non-directories or under `-d`,
   the multi-path `<dir>:` header, the `-T` root, and paths quoted in
   error messages on stderr — goes through darshana's
   `tty_sanitize_buf` in `TTY_SANITIZE_UTF8` mode: each C0 control

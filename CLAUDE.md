@@ -60,7 +60,7 @@ cyrius test                               # run tests/*.tcyr
 - **Never use `gh` CLI** — use `curl` to the GitHub API only
 - Do not skip tests before claiming changes work
 - Do not use `sys_system()` or `exec_*` — directory walking + stat + render only
-- Do not trust paths from arguments without bounds + `../`-traversal check (relevant when an arg points at a symlink chain that escapes the intended scope)
+- Do not write a path argument or entry name to a terminal unsanitized — route it through darshana's `tty_sanitize_buf` (on a pipe, names go out byte-for-byte). Path arguments are not scope-restricted: `darshini ../../etc` is valid usage, since darshini runs with the user's own permissions (SECURITY.md). Walking never follows a symlink into a directory, so there is no loop to bound
 - Do not modify `lib/` files (vendored stdlib / dep symlinks managed by `cyrius deps`)
 - Do not emit raw ANSI escape codes inline — always route via darshana
 - Do not call `git` as a subprocess — git-status comes from reading `.git/` files directly (no exec dependency)
@@ -100,8 +100,7 @@ cyrius test                               # run tests/*.tcyr
 ## Cyrius Conventions
 
 - All struct fields are 8 bytes (`i64`), accessed via `load64`/`store64` with offset
-- Heap allocation via `fl_alloc()`/`fl_free()` for individual-lifetime data (per-entry stat results)
-- Bump allocation via `alloc()` for long-lived data (directory entries vec)
+- Allocation is bump-only via `alloc()` — entry vecs, stat buffers, row scratch. One run lists and exits, so darshini frees nothing; `fl_alloc()` / `fl_free()` are not used
 - Enum values for constants — don't consume `gvar_toks` slots
 - `break` in while loops with `var` declarations is unreliable — use flag + `continue`
 - See [cyrius CLAUDE.md](https://github.com/MacCracken/cyrius/blob/main/CLAUDE.md) for the full convention set
@@ -113,7 +112,7 @@ cyrius test                               # run tests/*.tcyr
 - [`docs/guides/`](docs/guides/) — Task-oriented how-tos (CLI usage, icon authoring)
 - [`docs/examples/`](docs/examples/) — Sample outputs
 - [`docs/development/state.md`](docs/development/state.md) — Live state snapshot
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — Milestones through v1.0
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — Forward plan only (next milestones, out of scope); history is in CHANGELOG / state.md
 - `icons/` — CYML icon mapping shipped in-tree
 
 Full doc-tree convention: [first-party-documentation.md](https://github.com/MacCracken/agnosticos/blob/main/docs/development/planning/first-party-documentation.md).

@@ -137,7 +137,7 @@ by hand — the literals are the production path.
 
 ## References
 
-- [roadmap.md M6](../development/roadmap.md) — "Tree mode (v0.7.0)"
+- [CHANGELOG 0.7.0](../../CHANGELOG.md) — M6: tree mode (`-T` / `--tree`)
 - [CLAUDE.md P(-1) Documentation audit](../../CLAUDE.md) — "tree-mode ADR" line item that prompted this back-fill
 - [2026-05-23 audit](../audit/2026-05-23-audit.md) — Step 6 documentation audit findings
 - `tree(1)` `--charset=ascii` — ASCII-fallback option we chose not to mirror

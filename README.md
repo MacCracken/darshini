@@ -112,7 +112,8 @@ Feature surface:
 - **`--help` / `--version`** — standard meta flags.
 
 Next: see the [roadmap](docs/development/roadmap.md) — 1.7.0
-platforms, and the open owner decisions.
+(symlink targets on a terminal, `NO_COLOR`, exit status, icon tables
+from CYML), then 1.8.0 platforms.
 
 ## Build
 
@@ -175,7 +176,7 @@ darshini --help                # full flag reference
 - [`docs/development/state.md`](docs/development/state.md) —
   live state (version, dep graph, known gotchas)
 - [`docs/development/roadmap.md`](docs/development/roadmap.md) —
-  the 1.4.x → 1.x path
+  the forward plan: next milestones, what is out of scope
 - [`docs/guides/getting-started.md`](docs/guides/getting-started.md) —
   contributor walkthrough
 

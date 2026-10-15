@@ -103,9 +103,18 @@ DCE build equals the normal one.
 
 ### Docs
 
-- README, state.md, roadmap (1.6.0 done; next 1.7.0), benchmarks.md, ADR
-  0004 (`--mime` under `-T -l`), SECURITY.md (zone files read), the
-  getting-started module table, golden examples regenerated.
+- Roadmap is forward-only: completed milestones removed (history is
+  here and in state.md, whose feature table gains 1.5.0 and 1.6.0); the
+  open "owner decision" list decided and scheduled as 1.7.0, platforms
+  moved to 1.8.0, a 2.0 section added. ADR cross-references to old
+  roadmap milestones now point at their CHANGELOG entries.
+- CLAUDE.md: two rules corrected to match the code — allocation is
+  bump-only (`fl_alloc` was never used), and path arguments are not
+  scope-restricted but are sanitized on a terminal (there was never a
+  `../` check; SECURITY.md already called it valid usage).
+- README, state.md, benchmarks.md, ADR 0004 (`--mime` under `-T -l`),
+  SECURITY.md (zone files read), the getting-started module table, golden
+  examples regenerated.
 
 ## [1.5.0] - 2026-10-15
 

@@ -80,7 +80,9 @@ the generic file glyph. A consequence the v1.0 text got wrong
 2 and gets the README / Makefile glyph, not the folder glyph —
 the opposite of eza. Moving the type override above the name
 rules would change icons in default TTY output, so it is a
-roadmap question, not a fix.
+roadmap question, not a fix. Decided 2026-10-15: the folder glyph
+wins for directories, scheduled in [roadmap 1.7.0](../development/roadmap.md);
+this section changes when it ships.
 
 ### Display width
 
@@ -189,7 +191,7 @@ color overrides at v1.0.
 
 ## References
 
-- [roadmap.md M5](../development/roadmap.md) — "Icons (v0.6.0)"
+- [CHANGELOG 0.6.0](../../CHANGELOG.md) — M5: icons via CYML mapping
 - [ADR 0001 color scheme](0001-color-scheme.md) — palette
   + mode-derived color shared with M5
 - [Nerd Fonts v3 codepoints](https://www.nerdfonts.com/cheat-sheet) — glyph reference

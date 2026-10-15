@@ -93,8 +93,12 @@ plus submodules, worktrees and ownership runs in CI (`tests/git-parity.sh`).
   every directory of a repository holding every rule above; `.git` has no
   mark; a submodule is `.` then `M` after its `HEAD` moves, and its files are
   listed through `gitdir:`; a linked worktree uses the common `info/exclude`;
-  and with the runner's passwordless sudo, a root-owned repository gets no
-  column until `safe.directory` lists it.
+  and, given a second uid (the runner's passwordless sudo, or root — locally
+  under `unshare --map-root-user --map-auto`), a repository owned by another
+  user gets no column — its own `safe.directory` notwithstanding — until a
+  global `safe.directory` names it or a `<path>/*` above it, and an empty
+  value resets the list. Mutation-checked: with the ownership check
+  disabled, the decline checks fail.
 - `cyrius bench`: `_ig_list_match` on a Python-template list 846 ns (miss) /
   653 ns (hit); `wildmatch` with `**` 389 ns.
 

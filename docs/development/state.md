@@ -122,7 +122,9 @@ matrix on every push since v1.4.2) but is not declared supported
   CI since v1.4.1.
 - `tests/darshini.bcyr` — micro-benchmarks (`cyrius bench`).
 - `tests/git-parity.sh` (v1.5.0: `--git` vs real git — ignore sets,
-  `.git`, submodules, worktrees, ownership with sudo),
+  `.git`, submodules, worktrees, ownership with sudo or as root; run it
+  locally with the ownership part via
+  `unshare --map-root-user --map-auto sh tests/git-parity.sh`),
   `tests/parity.sh` (two builds, 21 modes, pipe + PTY),
   `tests/table-drift.sh` (CYML vs compiled tables),
   `tests/examples.sh` (regenerates the golden `docs/examples/README.md`)

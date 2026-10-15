@@ -12,7 +12,7 @@
 #      'M' after it moves, and its own files to be listed through its
 #      `gitdir:` file;
 #   4. a linked worktree to work, with the common dir's info/exclude;
-#   5. (when passwordless sudo is available, as on CI) a repository owned
+#   5. (as root, or with passwordless sudo as on CI) a repository owned
 #      by another user to get no column until safe.directory lists it.
 # HOME / XDG_CONFIG_HOME point into a temp dir and GIT_CONFIG_NOSYSTEM is
 # set, for git and darshini alike, so the user's own config can't leak in.
@@ -160,25 +160,40 @@ fi
 compare_ignores "worktree" "$T/wt"
 
 # ------------------------------------------------------- 5. ownership
-if sudo -n true 2> /dev/null; then
+# Needs a repository owned by a different uid. CI runs unprivileged with
+# passwordless sudo: chown it to root. Run as root (a container, or
+# locally under `unshare --map-root-user --map-auto`), chown it to uid 1.
+# The listing holds `.git` as well as `f`, so only `f`'s line is checked
+# ("f" = no column, "? f" = column). Through v1.5.0's first CI run this
+# compared the whole listing against "f" and failed on correct output.
+OWN_CHOWN=""
+if [ "$(id -u)" = 0 ]; then OWN_CHOWN="chown -R 1:1"
+elif sudo -n true 2> /dev/null; then OWN_CHOWN="sudo -n chown -R 0:0"
+fi
+if [ -n "$OWN_CHOWN" ]; then
     O="$T/owned"
     $G init -q "$O"
     : > "$O/f"
-    sudo -n chown -R 0:0 "$O"
-    if [ "$("$B" --git -1 --no-color --no-icons "$O")" = "f" ]; then
-        ok "another user's repository: no column"
-    else bad "another user's repository still got a column"; fi
+    # The repository allowing itself must not count (git honors
+    # safe.directory only from system / global config): written before
+    # the chown, so the first check below proves it is ignored.
+    printf '[safe]\n\tdirectory = *\n' >> "$O/.git/config"
+    $OWN_CHOWN "$O"
+    f_line() { "$B" --git -1 --no-color --no-icons "$O" | grep -E '^(f|[.M?!] f)$' || true; }
+    if [ "$(f_line)" = "f" ]; then ok "another user's repository: no column (its own safe.directory ignored)"
+    else bad "another user's repository: got '$(f_line)', want 'f'"; fi
     printf '[safe]\n\tdirectory = %s\n' "$O" > "$HOME/.gitconfig"
-    if [ "$("$B" --git -1 --no-color --no-icons "$O")" = "? f" ]; then
-        ok "... until safe.directory lists it"
-    else bad "safe.directory did not allow it"; fi
+    if [ "$(f_line)" = "? f" ]; then ok "... until safe.directory lists it"
+    else bad "safe.directory = path: got '$(f_line)', want '? f'"; fi
+    printf '[safe]\n\tdirectory = %s/*\n' "$T" > "$HOME/.gitconfig"
+    if [ "$(f_line)" = "? f" ]; then ok "... or a <path>/* above it"
+    else bad "safe.directory = <path>/*: got '$(f_line)', want '? f'"; fi
     printf '[safe]\n\tdirectory = *\n\tdirectory =\n' > "$HOME/.gitconfig"
-    if [ "$("$B" --git -1 --no-color --no-icons "$O")" = "f" ]; then
-        ok "an empty safe.directory resets the list"
-    else bad "an empty safe.directory did not reset"; fi
+    if [ "$(f_line)" = "f" ]; then ok "an empty safe.directory resets the list"
+    else bad "* then empty: got '$(f_line)', want 'f'"; fi
     rm -f "$HOME/.gitconfig"
 else
-    echo "git-parity: skip ownership (no passwordless sudo)"
+    echo "git-parity: skip ownership (needs root or passwordless sudo)"
 fi
 
 exit $fail

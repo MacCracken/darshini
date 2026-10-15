@@ -27,8 +27,11 @@ retired for the stdlib's own agnos arm at v1.4.1. The same release moved
 were `alloc()`s per entry, ~200 dead bytes each, carried to exit. What is
 still retained per entry is inherent to the shape: the entry name, its path
 join, and (under `-l` / decoration) its stat buffer in the decoration vecs.
-Measured at v1.4.1: `-T` over 80k entries peaks at ~35 MB RSS. The 64 KB
-stdout buffer (v1.4.1) is one allocation for the run.
+The merge sort's n-slot scratch vec — one per directory, never
+reclaimed — went with the move to the stdlib's allocation-free
+`vec_sort_by` at v1.4.2. Measured at v1.4.2: `-T` over 80k entries peaks
+at ~23 MB RSS (~35 MB at v1.4.0). The 64 KB stdout buffer (v1.4.1) is one
+allocation for the run.
 
 **When to use which**: `alloc()` for anything whose lifetime is the run (the
 entries vec, the decoration vecs, the parsed git index). `fl_alloc()` /

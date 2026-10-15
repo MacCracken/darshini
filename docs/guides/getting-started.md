@@ -34,7 +34,7 @@ See the README for the recommended zsh alias set
 | `src/main.cyr`    | Entry, argv parsing, multi-path dispatch (`run_all`), per-path orchestration (`run`) |
 | `src/cli.cyr`     | Pure argv helpers (`_arg_eq`, `_parse_pos_int`, `_long_flag_code`) — includable by the test suite |
 | `src/walk.cyr`    | Buffered checked writer (`d_write` / `d_flush`), stat / open wrappers, `classify_path`, `check_dir_readable`, `list_dir_checked`, `d_basename`, `ModeBit` enum, `-F` classify indicator |
-| `src/render.cyr`  | Pure formatters: `lower_byte`, `str_lt_ci`, hybrid merge-sort `sort_entries`, `print_entries`, `format_perms`/`size_*`/`mtime` |
+| `src/render.cyr`  | Pure formatters: `lower_byte`, `_str_cmp_ci` / `str_lt_ci` (the listing order), `sort_entries` (stdlib `vec_sort_by`), `print_entries`, `format_perms`/`size_*`/`mtime` |
 | `src/columns.cyr` | TTY width probe (darshana `tty_winsize`), column-fit picker over written widths, `_columns_emit` (vertical-then-horizontal) |
 | `src/long.cyr`    | Long-format orchestrator (two-pass for size + mime alignment), `render_long_one` for `-l <file>` |
 | `src/tree.cyr`    | Recursive box-drawn rendering + depth-stack bookkeeping |
@@ -71,7 +71,10 @@ existing flag is a 2.x change.
    takes from `cyrius.cyml` → `VERSION`; there is no literal to
    keep in step, and CI fails if one comes back.
 4. Update tests in `tests/darshini.tcyr` for any pure helper
-   you added. Filesystem effects are covered by CI smokes
+   you added. If output changed on purpose, regenerate the golden
+   examples (`sh tests/examples.sh > docs/examples/README.md`);
+   CI fails on a stale copy. An icon or mime edit goes in both the
+   CYML and `src/` — CI's `tests/table-drift.sh` checks they agree. Filesystem effects are covered by CI smokes
    (see `.github/workflows/ci.yml`).
 5. If the feature touches color or cursor positioning, route
    through darshana — color is composed with `tty_sgr_buf` /

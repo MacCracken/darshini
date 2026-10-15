@@ -7,33 +7,29 @@
 
 ## Version
 
-**1.4.1** — code audit and repair sweep, shipped 2026-10-15. Patch
-bump. Toolchain and darshana unchanged (cyrius 6.7.9, darshana 1.3.0).
-Report: [`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md).
+**1.4.2** — internals and CI, shipped 2026-10-15. Patch bump; no output
+byte changes on any target (A/B: 304 / 304 captures identical to 1.4.1,
+plus ~230k lines of real trees). Toolchain and darshana unchanged
+(cyrius 6.7.9, darshana 1.3.0).
 
-- **Security**: a file's mtime past year 9999 put raw terminal-control
-  bytes on the screen (`ESC 7` / `ESC 8` at year ~235,700) and spun
-  `epoch_to_date` for minutes per entry. Now a placeholder. Opens can no
-  longer block on a FIFO swapped in after the stat.
-- **`--git` answers corrected**: `-l --git <file>` (always `?`), a `..`
-  in the path, symlinks into another repo, index v3 / v4 / SHA-256 (a
-  column of `?`), files ≥ 4 GiB and pre-1970 mtimes (always `M`), paths
-  of 4095+ bytes, submodules (now declined, not wrong). Unusable indexes
-  decline the column instead of lying.
-- **Behavior fixes**: `-F` indicators on path arguments and no trailing
-  pad outside the grid; `--` ends the flags; unreadable directories (in
-  `-T`, or a read failing part-way) are reported and fail the run;
-  `--help` / `--version` honor the write-error exit; `-l --mime <file>`
-  shows the column; case-only name collisions sort deterministically;
-  `-h` no longer overflows and gains P / E; `--level` rejects values
-  past 2^31.
-- **Performance**: stdout is buffered (`-l` on 5k entries: 40,000
-  writes → 4, ~1.7× faster); `-T --git` on a 20k-file repo 491 → 77 ms.
-- `--version` comes from `CYRIUS_PKG_VERSION` (no hand-bumped literal).
+- `sort_entries` is the stdlib's `vec_sort_by` (introsort, no
+  allocation) instead of darshini's merge sort — unblocked by 1.4.1's
+  total order. Already-sorted 1k entries 499 → 87 µs; `-T /usr/share`
+  peak RSS 24.8 → 22.7 MB (no scratch vec per directory).
+- CI now *runs* the cross targets: aarch64 suite + fuzz + a 21-mode
+  output-parity matrix against x86_64 under qemu; agnos suite + fuzz
+  under a pinned, checksum-verified mirshi release. The agnos suite is
+  401 / 401 — its two errno assertions now assert agnos's flat `-1`.
+- New CI gates: icon / mime CYML vs compiled tables
+  (`tests/table-drift.sh`), golden examples (`tests/examples.sh`), and a
+  shared parity matrix (`tests/parity.sh`) for the DCE and aarch64 gates.
 
-Prior: **1.4.0** (2026-10-12) — cyrius 6.7.9 + darshana 1.3.0, terminal
-code on darshana's primitives, sanitization on every output path and on
-AGNOS. Earlier releases: see the CHANGELOG.
+Prior: **1.4.1** (2026-10-15) — audit and repair sweep: hostile-mtime
+injection fixed, `--git` corrected (file args, `..`, index v3/v4/SHA-256,
+u32 compare, submodules declined), `-F` / `--` / tree-error / write-error
+fixes, buffered stdout. Report:
+[`../audit/2026-10-15-audit.md`](../audit/2026-10-15-audit.md). Earlier
+releases: see the CHANGELOG.
 
 ## Toolchain
 
@@ -57,9 +53,9 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
   `d_open_probe` / `_data` / `_dir`, `d_fd_regular_size`),
   `classify_path`, `check_dir_readable`, `list_dir_checked` (stdlib
   `dir_list_checked`, all targets), `d_basename`, `ModeBit` enum
-- `src/render.cyr` — `str_lt_ci` (case-insensitive, raw-byte tiebreak),
-  hybrid merge sort, `print_entries`, `format_perms` / `_size_*` /
-  `_mtime`
+- `src/render.cyr` — `_str_cmp_ci` / `str_lt_ci` (case-insensitive,
+  raw-byte tiebreak: a strict total order), `sort_entries` (stdlib
+  `vec_sort_by`), `print_entries`, `format_perms` / `_size_*` / `_mtime`
 - `src/long.cyr` — `-l` (two-pass: collect, then emit aligned) and
   `render_long_one` for a single path
 - `src/columns.cyr` — `term_width` (darshana `tty_winsize`; 0 on agnos
@@ -90,31 +86,39 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 | `--` end of options; `-F` on path arguments; read errors reported | v1.4.1 |
 
 Supported targets: **Linux x86_64, AGNOS**. The aarch64 build matches
-x86_64 byte-for-byte (304 / 304 A/B captures at v1.4.1) but is not
-declared supported (roadmap 1.7.0).
+x86_64 byte-for-byte (304 / 304 A/B captures; CI checks a 21-mode
+matrix on every push since v1.4.2) but is not declared supported
+(roadmap 1.7.0).
 
 ## Tests
 
-- `tests/darshini.tcyr` — **400** assertions (v1.4.1; 301 at v1.4.0).
+- `tests/darshini.tcyr` — **401** assertions (v1.4.2; 400 at v1.4.1,
+  301 at v1.4.0). v1.4.2 added a randomized differential check of the
+  stdlib sort against an insertion-sort reference.
   Pure helpers per module, the sanitizer rule, column math, the chrono
   layout pin, and since v1.4.1: the sort tiebreak and merge path,
   `classify_indicator`, the mtime bound, P / E sizes, `--level` bounds,
   `_long_flag_code`, `d_basename`, hand-built index images (v2, v3
   extended flags, v4 prefix compression, long names, SHA-256, misframing),
   `_git_oid_len`, every `--git` status outcome including the u32 compare
-  and `git_status_for_root`, the hardened magic probe. Cross-targets:
-  aarch64 under `qemu-aarch64` 400 / 400; agnos under mirshi 398 / 400
-  — the two `-ENOENT` assertions fail by agnos's flat `-1` design, as
-  before.
+  and `git_status_for_root`, the hardened magic probe. Cross-targets,
+  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 401 / 401;
+  agnos under mirshi 401 / 401 (its errno assertions expect agnos's flat
+  `-1`).
 - `tests/darshini.fcyr` — 6 fuzz targets with named invariants:
   `.git/index` (v2/v3/v4, SHA-1/SHA-256 framing), `.gitignore` (CRLF
   differential), magic bytes, `_path_join_into` (canary), the name
   sanitizer, the mtime formatter (v1.4.1, mutation-validated). Runs in
   CI since v1.4.1.
 - `tests/darshini.bcyr` — micro-benchmarks (`cyrius bench`).
-- CI (`.github/workflows/ci.yml`) — build, strict lint, tests, fuzz,
-  agnos + aarch64 compile, 22 smoke gates, matrix DCE parity, security
-  scan, docs / version consistency.
+- `tests/parity.sh` (two builds, 21 modes, pipe + PTY),
+  `tests/table-drift.sh` (CYML vs compiled tables),
+  `tests/examples.sh` (regenerates the golden `docs/examples/README.md`)
+  — CI helpers, runnable locally from the repo root.
+- CI (`.github/workflows/ci.yml`) — build, golden examples, strict lint,
+  tests, fuzz, agnos (mirshi) + aarch64 (qemu) suite / fuzz runs and
+  aarch64 output parity, 22 smoke gates, DCE parity, security scan,
+  table drift, docs / version consistency.
 
 ## Dependencies
 
@@ -132,8 +136,7 @@ sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md): 1.4.2 (stdlib sort, cross-target CI
-runs, table-drift gate, golden examples), 1.5.0 (`--git` accuracy),
+See [`roadmap.md`](roadmap.md): 1.5.0 (`--git` accuracy, ADR 0005),
 1.6.0 (display correctness), 1.7.0 (platforms).
 
 ## Known gotchas

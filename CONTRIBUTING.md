@@ -28,7 +28,8 @@ darshini's scope is set by `docs/development/roadmap.md` and the
 - Is this an **icon** addition? Icons are compile-baked: add the entry
   to `icons/default.cyml` **and** `src/icons.cyr` (see
   [ADR 0002](docs/adr/0002-icon-format.md)). Same for mime types
-  (`mime/default.cyml` + `src/mime.cyr`, ADR 0003).
+  (`mime/default.cyml` + `src/mime.cyr`, ADR 0003). CI's
+  `tests/table-drift.sh` fails if the two disagree.
 - Is this for a **shell-script consumer** (machine-readable output)?
   Use `kriya`'s `ls` instead — darshini is for human eyes on TTY.
 

@@ -19,6 +19,13 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
+    env:
+      # The agnos build runs under mirshi (AGNOS→Linux syscall translation,
+      # github.com/MacCracken/mirshi). A test-harness pin, not the toolchain
+      # — CLAUDE.md's "no hardcoded toolchain versions" is about cyrius,
+      # whose pin stays in cyrius.cyml. The release binary is checked
+      # against the release's own SHA256SUMS before it runs.
+      MIRSHI_VERSION: "1.11.3"
     steps:
       - uses: actions/checkout@v4
 
@@ -90,6 +97,18 @@ jobs:
           mkdir -p build
           cyrius build src/main.cyr build/${{ github.event.repository.name }}
 
+      - name: Golden examples (docs/examples/README.md)
+        # v1.4.2: the examples doc is generated from the binary
+        # (tests/examples.sh) and must match what is committed — v1.4.1
+        # found it showing a layout darshini cannot produce. Runs right
+        # after Build, before any step can add entries to the checkout.
+        # On a mismatch: `sh tests/examples.sh > docs/examples/README.md`.
+        run: |
+          set -e
+          sh tests/examples.sh > /tmp/examples.md
+          diff -u docs/examples/README.md /tmp/examples.md \
+            || { echo "docs/examples/README.md is stale — regenerate with tests/examples.sh"; exit 1; }
+
       - name: Test
         # v5.6.28: bare `cyrius test` picks up the [build].test entry
         # AND auto-discovers tests/*.tcyr — avoids the previous
@@ -104,19 +123,52 @@ jobs:
         # invariants, deterministic seed; exits 1 on any violation.
         run: cyrius fuzz
 
-      - name: Cross-target compile (agnos, aarch64)
-        # agnos is a supported target and had no CI gate at all; the
-        # aarch64 build's output matches x86_64's byte-for-byte (verified
-        # per release under qemu-aarch64). Compile both, and the suite for
-        # each, so a target-specific break fails here rather than at the
-        # next manual cross-run. Running them needs mirshi / qemu — see
-        # docs/development/roadmap.md.
+      - name: Cross-target build (agnos, aarch64)
+        # Binaries, suites and fuzz harnesses for both cross targets; the
+        # next two steps run them.
         run: |
           set -e
-          cyrius build --agnos src/main.cyr build/darshini-agnos
-          cyrius build --agnos tests/darshini.tcyr build/tests-agnos
-          cyrius build --aarch64 src/main.cyr build/darshini-aarch64
-          cyrius build --aarch64 tests/darshini.tcyr build/tests-aarch64
+          for t in agnos aarch64; do
+            cyrius build --$t src/main.cyr build/darshini-$t
+            cyrius build --$t tests/darshini.tcyr build/tests-$t
+            cyrius build --$t tests/darshini.fcyr build/fuzz-$t
+          done
+
+      - name: aarch64 — suite, fuzz and output parity under qemu
+        # v1.4.2. The aarch64 build is not yet a declared target, but its
+        # output has matched x86_64's byte-for-byte since v1.4.0; this keeps
+        # it that way: the full suite, the fuzz harness, and tests/parity.sh
+        # (21 modes, pipe + PTY, bytes and exit codes) against the x86_64
+        # binary. Through v1.4.1 CI only compiled it.
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user > /dev/null
+          qemu-aarch64 build/tests-aarch64
+          qemu-aarch64 build/fuzz-aarch64
+          sh tests/parity.sh ./build/${{ github.event.repository.name }} "qemu-aarch64 ./build/${{ github.event.repository.name }}-aarch64"
+
+      - name: agnos — suite and fuzz under mirshi
+        # v1.4.2. agnos is a supported target and through v1.4.0 had no CI
+        # gate; v1.4.1 compiled it. Now the suite (every assertion — the
+        # two errno checks assert agnos's flat -1 there) and the fuzz
+        # harness run under mirshi, plus a listing smoke of the agnos binary.
+        run: |
+          set -e
+          D="$(mktemp -d)"
+          base="https://github.com/MacCracken/mirshi/releases/download/$MIRSHI_VERSION"
+          curl -sSfL -o "$D/mirshi" "$base/mirshi"
+          curl -sSfL -o "$D/SHA256SUMS" "$base/SHA256SUMS"
+          want=$(awk '$2 == "build/mirshi" || $2 == "mirshi" { print $1 }' "$D/SHA256SUMS")
+          got=$(sha256sum "$D/mirshi" | awk '{ print $1 }')
+          test -n "$want" && test "$want" = "$got" \
+            || { echo "::error::mirshi $MIRSHI_VERSION checksum mismatch (want '$want', got '$got')"; exit 1; }
+          chmod +x "$D/mirshi"
+          "$D/mirshi" --root "$PWD" build/tests-agnos | tee /tmp/agnos_tests
+          grep -qE '^[0-9]+ passed, 0 failed' /tmp/agnos_tests || { echo "agnos suite failed"; exit 1; }
+          "$D/mirshi" --root "$PWD" build/fuzz-agnos
+          "$D/mirshi" --root "$PWD" build/darshini-agnos -F src > /tmp/agnos_ls
+          grep -qx 'main.cyr' /tmp/agnos_ls || { echo "agnos listing smoke failed:"; cat /tmp/agnos_ls; exit 1; }
 
       - name: Smoke — listing of the checkout
         # M1 acceptance check: built binary actually lists the
@@ -623,27 +675,15 @@ jobs:
         # build, or the DCE pass dropped a live symbol. The release
         # ships the DCE build. v1.4.1: compares every byte and the exit
         # code across a mode matrix, on a pipe and under a PTY — through
-        # v1.4.0 it grepped six names out of one plain listing.
+        # v1.4.0 it grepped six names out of one plain listing. The matrix
+        # lives in tests/parity.sh (shared with the aarch64 gate) since
+        # v1.4.2.
         run: |
           set -e
           N=build/${{ github.event.repository.name }}
           CYRIUS_DCE=1 cyrius build src/main.cyr $N-dce
           echo "$N-dce: $(wc -c < $N-dce) bytes"
-          fail=0
-          for mode in "" "-1" "-l" "-lh" "-lF" "-F" "-T" "-T -l" "-T --git" "-l --git" "--git" \
-                      "-l --mime" "-d src" "-dF src" "src docs" "-l README.md" "--help" "--version" \
-                      "--bogus" "/nonexistent"; do
-            set +e
-            ./$N $mode > /tmp/dce_a 2>&1; ra=$?
-            ./$N-dce $mode > /tmp/dce_b 2>&1; rb=$?
-            script -qec "./$N $mode" /dev/null > /tmp/dce_ta 2>&1
-            script -qec "./$N-dce $mode" /dev/null > /tmp/dce_tb 2>&1
-            set -e
-            if [ "$ra" != "$rb" ] || ! cmp -s /tmp/dce_a /tmp/dce_b || ! cmp -s /tmp/dce_ta /tmp/dce_tb; then
-              echo "DCE build differs for '$mode' (rc $ra vs $rb)"; fail=1
-            fi
-          done
-          [ $fail -eq 0 ]
+          sh tests/parity.sh ./$N ./$N-dce
 
   security:
     name: Security scan
@@ -734,6 +774,14 @@ jobs:
             else echo "  MISSING: $f"; MISSING=1; fi
           done
           exit $MISSING
+
+      - name: Icon / mime tables match their CYML sources
+        # v1.4.2. icons/default.cyml and mime/default.cyml are the
+        # documented source of truth; src/icons.cyr and src/mime.cyr bake
+        # the same tables. tests/table-drift.sh compares them entry by
+        # entry (ADR 0002 deferred this "until drift becomes a problem";
+        # v1.4.1 found the first one, `xlsx`). No toolchain needed.
+        run: sh tests/table-drift.sh
 
       - name: Verify version consistency
         # Single source of truth is the VERSION file. Derived surfaces:

@@ -45,7 +45,7 @@ Second member of the terminal-aesthetics set:
 
 ## Status
 
-**v1.4.1 stable** — current state in
+**v1.4.2 stable** — current state in
 [state.md](docs/development/state.md), the plan in
 [roadmap.md](docs/development/roadmap.md). v1.0 contract frozen
 ([ADR 0001](docs/adr/0001-color-scheme.md) /
@@ -106,9 +106,8 @@ Feature surface:
   name starts with `-`.
 - **`--help` / `--version`** — standard meta flags.
 
-Next: see the [roadmap](docs/development/roadmap.md) — 1.4.2
-internals, 1.5.0 `--git` accuracy, 1.6.0 display correctness,
-1.7.0 platforms.
+Next: see the [roadmap](docs/development/roadmap.md) — 1.5.0
+`--git` accuracy, 1.6.0 display correctness, 1.7.0 platforms.
 
 ## Build
 
@@ -127,7 +126,7 @@ toolchain on PATH; the version is pinned in `cyrius.cyml`.
 
 ```sh
 cp build/darshini ~/.local/bin/                       # or wherever your PATH points
-darshini --version                                     # → "darshini 1.4.1"
+darshini --version                                     # → "darshini 1.4.2"
 ```
 
 Suggested zsh aliases (the maintainer's
@@ -166,7 +165,7 @@ darshini --help                # full flag reference
 - [`docs/audit/`](docs/audit/) — security + code reviews
   (pre-v1, v1.3.2, v1.4.1)
 - [`docs/benchmarks.md`](docs/benchmarks.md) — perf baseline +
-  optimization history (v1.1.x, v1.4.1)
+  optimization history (v1.1.x, v1.4.1, v1.4.2)
 - [`docs/development/state.md`](docs/development/state.md) —
   live state (version, dep graph, known gotchas)
 - [`docs/development/roadmap.md`](docs/development/roadmap.md) —

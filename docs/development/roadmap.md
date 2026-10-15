@@ -6,7 +6,7 @@
 
 ## Where we are
 
-**v1.4.1** (2026-10-15). The v1.0 contract (M0–M10, shipped
+**v1.4.2** (2026-10-15). The v1.0 contract (M0–M10, shipped
 2026-05-19 → 05-23) is intact: eza-style listing with long format,
 multi-column layout, color, icons, tree mode, a git-status column and a
 mime column, pipe-aware. The 1.x line since has added `--help` /
@@ -36,24 +36,10 @@ darshana's terminal primitives, two security sweeps
 
 - **1.4.1** — ✅ audit and repair sweep
   ([audit](../audit/2026-10-15-audit.md)).
-- **1.4.2** — internals + CI, zero output change:
-  - **Sort on the stdlib.** Replace `render.cyr`'s merge sort with
-    `vec_sort_by` (cycc 6.5.4; O(1) extra memory against the per-call
-    scratch vec). Blocked until v1.4.1 because introsort is unstable
-    and `str_lt_ci` called `README` / `readme` equal; v1.4.1's raw-byte
-    tiebreak makes it a strict total order on distinct names, so the
-    output cannot depend on stability any more. Verify by A/B and the
-    40-entry merge test.
-  - **CI runs the cross targets**, not just compiles them: the suite
-    and the A/B matrix under `qemu-aarch64`, the suite under mirshi for
-    agnos.
-  - **CI table-drift gate**: `icons/default.cyml` vs `src/icons.cyr` and
-    `mime/default.cyml` vs `src/mime.cyr`, entry by entry. ADR 0002
-    deferred this "until drift becomes a problem"; v1.4.1 found the
-    first drift (`xlsx`).
-  - **Golden examples**: regenerate `docs/examples/` from the binary
-    and check them in CI, so the doc can't show a layout darshini
-    cannot produce again.
+- **1.4.2** — ✅ internals + CI, zero output change: the stdlib sort
+  (`vec_sort_by`), the cross targets run in CI (aarch64 suite + fuzz +
+  output parity under qemu; agnos suite + fuzz under mirshi), the
+  icon / mime table-drift gate, and golden examples.
 
 ### 1.5.0 — `--git` accuracy (ADR 0005)
 
@@ -100,8 +86,9 @@ ADR, even though every change is a fix.
 ### 1.7.0 — platforms
 
 - **aarch64 Linux, declared.** Output has matched x86_64 byte-for-byte
-  since v1.4.0 (304 / 304 captures at v1.4.1). What remains is the
-  owner's call plus the 1.4.2 CI gate.
+  since v1.4.0 (304 / 304 captures at v1.4.1), and since 1.4.2 CI runs
+  its suite, fuzz harness and an output-parity matrix under qemu on
+  every push. What remains is the owner's call — and a release asset.
 - **AGNOS `lstat`** (#102, agnos 1.56.53): symlinks currently render as
   their target there. Changes agnos output; needs a mirshi run proving
   #102 is emulated.

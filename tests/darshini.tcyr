@@ -155,6 +155,36 @@ fn mk_ctx(paths, mtimes, sizes, patterns, listing): i64 {
 }
 
 
+# v1.4.2: an independent reference for sort_entries — a plain insertion
+# sort over str_lt_ci — and a small LCG to feed it names.
+var _t_lcg = 12345;
+fn t_rand(n): i64 {
+    _t_lcg = (_t_lcg * 1103515245 + 12345) & 0x7FFFFFFF;
+    return (_t_lcg >> 8) % n;
+}
+
+fn ref_sort(v): i64 {
+    var n = vec_len(v);
+    var i = 1;
+    while (i < n) {
+        var cur = vec_get(v, i);
+        var j = i;
+        var moving = 1;
+        while (moving == 1) {
+            if (j == 0) { moving = 0; }
+            else {
+                if (str_lt_ci(cur, vec_get(v, j - 1)) == 1) {
+                    vec_set(v, j, vec_get(v, j - 1));
+                    j = j - 1;
+                } else { moving = 0; }
+            }
+        }
+        vec_set(v, j, cur);
+        i = i + 1;
+    }
+    return 0;
+}
+
 fn make_str(c): i64 {
     return str_clone(str_from(c));
 }
@@ -247,9 +277,9 @@ fn main(): i64 {
     assert_eq(str_eq(vec_get(perm1, 0), make_str("README")), 1, "collision order: README first");
     assert_eq(str_eq(vec_get(perm1, 2), make_str("readme")), 1, "collision order: readme last");
 
-    # The merge path: every case above is below the 16-entry insertion
-    # cutoff, so _merge / _merge_sort had no correctness assertion. 40
-    # names in reverse order exercise both halves and the copy-back.
+    # Above the 16-entry insertion cutoff (added at v1.4.1 for the merge
+    # sort; still the stdlib introsort's cutoff since v1.4.2): 40 names in
+    # reverse order exercise the partitioning path.
     var big = vec_new();
     var mg_i = 39;
     while (mg_i >= 0) {
@@ -268,6 +298,45 @@ fn main(): i64 {
         if (str_lt_ci(vec_get(big, mg_k - 1), vec_get(big, mg_k)) == 0) { big_ok = 0; }
         mg_k = mg_k + 1;
     }
+    # v1.4.2: sort_entries is the stdlib introsort; check it against the
+    # insertion-sort reference on random name sets — 1..6 bytes from a
+    # tiny alphabet with both cases, so case-only collisions, shared
+    # prefixes and prefix-of-another names are common. Names are unique
+    # within a set, as in a directory.
+    var rnd_ok = 1;
+    var rnd_round = 0;
+    var alpha = "aAbB_.0";
+    while (rnd_round < 30) {
+        var want_n = 1 + t_rand(300);
+        var names = map_new_str();
+        var rv = vec_new();
+        var tries = 0;
+        while (vec_len(rv) < want_n) {
+            if (tries > want_n * 20) { want_n = vec_len(rv); }
+            else {
+                var rn_len = 1 + t_rand(6);
+                var rn_buf = alloc(rn_len + 1);
+                var q = 0;
+                while (q < rn_len) { store8(rn_buf + q, load8(alpha + t_rand(7))); q = q + 1; }
+                store8(rn_buf + rn_len, 0);
+                var ns = str_from(rn_buf);
+                if (map_has(names, ns) == 0) { map_set(names, ns, 1); vec_push(rv, ns); }
+            }
+            tries = tries + 1;
+        }
+        var rcopy = vec_new();
+        var rq = 0;
+        while (rq < vec_len(rv)) { vec_push(rcopy, vec_get(rv, rq)); rq = rq + 1; }
+        sort_entries(rv);
+        ref_sort(rcopy);
+        rq = 0;
+        while (rq < vec_len(rv)) {
+            if (str_eq(vec_get(rv, rq), vec_get(rcopy, rq)) == 0) { rnd_ok = 0; }
+            rq = rq + 1;
+        }
+        rnd_round = rnd_round + 1;
+    }
+    assert_eq(rnd_ok, 1, "stdlib sort == insertion-sort reference on 30 random sets");
     assert_eq(vec_len(big), 40, "merge path: 40 entries kept");
     assert_eq(big_ok, 1, "merge path: 40 reversed entries come out ascending");
     assert_eq(str_eq(vec_get(big, 0), make_str("e00")), 1, "merge path: first = e00");
@@ -276,11 +345,21 @@ fn main(): i64 {
     test_group("classify_path");
     assert_eq(classify_path("README.md"), 0, "README.md is non-dir");
     assert_eq(classify_path("src"), 1, "src/ is dir");
+    # agnos reports a flat -1, not -errno (docs/architecture/002); assert
+    # each target's real contract so the suite is green on all three.
+    #ifdef CYRIUS_TARGET_AGNOS
+    assert_eq(classify_path("./absolutely-nope-no-such-path-xyzzy"), 0 - 1, "missing path -> -1 (agnos)");
+    #else
     assert_eq(classify_path("./absolutely-nope-no-such-path-xyzzy"), 0 - ENOENT, "missing path -> -ENOENT");
+    #endif
 
     test_group("check_dir_readable");
     assert_eq(check_dir_readable("src"), 0, "src/ readable -> 0");
+    #ifdef CYRIUS_TARGET_AGNOS
+    assert_eq(check_dir_readable("./absolutely-nope-no-such-path-xyzzy"), 0 - 1, "missing -> -1 (agnos)");
+    #else
     assert_eq(check_dir_readable("./absolutely-nope-no-such-path-xyzzy"), 0 - ENOENT, "missing -> -ENOENT");
+    #endif
 
     # ============================================================
     # M2 — long-format column formatters

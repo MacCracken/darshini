@@ -174,3 +174,25 @@ runs only when two names compare equal ignoring case.
 On a terminal stdout is line-buffered rather than block-buffered, so
 `-T` still streams line by line; the win there is the per-row pieces
 (padding spaces, connectors, escapes) collapsing into one write per line.
+
+## v1.4.2 refresh — 2026-10-15: stdlib sort
+
+`sort_entries` moved from darshini's hybrid merge sort to the stdlib's
+`vec_sort_by` (introsort with an insertion cutoff and an O(n)
+already-sorted pre-scan, no allocation). Output is byte-identical (A/B
+304 / 304, ~230k lines of real trees); `cyrius bench`, stable across
+repeated runs:
+
+| Path | v1.4.1 (merge) | v1.4.2 (stdlib) |
+|---|---|---|
+| `sort_entries` best=5 | 590 ns | 404 ns |
+| `sort_entries` best=100 | 29.2 µs | 8.5 µs |
+| `sort_entries` best=1000 | 499 µs | 88 µs |
+| `sort_entries` worst=100 | 70.5 µs | 29.1 µs |
+| `sort_entries` worst=1000 | 827 µs | 470 µs |
+
+Best-case 1k is back near v1.0's insertion-sort 112 µs while keeping an
+O(n log n) worst case. `-T /usr/share` peak RSS 24.8 → 22.7 MB — the
+merge sort's n-slot scratch vec per directory is gone. Whole-listing
+times move within noise (sorting was never the dominant cost; lstat is).
+

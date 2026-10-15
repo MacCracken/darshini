@@ -4,6 +4,65 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-10-15
+
+Internals and CI, the 1.4.x step the 1.4.1 roadmap laid out. Patch bump.
+**No output byte changes**: the A/B harness (76 modes × pipe + PTY at three
+widths, 304 captures) is identical to 1.4.1, as is `-T` over `/usr/share`,
+`/usr/lib` and `/usr/include` and a 20k-file repo (~230k lines). Toolchain
+and darshana unchanged (cyrius 6.7.9, darshana 1.3.0).
+
+### Changed
+
+- **`sort_entries` is the stdlib's `vec_sort_by`** (cycc 6.5.4) — introsort
+  with an insertion cutoff and an O(n) already-sorted pre-scan, O(n log n)
+  worst case, no allocation — replacing darshini's own hybrid merge sort,
+  which allocated an n-slot scratch vec per call that the bump allocator
+  never reclaimed (one per directory under `-T`). The stdlib sort is
+  unstable, which blocked this until 1.4.1 gave the listing order a raw-byte
+  tiebreak: `_str_cmp_ci` is a strict total order on distinct names, so no
+  two entries of a directory compare equal and tie-breaking cannot show.
+  `str_lt_ci` is now `_str_cmp_ci(a, b) < 0`. `cyrius bench`: already-sorted
+  1k entries 499 → 88 µs, reversed 827 → 470 µs; `-T /usr/share` peak RSS
+  24.8 → 22.7 MB. Whole-listing times move within noise.
+
+### Tests
+
+- **400 → 401 assertions**: the stdlib sort checked against an independent
+  insertion-sort reference on 30 random name sets weighted toward case-only
+  collisions and shared prefixes (mutation-checked: flipping the tiebreak
+  fails the suite). The two errno assertions now assert each target's real
+  contract — `-ENOENT` on Linux, agnos's flat `-1` — so the suite is green on
+  all three targets: x86_64, aarch64 and agnos **401 / 401**.
+- **CI runs the cross targets** instead of compiling them: the aarch64
+  suite, fuzz harness and output parity against x86_64 under `qemu-aarch64`;
+  the agnos suite and fuzz harness, plus a listing smoke, under mirshi — a
+  pinned release (`MIRSHI_VERSION`, a test-harness pin; the cyrius pin stays
+  in `cyrius.cyml`) checked against the release's own `SHA256SUMS` before it
+  runs.
+- **`tests/parity.sh`**: two builds, 21 modes, bytes and exit codes on a pipe
+  and under a PTY. Shared by the DCE gate (which carried its own copy of the
+  matrix) and the new aarch64 gate.
+- **`tests/table-drift.sh`**: `icons/default.cyml` vs `src/icons.cyr` and
+  `mime/default.cyml` vs `src/mime.cyr`, entry by entry (82 and 79 entries) —
+  the gate ADR 0002 deferred "until drift becomes a problem"; 1.4.1 found the
+  first one (`xlsx`). POSIX shell + awk. Mutation-checked: a removed, renamed
+  or re-valued entry fails it. The `[magic_bytes]` signatures are code, not a
+  table, and stay a review item.
+- **Golden examples**: `tests/examples.sh` regenerates
+  `docs/examples/README.md` from the binary and CI fails if the committed copy
+  differs (checked: a stale line or a new source file both fail it). The
+  long-format example now runs on a generated fixture with fixed sizes and
+  UTC mtimes and no directories, so the output is the same on any filesystem;
+  the "outside a repo" example uses a temp directory instead of `/usr`.
+
+### Docs
+
+- Roadmap: 1.4.2 marked done; the aarch64 item in 1.7.0 is now only the
+  owner's call plus a release asset. `state.md`, `benchmarks.md` (v1.4.2 sort
+  table), the getting-started guide and CONTRIBUTING (the new gates) and
+  architecture note 003 (the sort scratch is gone) updated.
+
 ## [1.4.1] - 2026-10-15
 
 Code audit and repair sweep. Three independent audit lenses (listing

@@ -1,0 +1,98 @@
+# GENERATED from mime/default.cyml by tests/gen-tables.sh — do not edit.
+# After editing the CYML, regenerate:
+#   sh tests/gen-tables.sh mime > src/mime_table.cyr
+# CI regenerates this file and fails on any difference (v1.7.0).
+# Each function walks one table in file order and returns the mapped
+# string, or 0 when no entry matches.
+
+# [filenames]: exact, case-sensitive basename.
+fn _mime_tbl_filename(name): i64 {
+    if (_icons_eq_cstr(name, "Makefile") == 1)       { return "text/x-makefile"; }
+    if (_icons_eq_cstr(name, "Dockerfile") == 1)     { return "text/x-dockerfile"; }
+    if (_icons_eq_cstr(name, "LICENSE") == 1)        { return "text/plain"; }
+    if (_icons_eq_cstr(name, "VERSION") == 1)        { return "text/plain"; }
+    if (_icons_eq_cstr(name, "README") == 1)         { return "text/plain"; }
+    if (_icons_eq_cstr(name, "CHANGELOG") == 1)      { return "text/plain"; }
+    if (_icons_eq_cstr(name, ".gitignore") == 1)     { return "text/x-gitignore"; }
+    if (_icons_eq_cstr(name, ".gitattributes") == 1) { return "text/plain"; }
+    return 0;
+}
+
+# [extensions]: the lowercased text after the last "." (0 when there is none).
+fn _mime_tbl_ext(ext): i64 {
+    if (ext == 0) { return 0; }
+    if (_icons_ext_eq(ext, "cyr") == 1)      { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext, "tcyr") == 1)     { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext, "bcyr") == 1)     { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext, "fcyr") == 1)     { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext, "scyr") == 1)     { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext, "smcyr") == 1)    { return "application/x-cyrius"; }
+    if (_icons_ext_eq(ext, "cyml") == 1)     { return "application/x-cyml"; }
+    if (_icons_ext_eq(ext, "cyx") == 1)      { return "application/x-cyrius-bytecode"; }
+    if (_icons_ext_eq(ext, "toml") == 1)     { return "application/toml"; }
+    if (_icons_ext_eq(ext, "yml") == 1)      { return "application/x-yaml"; }
+    if (_icons_ext_eq(ext, "yaml") == 1)     { return "application/x-yaml"; }
+    if (_icons_ext_eq(ext, "json") == 1)     { return "application/json"; }
+    if (_icons_ext_eq(ext, "ini") == 1)      { return "text/plain"; }
+    if (_icons_ext_eq(ext, "conf") == 1)     { return "text/plain"; }
+    if (_icons_ext_eq(ext, "env") == 1)      { return "text/plain"; }
+    if (_icons_ext_eq(ext, "md") == 1)       { return "text/markdown"; }
+    if (_icons_ext_eq(ext, "markdown") == 1) { return "text/markdown"; }
+    if (_icons_ext_eq(ext, "rst") == 1)      { return "text/x-rst"; }
+    if (_icons_ext_eq(ext, "txt") == 1)      { return "text/plain"; }
+    if (_icons_ext_eq(ext, "adoc") == 1)     { return "text/asciidoc"; }
+    if (_icons_ext_eq(ext, "log") == 1)      { return "text/plain"; }
+    if (_icons_ext_eq(ext, "html") == 1)     { return "text/html"; }
+    if (_icons_ext_eq(ext, "htm") == 1)      { return "text/html"; }
+    if (_icons_ext_eq(ext, "css") == 1)      { return "text/css"; }
+    if (_icons_ext_eq(ext, "scss") == 1)     { return "text/x-scss"; }
+    if (_icons_ext_eq(ext, "js") == 1)       { return "text/javascript"; }
+    if (_icons_ext_eq(ext, "mjs") == 1)      { return "text/javascript"; }
+    if (_icons_ext_eq(ext, "ts") == 1)       { return "application/typescript"; }
+    if (_icons_ext_eq(ext, "tsx") == 1)      { return "application/typescript"; }
+    if (_icons_ext_eq(ext, "jsx") == 1)      { return "text/javascript"; }
+    if (_icons_ext_eq(ext, "c") == 1)        { return "text/x-c"; }
+    if (_icons_ext_eq(ext, "h") == 1)        { return "text/x-c"; }
+    if (_icons_ext_eq(ext, "cpp") == 1)      { return "text/x-c++"; }
+    if (_icons_ext_eq(ext, "hpp") == 1)      { return "text/x-c++"; }
+    if (_icons_ext_eq(ext, "rs") == 1)       { return "text/rust"; }
+    if (_icons_ext_eq(ext, "go") == 1)       { return "text/x-go"; }
+    if (_icons_ext_eq(ext, "zig") == 1)      { return "text/x-zig"; }
+    if (_icons_ext_eq(ext, "asm") == 1)      { return "text/x-asm"; }
+    if (_icons_ext_eq(ext, "s") == 1)        { return "text/x-asm"; }
+    if (_icons_ext_eq(ext, "py") == 1)       { return "text/x-python"; }
+    if (_icons_ext_eq(ext, "sh") == 1)       { return "application/x-shellscript"; }
+    if (_icons_ext_eq(ext, "bash") == 1)     { return "application/x-shellscript"; }
+    if (_icons_ext_eq(ext, "fish") == 1)     { return "application/x-shellscript"; }
+    if (_icons_ext_eq(ext, "zsh") == 1)      { return "application/x-shellscript"; }
+    if (_icons_ext_eq(ext, "lua") == 1)      { return "text/x-lua"; }
+    if (_icons_ext_eq(ext, "rb") == 1)       { return "text/x-ruby"; }
+    if (_icons_ext_eq(ext, "tar") == 1)      { return "application/x-tar"; }
+    if (_icons_ext_eq(ext, "gz") == 1)       { return "application/gzip"; }
+    if (_icons_ext_eq(ext, "zip") == 1)      { return "application/zip"; }
+    if (_icons_ext_eq(ext, "xz") == 1)       { return "application/x-xz"; }
+    if (_icons_ext_eq(ext, "bz2") == 1)      { return "application/x-bzip2"; }
+    if (_icons_ext_eq(ext, "7z") == 1)       { return "application/x-7z-compressed"; }
+    if (_icons_ext_eq(ext, "png") == 1)      { return "image/png"; }
+    if (_icons_ext_eq(ext, "jpg") == 1)      { return "image/jpeg"; }
+    if (_icons_ext_eq(ext, "jpeg") == 1)     { return "image/jpeg"; }
+    if (_icons_ext_eq(ext, "gif") == 1)      { return "image/gif"; }
+    if (_icons_ext_eq(ext, "svg") == 1)      { return "image/svg+xml"; }
+    if (_icons_ext_eq(ext, "webp") == 1)     { return "image/webp"; }
+    if (_icons_ext_eq(ext, "mp3") == 1)      { return "audio/mpeg"; }
+    if (_icons_ext_eq(ext, "wav") == 1)      { return "audio/wav"; }
+    if (_icons_ext_eq(ext, "flac") == 1)     { return "audio/flac"; }
+    if (_icons_ext_eq(ext, "mp4") == 1)      { return "video/mp4"; }
+    if (_icons_ext_eq(ext, "mkv") == 1)      { return "video/x-matroska"; }
+    if (_icons_ext_eq(ext, "webm") == 1)     { return "video/webm"; }
+    if (_icons_ext_eq(ext, "csv") == 1)      { return "text/csv"; }
+    if (_icons_ext_eq(ext, "xlsx") == 1) {
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    }
+    if (_icons_ext_eq(ext, "sql") == 1)      { return "application/sql"; }
+    if (_icons_ext_eq(ext, "db") == 1)       { return "application/x-sqlite3"; }
+    if (_icons_ext_eq(ext, "sqlite") == 1)   { return "application/x-sqlite3"; }
+    if (_icons_ext_eq(ext, "lock") == 1)     { return "text/plain"; }
+    if (_icons_ext_eq(ext, "pdf") == 1)      { return "application/pdf"; }
+    return 0;
+}

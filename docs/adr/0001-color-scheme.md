@@ -68,10 +68,24 @@ test below is darshana's `tty_winsize` on fd 1 — the same
 - **`--no-color` override**: forces off even on a TTY. Long form
   only — no short form because the M10-frozen flag set keeps the
   short-letter space tight.
-- `NO_COLOR` / `CLICOLOR` env-var honors aren't wired at M4.
-  Defer to a follow-up; the `--no-color` flag covers the
-  "force-off" case and the TTY-detection covers the
-  "script-safe" case.
+- **`NO_COLOR`** (v1.7.0, [no-color.org](https://no-color.org)):
+  set and non-empty acts as `--no-color`, whatever its value (`0`
+  and `false` too); empty or unset changes nothing. It is the only
+  environment input, and it can only turn color off: no `CLICOLOR` /
+  `CLICOLOR_FORCE`, nothing that forces color onto a pipe. Icons,
+  sanitization and the pipe output are unaffected. Through v1.6.1
+  it was not read (M4 deferred it).
+
+### Symlink targets (v1.7.0)
+
+`-l` on a terminal shows `name -> target` (`-T -l` too). The name
+keeps its own color — cyan, or red when broken — and the target is
+colored by what it points to, as `ls` does: the follow-stat's type
+from the table above (blue directory, green executable, uncolored
+plain file), red when the link is broken or loops. `NO_COLOR` /
+`--no-color` leave both plain. The target's color costs one more
+`stat(2)` per symlink row, on a terminal only. A pipe shows no
+target until 2.0.
 
 ## Alternatives considered
 

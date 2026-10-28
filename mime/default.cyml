@@ -1,9 +1,10 @@
 # darshini mime mapping — v1.0 default set.
 #
 # Schema + detection precedence: see docs/adr/0003-mime-detection.md.
-# v0.9.0 compile-bakes the mapping into src/mime.cyr; this CYML
-# is the human-readable source of truth. Edit BOTH when adding
-# a mapping.
+# This file is the source of truth. Since v1.7.0 [filenames] and
+# [extensions] are generated into src/mime_table.cyr; after an edit,
+# regenerate:  sh tests/gen-tables.sh mime > src/mime_table.cyr
+# (CI fails when the committed file differs).
 #
 # Detection order (per ADR 0003):
 #   1. Non-regular file type → inode/*
@@ -120,8 +121,8 @@ lock = "text/plain"
 pdf = "application/pdf"
 
 [magic_bytes]
-# Reserved table — v1.0 compile-bakes the magic-byte set in
-# src/mime.cyr. Listed here for reference / future runtime-CYML.
+# Reference only: the signatures are code in src/mime.cyr (nested
+# byte compares), not generated. An entry here is refused.
 # "7f454c46"   = "application/x-executable"     # ELF
 # "89504e47"   = "image/png"                    # PNG
 # "ffd8ff"     = "image/jpeg"                   # JPEG

@@ -17,7 +17,9 @@ include "src/walk.cyr"
 include "src/cli.cyr"
 include "src/width_table.cyr"
 include "src/width.cyr"
+include "src/icons_table.cyr"
 include "src/icons.cyr"
+include "src/mime_table.cyr"
 include "src/mime.cyr"
 include "src/ignore.cyr"
 include "src/gitcfg.cyr"
@@ -70,7 +72,7 @@ fn emit_help(): i64 {
     print_cstr_fd(STDOUT_FD, "  --git          git status column (./M/?/!) — silent outside a repo\n");
     print_cstr_fd(STDOUT_FD, "  --mime         mime-type column (only under -l)\n\n");
     print_cstr_fd(STDOUT_FD, "decoration flags:\n");
-    print_cstr_fd(STDOUT_FD, "  --no-color     suppress per-entry color (ADR 0001)\n");
+    print_cstr_fd(STDOUT_FD, "  --no-color     suppress per-entry color (ADR 0001); so does a non-empty NO_COLOR\n");
     print_cstr_fd(STDOUT_FD, "  --no-icons     suppress per-entry icons (ADR 0002)\n\n");
     print_cstr_fd(STDOUT_FD, "meta flags:\n");
     print_cstr_fd(STDOUT_FD, "  --help         this text\n");
@@ -213,7 +215,9 @@ fn render_args(args, want_long, want_human, want_single, want_no_color, want_no_
         vec_push(entries, str_from(vec_get(args, i)));
         i = i + 1;
     }
-    var decor = compute_decor_args(entries, want_color, want_icons, want_git, want_mime_eff, want_classify);
+    var report = want_long | want_classify | want_mime_eff;
+    var decor = compute_decor_args(entries, want_color, want_icons, want_git, want_mime_eff, want_classify,
+      report);
     var colors = load64(decor + 0);
     var icons = load64(decor + 8);
     var gitchrs = load64(decor + 16);
@@ -221,9 +225,10 @@ fn render_args(args, want_long, want_human, want_single, want_no_color, want_no_
     var classifies = load64(decor + 32);
     var stats = load64(decor + 40);
     if (want_long == 1) {
-        # `stats` always holds every entry's lstat, so render_long never
-        # joins the (empty) directory with a name.
-        render_long(entries, "", want_human, colors, icons, gitchrs, mimes, classifies, stats);
+        # `stats` always holds every entry's lstat. The empty Str is the
+        # directory a symlink argument's target is read relative to:
+        # path_join returns the path as given (v1.7.0).
+        render_long(entries, str_from(""), want_human, colors, icons, gitchrs, mimes, classifies, stats);
         return 0;
     }
     var tw_eff = tw;
@@ -307,8 +312,11 @@ fn run(path_cstr, want_long, want_human, want_single, want_no_color, want_no_ico
         var any_decor = want_color + want_icons + want_mime_eff + want_classify;
         if (git_ctx != 0) { any_decor = any_decor + 1; }
         if (any_decor > 0) {
+            # v1.7.0: a failed lstat is an error where the stat carries data.
+            var report = want_long | want_classify | want_mime_eff;
+            if (git_ctx != 0) { report = 1; }
             var decor = compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime_eff,
-              want_classify);
+              want_classify, report);
             colors = load64(decor + 0);
             icons = load64(decor + 8);
             gitchrs = load64(decor + 16);
@@ -444,6 +452,8 @@ fn main(): i64 {
     # that term_width makes; for AGNOS see color.cyr.
     set_sanitize_names(tty_isatty(STDOUT_FD));
     set_sanitize_errs(tty_isatty(STDERR_FD));
+    # v1.7.0: `-l` shows ` -> target` for a symlink on a terminal only.
+    set_link_targets(tty_isatty(STDOUT_FD));
     # v1.4.1: stdout is buffered (walk.cyr), line by line on a terminal.
     d_set_line_buffered(tty_isatty(STDOUT_FD));
     var want_long = 0;
@@ -467,6 +477,12 @@ fn main(): i64 {
         tz_init();
         set_mtime_local(1);
     }
+    # v1.7.0: NO_COLOR (no-color.org) set and non-empty acts as
+    # --no-color. Only the off switch (ADR 0001): nothing from the
+    # environment turns color on — no CLICOLOR / CLICOLOR_FORCE — and
+    # icons, sanitization and the pipe output are unaffected.
+    var no_color_env = getenv("NO_COLOR");
+    if (no_color_env != 0) { if (load8(no_color_env) != 0) { want_no_color = 1; } }
     # rc=2: parse_cli already handled --help / --version — exit 0
     # without a listing, unless writing it failed (below). Through v1.4.0
     # this returned before the write-error check, so `darshini --help >
@@ -476,6 +492,8 @@ fn main(): i64 {
     if (rc == 0) {
         listing_rc = run_all(paths, want_long, want_human, want_single, want_no_color, want_no_icons,
           want_tree, level, want_git, want_mime, want_classify, want_dir);
+        # v1.7.0: an entry it needed but could not stat (color.cyr).
+        if (stat_failed() == 1) { listing_rc = 1; }
     }
     d_flush();
     # v1.3.3: a failed or truncated stdout write is an error exit.

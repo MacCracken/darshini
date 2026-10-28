@@ -20,7 +20,10 @@ stub, so `d_fd_regular_size` answers "regular, size unknown" there.)
 `d_lstat` falls back to `d_stat`, so on agnos a symlink reports its target.
 agnos has since grown `lstat#102` (agnos 1.56.53), which the stdlib wraps as
 `sys_lstat(path, len, buf)`; adopting it changes how agnos renders symlinks and
-is tracked in the roadmap, not done.
+is tracked in the roadmap, not done. Two v1.7.0 features wait on it there: a
+broken link cannot be stat'd without it, so the stat-error rule
+(`emit_stat_error`) is off on agnos, and no symlink row ever reaches
+`emit_link_target`.
 (Through v1.3.4 the Linux arm issued the literal 6 too, which is why the
 `--aarch64` build rendered `?` for every stat-derived column — 6 is
 `lsetxattr` there. Since v1.4.0 it calls the stdlib's arch-aware `sys_lstat`,

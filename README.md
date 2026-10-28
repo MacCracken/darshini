@@ -67,7 +67,9 @@ Feature surface:
   case-insensitive alphabetical, error-discriminated.
 - **Long format** (`-l` / `-lh` / `-l <file>`) — aligned
   4-column `permissions size mtime name`; mtimes in UTC, or in
-  your zone with `--local-time` (TZ, else `/etc/localtime`).
+  your zone with `--local-time` (TZ, else `/etc/localtime`). On a
+  terminal a symlink shows `name -> target`, the target colored by
+  what it points to; a pipe keeps name-only rows.
 - **Multi-column auto-layout** — bare `darshini` on a TTY
   packs entries into the widest fit
   (vertical-then-horizontal), measuring names in terminal
@@ -75,11 +77,11 @@ Feature surface:
   single-column; pipe is single-column automatically.
 - **Per-entry color** — dirs blue, executables green,
   symlinks cyan (broken red), fifos yellow, etc.
-  `--no-color` forces plain.
+  `--no-color`, or a non-empty `NO_COLOR`, forces plain.
 - **Per-entry icons** — Nerd Font glyphs per file type /
-  name / extension; human-readable mapping in
-  `icons/default.cyml`. `--no-icons` for terminals
-  without a Nerd Font.
+  name / extension (a directory always gets the folder); the
+  mapping is `icons/default.cyml`, compiled in from it.
+  `--no-icons` for terminals without a Nerd Font.
 - **Tree mode** (`-T` / `-T --level N` / `-lT`) —
   standard box-drawing connectors; composes with long +
   color + icons; doesn't follow symlinks-to-dirs.
@@ -110,10 +112,13 @@ Feature surface:
 - **`--`** — end of flags, so `darshini -- *` is safe when a
   name starts with `-`.
 - **`--help` / `--version`** — standard meta flags.
+- **Exit status** — 0 on success; 1 when a path is missing or
+  unreadable, a write fails, or (Linux) an entry the listing needs
+  to stat can't be (`-l`, `-F`, `--git`, `--mime`, `-T` in an
+  unsearchable directory — named on stderr, as `ls` does).
 
-Next: see the [roadmap](docs/development/roadmap.md) — 1.7.0
-(symlink targets on a terminal, `NO_COLOR`, exit status, icon tables
-from CYML), then 1.8.0 platforms.
+Next: see the [roadmap](docs/development/roadmap.md) — 1.8.0
+platforms (aarch64 declared, AGNOS `lstat` and decoration).
 
 ## Build
 

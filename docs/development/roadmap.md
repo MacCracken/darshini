@@ -23,35 +23,6 @@
 
 ## Path
 
-### 1.7.0 — behavior
-
-Minor bump: `NO_COLOR` is new surface, and terminal `-l` output changes.
-
-- **Symlink targets under `-l` on a terminal**: `link -> target`, as
-  `ls -l` shows it (`-T -l` too). The target comes from `readlink` and
-  is sanitized like a name ([SECURITY.md](../../SECURITY.md)). Pipe
-  output stays name-only until 2.0 (below). `Added`.
-- **Exit 1 when an entry can't be stat'd.** In a readable but
-  unsearchable directory the `?` rows stay and the run exits 1, as
-  `ls` does — the same class as an unreadable directory. `Fixed`.
-- **`NO_COLOR`**: set and non-empty acts as `--no-color`
-  ([no-color.org](https://no-color.org)). Nothing else from the
-  environment: no `CLICOLOR` / `CLICOLOR_FORCE`, nothing that turns
-  color on, icons unaffected. [ADR 0001](../adr/0001-color-scheme.md)
-  gains the rule.
-- **Directories get the folder icon** even when named like a file
-  (`README.d`, `Makefile`), as eza does. Terminal-only;
-  [ADR 0002](../adr/0002-icon-format.md)'s precedence changes.
-  `Changed`.
-- **Icon and mime tables generated from their CYML**
-  ([`icons/`](../../icons/), [`mime/`](../../mime/)): a generator writes
-  `src/icons.cyr` and `src/mime.cyr`, and CI regenerates and diffs
-  (replacing `tests/table-drift.sh`'s comparison). Adding an icon
-  becomes a CYML edit plus a regenerate — CLAUDE.md's "icon set is
-  data" — with no runtime cost
-  ([ADR 0002](../adr/0002-icon-format.md),
-  [ADR 0003](../adr/0003-mime-detection.md)). Zero output change.
-
 ### 1.8.0 — platforms
 
 - **aarch64 Linux, declared**: an aarch64 release asset in
@@ -60,7 +31,10 @@ Minor bump: `NO_COLOR` is new surface, and terminal `-l` output changes.
 - **AGNOS `lstat`** (#102, agnos 1.56.53): symlinks render as their
   target there. Changes agnos output; needs a
   [mirshi](https://github.com/MacCracken/mirshi) run proving #102 is
-  emulated.
+  emulated. It also turns on 1.7.0's stat errors on agnos, which stay
+  off there until then (decided 2026-10-28): without lstat a broken
+  link cannot be stat'd, so it would be reported as an error. The same
+  release can drop `emit_link_target`'s agnos guard.
 - **AGNOS decoration** (color, icons, the grid on the console): the
   per-fd test is agnos 1.57.13's `fd_kind#111`, which
   [darshana](https://github.com/MacCracken/darshana) 1.5.0's
@@ -84,7 +58,7 @@ Scheduled when the dependency lands, not before.
 
 ### 2.0 — when it comes
 
-- **Symlink targets on pipes too** (`-l`): the 1.7.0 terminal behavior
+- **Symlink targets on pipes too** (`-l`): 1.7.0's terminal behavior
   becomes the default everywhere. Changes pipe bytes, hence 2.0.
 - **`release.yml` accepts pre-release tags** (`2.0.0-rc1`), added with
   the first release candidate.

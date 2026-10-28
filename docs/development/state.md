@@ -7,30 +7,28 @@
 
 ## Version
 
-**1.6.1** — toolchain and dependency patch, 2026-10-28: cyrius 6.7.9 →
-6.7.18, darshana 1.3.0 → 1.5.0. No flag, exit code or Linux output byte
-changed (A/B 0 / 276 on x86_64 and aarch64; on agnos under mirshi the
-only difference is mirshi's own `ENOSYS agnos#110` stderr line). On
-agnos ≥ 1.57.13 name sanitization now follows the fd (darshana 1.5.0's
-per-fd `tty_isatty`). CI moved to `ubuntu-26.04` and SHA-pinned
-actions; its first run there showed two gates assumed GNU coreutils
-(26.04 ships uutils), both fixed in the gates, not in darshini.
+**1.7.0** — behavior, 2026-10-28. Minor bump: new input (`NO_COLOR`)
+and terminal `-l` output changes; a correct listing's pipe bytes are
+unchanged. Toolchain and darshana unchanged (cyrius 6.7.18, darshana
+1.5.0).
 
-Prior: **1.6.0** — display correctness, shipped 2026-10-15. Minor bump:
-a new flag and visible output changes, every one a fix or an opt-in.
+- **Symlink targets under `-l` on a terminal** (`link -> target`,
+  `-T -l` too), sanitized, colored by what they point to; `-lF` keeps
+  `@` on the name; pipes stay name-only until 2.0.
+- **`NO_COLOR`** set and non-empty acts as `--no-color` (off switch only).
+- **Unstat-able entries** (an unsearchable directory) are named on
+  stderr, one line each, and exit 1 — where the stat carries data
+  (`-l`, `-F`, `--mime`, `--git` in a repo, `-T`); Linux only until
+  agnos adopts lstat (1.8.0).
+- **A directory gets the folder glyph** whatever its name.
+- **Icon / mime tables generated from their CYML**
+  (`tests/gen-tables.sh`; CI regenerates and diffs).
 
-- **Columns measured in terminal cells**: UTF-8 decoded against a
-  generated Unicode 16 width table (`src/width_table.cyr`, from
-  `tests/gen-width-table.py`); CJK / emoji 2, combining marks 0.
-- **Path arguments are one listing**: color, icons, `--git`, `-F`, the
-  grid, one aligned `-l` table (`darshini *`, `-l a b c`, `-d */`).
-- **`--mime` under `-T -l`** (was silently ignored).
-- **`--local-time`** (opt-in; UTC stays default): TZif files and POSIX
-  TZ strings with glibc's semantics, verified against `date(1)` for 33
-  zones and TZ forms (`tests/tz-parity.sh`).
-- **Pre-1970 mtimes render as dates** (Hinnant's civil algorithm; was
-  the `????` placeholder since v1.3.2).
-
+Prior: **1.6.1** — toolchain and dependency patch, 2026-10-28 (cyrius
+6.7.18, darshana 1.5.0, CI on `ubuntu-26.04` with SHA-pinned actions;
+two gates fixed for 26.04's uutils coreutils). **1.6.0** — display
+correctness: columns in terminal cells, path arguments as one decorated
+listing, `--local-time` with glibc's TZ semantics, pre-1970 dates.
 Earlier: **1.5.0** — `--git` reimplements git's rules
 ([ADR 0005](../adr/0005-git-status-semantics.md)). **1.4.x** — audit
 and repair sweep, stdlib sort, CI cross-target runs. Earlier releases:
@@ -71,16 +69,21 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 - `src/tz.cyr` — civil-date arithmetic and `--local-time`: TZif reader,
   POSIX TZ rules, glibc's posixrules fallback (v1.6.0)
 - `src/long.cyr` — `-l` (two-pass: collect, then emit aligned), for a
-  directory's entries and path arguments alike
+  directory's entries and path arguments alike; `emit_link_target`
+  (` -> target` on a terminal, v1.7.0)
 - `src/columns.cyr` — `term_width` (darshana `tty_winsize`; 0 on agnos
   by decision), `pick_cols`, `render_columns`
 - `src/color.cyr` — `color_for_mode`, `compute_decor` (one lstat pass
   for every decoration) and `compute_decor_args` (the same for path
   arguments), `emit_decorated`, the untrusted-text writers
   (`_write_name_bytes` / `_write_err_bytes` over darshana's
-  `tty_sanitize_buf`), `emit_error` / `emit_dir_error`
-- `src/icons.cyr` — compile-baked icon table mirroring
-  `icons/default.cyml`
+  `tty_sanitize_buf`), `emit_error` / `emit_dir_error` /
+  `emit_stat_error` + `stat_failed` (v1.7.0)
+- `src/icons.cyr` — the icon lookup chain (directory first, v1.7.0),
+  file-type overrides, fallback glyph
+- `src/icons_table.cyr` / `src/mime_table.cyr` — **generated** from
+  `icons/default.cyml` / `mime/default.cyml` by `tests/gen-tables.sh`
+  (v1.7.0); never edited by hand
 - `src/tree.cyr` — `-T`: depth-stack recursion, read-error reporting
 - `src/ignore.cyr` — git's `wildmatch` (port) and gitignore pattern
   parsing / list matching; pure (v1.5.0)
@@ -92,7 +95,7 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
   excluded-directory inheritance (memoized per directory), submodule
   `HEAD` status, status classifier, per-repo parse cache, prefix set
 - `src/mime.cyr` — inode / filename / extension / exec / magic chain
-  (ADR 0003), compile-baked table mirroring `mime/default.cyml`
+  (ADR 0003) over the generated tables
 
 ## Features
 
@@ -107,6 +110,7 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 | `--` end of options; `-F` on path arguments; read errors reported | v1.4.1 |
 | `--git` with git's own rules: full ignore precedence, submodules, worktrees, `safe.directory` ([ADR 0005](../adr/0005-git-status-semantics.md)) | v1.5.0 |
 | Columns in terminal cells; path arguments as one decorated listing; `-T -l --mime`; `--local-time`; pre-1970 dates | v1.6.0 |
+| Symlink targets on a terminal; `NO_COLOR`; unstat-able entries reported (exit 1); folder glyph for every directory; icon / mime tables generated from CYML | v1.7.0 |
 
 Supported targets: **Linux x86_64, AGNOS**. The aarch64 build matches
 x86_64 byte-for-byte (304 / 304 A/B captures; CI checks a 21-mode
@@ -115,8 +119,9 @@ matrix on every push since v1.4.2) but is not declared supported
 
 ## Tests
 
-- `tests/darshini.tcyr` — **527** assertions (v1.6.0; 463 at v1.5.0,
-  301 at v1.4.0). v1.6.0: terminal cells (CJK, combining, emoji,
+- `tests/darshini.tcyr` — **540** assertions (v1.7.0; 527 at v1.6.0,
+  463 at v1.5.0, 301 at v1.4.0). v1.7.0: the directory-only folder rule,
+  the generated tables. v1.6.0: terminal cells (CJK, combining, emoji,
   malformed), the cells grid, path-argument decoration, civil dates and
   their round trip, POSIX TZ rules, TZif zones. Earlier: v1.5.0: git's 137-row wildmatch table (t3070),
   gitignore pattern semantics, precedence and inheritance, `.git`
@@ -128,8 +133,8 @@ matrix on every push since v1.4.2) but is not declared supported
   extended flags, v4 prefix compression, long names, SHA-256, misframing),
   `_git_oid_len`, every `--git` status outcome including the u32 compare
   and `git_status_for_root`, the hardened magic probe. Cross-targets,
-  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 527 / 527;
-  agnos under mirshi 508 / 508 (no ownership or TZif tests there; its
+  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 540 / 540;
+  agnos under mirshi 521 / 521 (no ownership or TZif tests there; its
   errno assertions expect agnos's flat `-1`).
 - `tests/darshini.fcyr` — 8 fuzz targets with named invariants
   (v1.5.0 added wildmatch vs an independent reference matcher, v1.6.0
@@ -148,7 +153,8 @@ matrix on every push since v1.4.2) but is not declared supported
   locally with the ownership part via
   `unshare --map-root-user --map-auto sh tests/git-parity.sh`),
   `tests/parity.sh` (two builds, 21 modes, pipe + PTY),
-  `tests/table-drift.sh` (CYML vs compiled tables),
+  `tests/gen-tables.sh` (v1.7.0: writes `src/icons_table.cyr` /
+  `src/mime_table.cyr` from the CYML; CI regenerates and diffs),
   `tests/examples.sh` (regenerates the golden `docs/examples/README.md`)
   — CI helpers, runnable locally from the repo root.
 - CI (`.github/workflows/ci.yml`, every job on `ubuntu-26.04`, actions
@@ -179,9 +185,9 @@ sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md): 1.7.0 (symlink targets on a terminal,
-`NO_COLOR`, exit 1 for unstat-able entries, folder icon for directories,
-icon / mime tables generated from CYML), then 1.8.0 (platforms).
+See [`roadmap.md`](roadmap.md): 1.8.0 (platforms — aarch64 declared,
+AGNOS `lstat`, which also turns on 1.7.0's stat errors there, and AGNOS
+decoration), then 2.0.
 
 ## Known gotchas
 
@@ -195,7 +201,8 @@ icon / mime tables generated from CYML), then 1.8.0 (platforms).
   must call `d_flush()` before exiting.
 - **Untrusted text has exactly two writers**: `_write_name_bytes`
   (stdout) and `_write_err_bytes` (stderr) in `color.cyr`. Anything
-  darshini prints that it did not author goes through one of them.
+  darshini prints that it did not author goes through one of them —
+  since v1.7.0 that includes a symlink's target (via `emit_decorated`).
   Metadata is untrusted too — `format_mtime` bounds the year for that
   reason.
 - **mtime is UTC by default** (the v1.0 locale-free contract);
@@ -227,6 +234,17 @@ icon / mime tables generated from CYML), then 1.8.0 (platforms).
   and can silently pass a negative one — use `grep … > /dev/null`. An
   oracle that must be GNU says so by name (`tests/tz-parity.sh` →
   `gnudate`). Replay CI in an `ubuntu:26.04` container to see it.
+- **Stat errors are reported once, by whoever lstats** (v1.7.0). The
+  decor pass reports when its caller passes `report` (the stat carries
+  data: `-l`, `-F`, `--mime`, `--git` with a repo); `render_long`
+  reports only on its own lstat path (no decor pass); the tree always.
+  A new lstat site must pick one of those, or an entry is reported
+  twice or not at all. `emit_stat_error` is a no-op on agnos until
+  lstat#102.
+- **Generated tables**: edit `icons/default.cyml` / `mime/default.cyml`,
+  then `sh tests/gen-tables.sh icons > src/icons_table.cyr` (or `mime`).
+  The generator uses byte lengths (`LC_ALL=C`), so gawk and mawk write
+  identical files — checked in an `ubuntu:26.04` container.
 - **`format_mtime` reads chrono's `DateTime` by named offset**
   (`DT_YEAR`…), pinned by assertions against the `dt_*` accessors.
   Migrating to the accessors was measured and rejected (each re-runs

@@ -624,6 +624,93 @@ jobs:
             exit 1
           fi
 
+      - name: Smoke — NO_COLOR turns color off, nothing else
+        # v1.7.0 (no-color.org, ADR 0001): NO_COLOR set and non-empty acts
+        # as --no-color, whatever its value; empty or unset leaves color on.
+        # Icons stay, and nothing in the environment turns color on.
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          for v in 1 0 false; do
+            script -qec "env NO_COLOR=$v $B" /dev/null > /tmp/nc
+            if grep -qP '\x1b\[' /tmp/nc; then echo "NO_COLOR=$v left color on:"; cat -v /tmp/nc; exit 1; fi
+            od -An -tx1 /tmp/nc | grep -E ' (ee|ef) ' > /dev/null \
+              || { echo "NO_COLOR=$v dropped the icons:"; cat -v /tmp/nc; exit 1; }
+          done
+          script -qec "env NO_COLOR= $B" /dev/null > /tmp/nc
+          grep -qP '\x1b\[' /tmp/nc || { echo "an empty NO_COLOR turned color off:"; cat -v /tmp/nc; exit 1; }
+
+      - name: Smoke — an entry that cannot be stat'd fails the run
+        # v1.7.0. In a readable but unsearchable directory (mode 0600)
+        # getdents works and every lstat beneath it is EACCES. Where the
+        # stat carries data (-l, -F, --mime, --git in a repo, -T) the row
+        # keeps its `?` placeholders, stderr names the entry once, as ls
+        # does, and the run exits 1 (through v1.6.1: 0). A plain listing on
+        # a pipe needs no stat and stays 0, and so does a TTY listing, which
+        # lstats only for color and icons. Outputs go to files, not pipes:
+        # under pipefail a pipe would take darshini's exit 1 as the result.
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d)"
+          git init -q "$T/r"
+          for d in "$T/ns" "$T/r/ns"; do mkdir "$d"; touch "$d/f"; chmod 600 "$d"; done
+          for mode in "-l" "-F" "-l --mime" "-T" "-T -l" "--git"; do
+            d="$T/ns"; [ "$mode" = "--git" ] && d="$T/r/ns"
+            set +e; "$B" $mode "$d" > /tmp/ns_out 2> /tmp/ns_err; rc=$?; set -e
+            test "$rc" -eq 1 || { echo "'$mode': expected exit 1, got $rc"; exit 1; }
+            grep -qx "darshini: $d/f: permission denied" /tmp/ns_err \
+              || { echo "'$mode': no diagnostic:"; cat /tmp/ns_err; exit 1; }
+            test "$(wc -l < /tmp/ns_err)" -eq 1 || { echo "'$mode': not one line:"; cat /tmp/ns_err; exit 1; }
+            grep -q 'f$' /tmp/ns_out || { echo "'$mode': the row is gone:"; cat /tmp/ns_out; exit 1; }
+          done
+          "$B" -l "$T/ns" > /tmp/ns_out 2> /dev/null || true
+          grep -qx '?????????? ? ????-??-?? ??:?? f' /tmp/ns_out || { echo "-l lost its ? row:"; cat /tmp/ns_out; exit 1; }
+          "$B" "$T/ns" > /tmp/ns_out 2> /tmp/ns_err || { echo "plain listing on a pipe exited non-zero"; exit 1; }
+          test ! -s /tmp/ns_err || { echo "plain listing printed:"; cat /tmp/ns_err; exit 1; }
+          script -qec "$B $T/ns; echo rc=\$?" /dev/null | tr -d '\r' > /tmp/ns_tty
+          grep -qx 'rc=0' /tmp/ns_tty || { echo "TTY listing (color/icons only) did not exit 0:"; cat /tmp/ns_tty; exit 1; }
+          chmod 700 "$T/ns" "$T/r/ns"
+
+      - name: Smoke — symlink targets under -l on a TTY, name-only on a pipe
+        # v1.7.0. On a terminal `-l` (and `-T -l`) shows `link -> target`,
+        # the target colored by what it points to (blue directory, red when
+        # broken; ADR 0001); under -F the `@` stays on the name. A pipe keeps
+        # name-only rows until 2.0, because scripts read them.
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d)"
+          cd "$T"
+          mkdir d; touch f; ln -s d to_dir; ln -s f to_file; ln -s nowhere broken
+          script -qec "$B -l --no-color --no-icons" /dev/null | tr -d '\r' > tty
+          for want in ' to_dir -> d' ' to_file -> f' ' broken -> nowhere'; do
+            grep -q -- "$want\$" tty || { echo "missing '$want':"; cat tty; exit 1; }
+          done
+          script -qec "$B -T -l --no-color --no-icons" /dev/null | tr -d '\r' > tty
+          grep -q -- ' to_dir -> d$' tty || { echo "-T -l: no target:"; cat tty; exit 1; }
+          script -qec "$B -lF --no-color --no-icons" /dev/null | tr -d '\r' > tty
+          grep -q -- ' to_dir@ -> d$' tty || { echo "-lF: the @ left the name:"; cat tty; exit 1; }
+          script -qec "$B -l --no-icons" /dev/null > tty
+          grep -qP 'broken\x1b\[0m -> \x1b\[31mnowhere\x1b\[0m' tty || { echo "broken target not red:"; cat -v tty; exit 1; }
+          grep -qP 'to_dir\x1b\[0m -> \x1b\[34md\x1b\[0m' tty || { echo "directory target not blue:"; cat -v tty; exit 1; }
+          "$B" -l > pipe
+          if grep -q -- ' -> ' pipe; then echo "a pipe got link targets:"; cat pipe; exit 1; fi
+          grep -q ' to_dir$' pipe || { echo "pipe row changed:"; cat pipe; exit 1; }
+
+      - name: Smoke — a directory named like a file gets the folder glyph
+        # v1.7.0 (ADR 0002 rule 0). Through v1.6.1 a directory named
+        # `Makefile` or `README.d` took that file's glyph. Every directory
+        # here must show the same glyph as the plain one.
+        run: |
+          set -e
+          B="$PWD/build/${{ github.event.repository.name }}"
+          T="$(mktemp -d)"
+          mkdir "$T/Makefile" "$T/README.d" "$T/.gitignore" "$T/plain"
+          script -qec "$B -1 --no-color $T" /dev/null | tr -d '\r' | LC_ALL=C cut -b1-3 | sort -u > /tmp/glyphs
+          test "$(wc -l < /tmp/glyphs)" -eq 1 || { echo "directories got different glyphs:"; od -c /tmp/glyphs; exit 1; }
+          od -An -tx1 /tmp/glyphs | grep -E ' (ee|ef) ' > /dev/null || { echo "no glyph at all:"; od -c /tmp/glyphs; exit 1; }
+
       - name: Smoke — untrusted names are neutralized on a TTY, raw on a pipe
         # v1.4.0 security contract. A filename is attacker-controlled, and
         # written raw to a terminal it executes control sequences. Covers
@@ -643,13 +730,14 @@ jobs:
           cd "$T"
           touch "$(printf 'a\033[2Jx')" "$(printf 'c1\302\233x')" "$(printf 'r\233x')" "$(printf 'b\033]0;t\007')"
           mkdir "$(printf 'd\033[1A\033[2Kx')" "$(printf 'n\033[1Ax')"
+          ln -s "$(printf 't\033[2Jx\233y')" lnk        # v1.7.0: `-l` shows link targets on a TTY
           chmod 000 "$(printf 'n\033[1Ax')"
           inject() {   # $1 = label, $2 = captured output
             if od -An -tx1 "$2" | grep -E ' (1b|9b)( |$)' > /dev/null; then
               echo "terminal-control byte reached the TTY ($1):"; od -c "$2"; exit 1
             fi
           }
-          for mode in "" "-1" "-l" "-T" "-F" "-lF"; do
+          for mode in "" "-1" "-l" "-T" "-F" "-lF" "-T -l"; do
             # `-T` exits 1 here since v1.4.1 (the mode-000 dir is reported,
             # not drawn as empty); this gate is about bytes, not status.
             script -qec "$B --no-color --no-icons $mode" /dev/null > out || true
@@ -675,6 +763,9 @@ jobs:
           grep -qx 'a?\[2Jx' out || { echo "ESC not shown as ?"; od -c out; exit 1; }
           grep -qx 'c1?x' out    || { echo "encoded C1 not shown as one ?"; od -c out; exit 1; }
           grep -qx 'r?x' out     || { echo "raw 0x9b not shown as ?"; od -c out; exit 1; }
+          script -qec "$B --no-color --no-icons -l ./lnk" /dev/null | tr -d '\r' > out
+          inject "-l link target" out
+          grep -q -- ' -> t?\[2Jx?y$' out || { echo "link target not shown sanitized"; od -c out; exit 1; }
           # Pipe: the true bytes, unchanged.
           "$B" -1 > out
           grep -qx "$(printf 'a\033\\[2Jx')" out || { echo "pipe altered a name"; od -c out; exit 1; }
@@ -847,13 +938,21 @@ jobs:
           done
           exit $MISSING
 
-      - name: Icon / mime tables match their CYML sources
-        # v1.4.2. icons/default.cyml and mime/default.cyml are the
-        # documented source of truth; src/icons.cyr and src/mime.cyr bake
-        # the same tables. tests/table-drift.sh compares them entry by
-        # entry (ADR 0002 deferred this "until drift becomes a problem";
-        # v1.4.1 found the first one, `xlsx`). No toolchain needed.
-        run: sh tests/table-drift.sh
+      - name: Icon / mime tables are generated from their CYML
+        # v1.7.0. src/icons_table.cyr and src/mime_table.cyr are generated
+        # from icons/default.cyml and mime/default.cyml by
+        # tests/gen-tables.sh and committed. Regenerate and require no
+        # difference, so a CYML edit without a regenerate, a hand edit of a
+        # generated file, or a CYML the generator refuses all fail. This
+        # replaced v1.4.2's tests/table-drift.sh, which parsed both sides
+        # and compared them. No toolchain needed.
+        run: |
+          set -e
+          for k in icons mime; do
+            sh tests/gen-tables.sh "$k" > "/tmp/${k}_table.cyr"
+            diff -u "src/${k}_table.cyr" "/tmp/${k}_table.cyr" \
+              || { echo "src/${k}_table.cyr is stale: sh tests/gen-tables.sh $k > src/${k}_table.cyr"; exit 1; }
+          done
 
       - name: Verify version consistency
         # Single source of truth is the VERSION file. Derived surfaces:

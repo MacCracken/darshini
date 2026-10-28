@@ -265,6 +265,9 @@ fn _tree_recurse(dir_str, depth, max_depth, depth_stack,
         var rc = lstat_path(str_data(full), &stat_buf);
         var stat_ok = 0;
         if (rc >= 0) { stat_ok = 1; }
+        # v1.7.0: the tree needs every stat (whether to descend), so a
+        # failure is always reported and fails the run.
+        if (rc < 0) { emit_stat_error(str_data(full), rc); }
         var mime = 0;
         if (want_mime == 1) {
             mime = "application/octet-stream";
@@ -292,6 +295,12 @@ fn _tree_recurse(dir_str, depth, max_depth, depth_stack,
         # No `-F` cell padding: nothing follows the name on a tree line.
         emit_decorated(name, load64(&col_slot), load64(&ic_slot), icon_pad,
           load64(&gc_slot), git_pad, load64(&cl_slot), 0);
+        # v1.7.0: `-T -l` on a terminal shows a symlink's target (long.cyr).
+        if (want_long == 1) { if (rc >= 0) {
+                if ((load32(&stat_buf + STAT_MODE) & S_IFMT) == S_IFLNK) {
+                    emit_link_target(str_data(full), want_color);
+                }
+            } }
         d_write(STDOUT_FD, "\n", 1);
         if (rc >= 0) {
             var mode = load32(&stat_buf + STAT_MODE);
@@ -318,6 +327,7 @@ fn render_tree(root_cstr, max_depth, want_long, want_human, want_color, want_ico
   want_mime): i64 {
     var stat_buf = alloc(144);
     var rc = lstat_path(root_cstr, stat_buf);
+    if (rc < 0) { emit_stat_error(root_cstr, rc); }   # classify_path passed: a race
     var col_slot[8];
     var ic_slot[8];
     var gc_slot[8];

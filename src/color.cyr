@@ -101,7 +101,12 @@ fn _path_join_into(buf, dir_str, name_str): i64 {
 #
 # Returns a 48-byte heap struct: {colors@0, icons@8, gitchrs@16,
 # mimes@24, classifies@32, stats@40}.
-fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, want_classify): i64 {
+#
+# `report` (v1.7.0): 1 when the caller's listing needs each entry's stat
+# for data — `-l`, `-F`, the `--git` column, `--mime` — so a failed lstat
+# is reported (emit_stat_error) and fails the run. 0 when the pass runs
+# only for color / icons, where the name just renders plain.
+fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, want_classify, report): i64 {
     var colors = 0;
     var icons = 0;
     var gitchrs = 0;
@@ -165,6 +170,7 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, w
             }
         } else {
             if (want_mime == 1) { mm = "application/octet-stream"; }
+            if (report == 1) { emit_stat_error(str_data(path_join(dir_str, name)), rc); }
         }
         if (want_color == 1)    { vec_push(colors, c); }
         if (want_icons == 1)    { vec_push(icons, ic); }
@@ -200,7 +206,11 @@ fn compute_decor(entries, dir_str, want_color, want_icons, git_ctx, want_mime, w
 # Through v1.5.0 a file argument was echoed undecorated (`darshini *`
 # colored the directories' contents but not the files it was handed), and
 # `-l a b c` rendered each row on its own, so sizes did not line up.
-fn compute_decor_args(paths, want_color, want_icons, want_git, want_mime, want_classify): i64 {
+#
+# `report` is compute_decor's (v1.7.0). An argument here already passed
+# classify_path, so its lstat fails only in a race; `--git` reports it
+# when the argument is in a repository, where the column needs the stat.
+fn compute_decor_args(paths, want_color, want_icons, want_git, want_mime, want_classify, report): i64 {
     var colors = 0;
     var icons = 0;
     var mimes = 0;
@@ -250,6 +260,10 @@ fn compute_decor_args(paths, want_color, want_icons, want_git, want_mime, want_c
             }
             if (want_mime == 1) { mm = mime_for_entry(cp, base, mode); }
             if (want_classify == 1) { cl = classify_indicator(mode); }
+        } else {
+            var rep_arg = report;
+            if (want_git == 1) { if (git_open(cp) != 0) { rep_arg = 1; } }
+            if (rep_arg == 1) { emit_stat_error(cp, rc); }
         }
         if (want_color == 1)    { vec_push(colors, c); }
         if (want_icons == 1)    { vec_push(icons, ic); }
@@ -553,4 +567,36 @@ fn emit_dir_error(path_cstr, rc): i64 {
         return emit_error("darshini", path_cstr, "permission denied");
     }
     return emit_error("darshini", path_cstr, "cannot read directory");
+}
+
+# v1.7.0: an entry the listing needed to lstat and could not — in a
+# readable but unsearchable directory (mode 0600: getdents works, every
+# lstat beneath it is EACCES), or one deleted mid-listing. Its row keeps
+# its `?` placeholders; this reports it on stderr, one line per entry as
+# `ls` does, and marks the run failed (main() exits 1). Through v1.6.1
+# such a listing exited 0. Callers report only where the stat carries
+# data — `-l`, `-F`, `--git`, `--mime`, `-T` — not for color or icons
+# alone, as `ls --color` (which reads the type from getdents) exits 0.
+#
+# Not on agnos yet: its stat follows symlinks (walk.cyr d_lstat), so a
+# broken or looping link cannot be stat'd there and would be reported as
+# an error Linux does not have. agnos keeps v1.6.1's behavior — `?` rows,
+# exit 0 — until lstat#102 is adopted (roadmap 1.8.0), which turns this
+# on there too.
+var _stat_failed = 0;
+
+fn stat_failed(): i64 { return _stat_failed; }
+
+fn emit_stat_error(path_cstr, rc): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return 0;
+    #endif
+    _stat_failed = 1;
+    if (rc == 0 - EACCES) {
+        return emit_error("darshini", path_cstr, "permission denied");
+    }
+    if (rc == 0 - ENOENT) {
+        return emit_error("darshini", path_cstr, "no such file or directory");
+    }
+    return emit_error("darshini", path_cstr, "cannot stat");
 }

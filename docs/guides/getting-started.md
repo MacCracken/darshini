@@ -38,11 +38,12 @@ See the README for the recommended zsh alias set
 | `src/walk.cyr`    | Buffered checked writer (`d_write` / `d_flush`), stat / open wrappers, `classify_path`, `check_dir_readable`, `list_dir_checked`, `d_basename`, `ModeBit` enum, `-F` classify indicator |
 | `src/render.cyr`  | Pure formatters: `lower_byte`, `_str_cmp_ci` / `str_lt_ci` (the listing order), `sort_entries` (stdlib `vec_sort_by`), `print_entries`, `format_perms`/`size_*`/`mtime` |
 | `src/columns.cyr` | TTY width probe (darshana `tty_winsize`), column-fit picker over written widths, `_columns_emit` (vertical-then-horizontal) |
-| `src/long.cyr`    | Long-format orchestrator (two-pass for size + mime alignment), `render_long_one` for `-l <file>` |
+| `src/long.cyr`    | Long-format orchestrator (two-pass for size + mime alignment), for a directory's entries and path arguments; `emit_link_target` (` -> target` on a terminal) |
 | `src/tree.cyr`    | Recursive box-drawn rendering + depth-stack bookkeeping |
 | `src/color.cyr`   | Color picker, `compute_decor` (single lstat pass → colors / icons / git / mime / classify vecs), `_path_join_into`, `emit_decorated`, the untrusted-text writers (`_write_name_bytes` / `_write_err_bytes` / `_name_display_len`) |
-| `src/icons.cyr`   | Compile-baked icon lookup chain mirroring `icons/default.cyml` |
-| `src/mime.cyr`    | Inode → filename → ext → exec → magic precedence chain mirroring `mime/default.cyml` |
+| `src/icons_table.cyr` / `src/mime_table.cyr` | Generated from `icons/default.cyml` / `mime/default.cyml` by `tests/gen-tables.sh` — never edited by hand |
+| `src/icons.cyr`   | Icon lookup chain over the generated tables, the file-type overrides and the fallback glyph |
+| `src/mime.cyr`    | Inode → filename → ext → exec → magic precedence chain over the generated tables |
 | `src/ignore.cyr`  | git's `wildmatch` (port) and gitignore pattern parsing / matching — pure, no I/O (ADR 0005) |
 | `src/gitcfg.cyr`  | A minimal git-config reader for `core.excludesFile`, `safe.directory`, `extensions.objectFormat` |
 | `src/git.cyr`     | Repo discovery (physical path, `gitdir:` files, `commondir`), ownership, index v2–v4 parser, ignore precedence and inheritance, submodule `HEAD` status, `git_status_for*` |
@@ -77,9 +78,11 @@ existing flag is a 2.x change.
 4. Update tests in `tests/darshini.tcyr` for any pure helper
    you added. If output changed on purpose, regenerate the golden
    examples (`sh tests/examples.sh > docs/examples/README.md`);
-   CI fails on a stale copy. An icon or mime edit goes in both the
-   CYML and `src/` — CI's `tests/table-drift.sh` checks they agree. Filesystem effects are covered by CI smokes
-   (see `.github/workflows/ci.yml`).
+   CI fails on a stale copy. An icon or mime edit goes in the CYML,
+   then `sh tests/gen-tables.sh icons > src/icons_table.cyr` (or
+   `mime > src/mime_table.cyr`); CI fails when a generated table is
+   stale. Filesystem effects are covered by CI smokes (see
+   `.github/workflows/ci.yml`).
 5. If the feature touches color or cursor positioning, route
    through darshana — color is composed with `tty_sgr_buf` /
    `tty_sgr_reset_buf` inside `emit_decorated` (`src/color.cyr`).
@@ -93,18 +96,21 @@ existing flag is a 2.x change.
 
 ## Adding an icon
 
-1. Edit `icons/default.cyml` (the spec).
-2. Edit `src/icons.cyr` to mirror (compile-baked at v1.x).
+1. Edit `icons/default.cyml` (the source of truth).
+2. Regenerate: `sh tests/gen-tables.sh icons > src/icons_table.cyr`.
 3. CHANGELOG entry under `Added`.
 
-The two files must stay in sync — this is human-enforced at PR
-review. A CI gate that parses the CYML and verifies coverage
-is a v2 candidate. See [ADR 0002](../adr/0002-icon-format.md).
+Never edit `src/icons_table.cyr` by hand: CI regenerates it and
+fails on any difference (v1.7.0). The generator refuses what it
+cannot represent exactly — a key outside `[A-Za-z0-9._+-]`, an
+uppercase extension, a backslash in a value, a duplicate key. See
+[ADR 0002](../adr/0002-icon-format.md).
 
 ## Adding a mime type
 
-Same dance as icons: `mime/default.cyml` (spec) +
-`src/mime.cyr` (compile-baked). See
+The same: edit `mime/default.cyml`, then `sh tests/gen-tables.sh
+mime > src/mime_table.cyr`. Magic-byte signatures are code in
+`src/mime.cyr`, not table entries. See
 [ADR 0003](../adr/0003-mime-detection.md).
 
 ## Pipe-awareness

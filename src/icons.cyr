@@ -1,8 +1,9 @@
 # darshini — per-entry icons (M5).
 #
-# Compile-baked lookup mirroring icons/default.cyml. The CYML
-# file is the human-readable source of truth; this module is
-# what the binary actually consults at runtime.
+# icons/default.cyml is the source of truth. Its tables are
+# generated into src/icons_table.cyr by tests/gen-tables.sh (v1.7.0;
+# through v1.6.1 they were hand-copied here); this module holds the
+# lookup chain, the file-type overrides and the fallback glyph.
 #
 # Public surface:
 #   icon_for_entry(name_str, mode) → cstr glyph bytes (UTF-8) or 0
@@ -14,9 +15,10 @@
 #                                    Pinned by ADR 0002.
 #
 # Lookup precedence (per ADR 0002):
+#   0. a directory → the folder glyph, whatever its name (v1.7.0)
 #   1. exact filename (`Makefile`, `LICENSE`, ...)
 #   2. filename prefix (`README*`, `CHANGELOG*`, ...)
-#   3. file-type override (dir, symlink, fifo, ...)
+#   3. file-type override (symlink, fifo, socket, devices)
 #   4. extension match
 #   5. generic file glyph
 #
@@ -103,116 +105,32 @@ fn _icons_ext_eq(ext_cstr, lit): i64 {
 # without a fallback). Real call sites always pass a real mode
 # and fall through to the generic file glyph at the tail.
 fn icon_for_entry(name, mode): i64 {
-    # 1. Exact filename matches.
-    if (_icons_eq_cstr(name, "Makefile") == 1)        { return ""; }
-    if (_icons_eq_cstr(name, "Dockerfile") == 1)      { return ""; }
-    if (_icons_eq_cstr(name, "LICENSE") == 1)         { return ""; }
-    if (_icons_eq_cstr(name, "VERSION") == 1)         { return ""; }
-    if (_icons_eq_cstr(name, ".gitignore") == 1)      { return ""; }
-    if (_icons_eq_cstr(name, ".gitattributes") == 1)  { return ""; }
-    if (_icons_eq_cstr(name, ".gitkeep") == 1)        { return ""; }
-
-    # 2. Filename prefix matches.
-    if (_icons_starts_with(name, "README") == 1)          { return ""; }
-    if (_icons_starts_with(name, "CHANGELOG") == 1)       { return ""; }
-    if (_icons_starts_with(name, "CONTRIBUTING") == 1)    { return ""; }
-    if (_icons_starts_with(name, "CODE_OF_CONDUCT") == 1) { return ""; }
-    if (_icons_starts_with(name, "SECURITY") == 1)        { return ""; }
-
-    # 3. File-type overrides. Directories / symlinks / etc. trump
-    #    the extension lookup so a directory named "foo.md" gets
-    #    the folder glyph, not the markdown glyph.
+    # 0. A directory gets the folder glyph whatever its name (v1.7.0,
+    #    ADR 0002, as eza does). Through v1.6.1 the name rules came
+    #    first, so a directory named `Makefile` or `README.d` showed a
+    #    file's glyph.
     var fmt = mode & S_IFMT;
-    if (fmt == S_IFDIR)  { return ""; }   # folder
+    if (fmt == S_IFDIR) { return ""; }
+
+    # 1. Exact filename, 2. filename prefix: the [filenames] and
+    #    [filename_prefixes] tables (src/icons_table.cyr, generated).
+    var g = _icons_tbl_filename(name);
+    if (g != 0) { return g; }
+    g = _icons_tbl_prefix(name);
+    if (g != 0) { return g; }
+
+    # 3. File-type overrides. They trump the extension lookup (a
+    #    symlink named "notes.md" gets the link glyph) but not the
+    #    name rules: a symlink named README keeps the README glyph.
     if (fmt == S_IFLNK)  { return ""; }   # link
     if (fmt == S_IFIFO)  { return ""; }   # sign-out (fifo)
     if (fmt == S_IFSOCK) { return ""; }   # share-alt (socket)
     if (fmt == S_IFBLK)  { return ""; }   # server (block dev)
     if (fmt == S_IFCHR)  { return ""; }   # server (char dev)
 
-    # 4. Extension lookup.
-    var ext = _icons_ext_of(name);
-    # Cyrius ecosystem
-    if (_icons_ext_eq(ext, "cyr") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "tcyr") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "bcyr") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "fcyr") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "scyr") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "smcyr") == 1) { return ""; }
-    if (_icons_ext_eq(ext, "cyml") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "cyx") == 1)   { return ""; }
-    # Config formats
-    if (_icons_ext_eq(ext, "toml") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "yml") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "yaml") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "json") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "ini") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "conf") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "env") == 1)   { return ""; }
-    # Documentation
-    if (_icons_ext_eq(ext, "md") == 1)       { return ""; }
-    if (_icons_ext_eq(ext, "markdown") == 1) { return ""; }
-    if (_icons_ext_eq(ext, "rst") == 1)      { return ""; }
-    if (_icons_ext_eq(ext, "txt") == 1)      { return ""; }
-    if (_icons_ext_eq(ext, "adoc") == 1)     { return ""; }
-    # Web
-    if (_icons_ext_eq(ext, "html") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "htm") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "css") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "scss") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "js") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "mjs") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "ts") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "tsx") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "jsx") == 1)   { return ""; }
-    # Systems
-    if (_icons_ext_eq(ext, "c") == 1)     { return ""; }
-    if (_icons_ext_eq(ext, "h") == 1)     { return ""; }
-    if (_icons_ext_eq(ext, "cpp") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "hpp") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "rs") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "go") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "zig") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "asm") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "s") == 1)     { return ""; }
-    # Scripting
-    if (_icons_ext_eq(ext, "py") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "sh") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "bash") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "fish") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "zsh") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "lua") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "rb") == 1)    { return ""; }
-    # Archives
-    if (_icons_ext_eq(ext, "tar") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "gz") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "zip") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "xz") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "bz2") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "7z") == 1)    { return ""; }
-    # Images
-    if (_icons_ext_eq(ext, "png") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "jpg") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "jpeg") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "gif") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "svg") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "webp") == 1)  { return ""; }
-    # Audio + video
-    if (_icons_ext_eq(ext, "mp3") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "wav") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "flac") == 1)  { return ""; }
-    if (_icons_ext_eq(ext, "mp4") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "mkv") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "webm") == 1)  { return ""; }
-    # Data
-    if (_icons_ext_eq(ext, "csv") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "xlsx") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "sql") == 1)    { return ""; }
-    if (_icons_ext_eq(ext, "db") == 1)     { return ""; }
-    if (_icons_ext_eq(ext, "sqlite") == 1) { return ""; }
-    # Logs + lock
-    if (_icons_ext_eq(ext, "log") == 1)   { return ""; }
-    if (_icons_ext_eq(ext, "lock") == 1)  { return ""; }
+    # 4. Extension: the [extensions] table.
+    g = _icons_tbl_ext(_icons_ext_of(name));
+    if (g != 0) { return g; }
 
     # 5. Generic file glyph fallback.
     return "";

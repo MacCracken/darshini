@@ -111,9 +111,15 @@ md = "text/markdown"
 ### Compile-baked vs runtime CYML parse
 
 Same call as ADR 0002 for icons: `mime/default.cyml` is the
-spec; `src/mime.cyr` is the implementation. Edit both when
-adding a mapping. Runtime CYML loading is a v1.1 candidate
-when the cost-benefit changes.
+source of truth and is not read at runtime. Since v1.7.0 its
+`[filenames]` and `[extensions]` tables are generated into
+`src/mime_table.cyr` (`sh tests/gen-tables.sh mime >
+src/mime_table.cyr`) and CI fails on a stale copy; the inode types,
+the `[magic_bytes]` signatures (nested byte compares) and the
+fallbacks stay code in `src/mime.cyr`, and the generator refuses an
+entry under `[magic_bytes]`. Through v1.6.1 both tables were
+hand-copied. Runtime CYML loading is a v1.1 candidate when the
+cost-benefit changes.
 
 ### Column placement
 

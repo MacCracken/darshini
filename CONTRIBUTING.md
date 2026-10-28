@@ -25,11 +25,12 @@ darshini's scope is set by `docs/development/roadmap.md` and the
 - Is this **explicitly out of scope** (gitignore-aware filtering,
   alternate sort orders, dotfile config)? Please open an issue
   for discussion first; v1.0 has hard boundaries.
-- Is this an **icon** addition? Icons are compile-baked: add the entry
-  to `icons/default.cyml` **and** `src/icons.cyr` (see
-  [ADR 0002](docs/adr/0002-icon-format.md)). Same for mime types
-  (`mime/default.cyml` + `src/mime.cyr`, ADR 0003). CI's
-  `tests/table-drift.sh` fails if the two disagree.
+- Is this an **icon** addition? Add the entry to `icons/default.cyml`
+  and regenerate `sh tests/gen-tables.sh icons > src/icons_table.cyr`
+  (see [ADR 0002](docs/adr/0002-icon-format.md)). Same for mime types:
+  `mime/default.cyml`, then `sh tests/gen-tables.sh mime >
+  src/mime_table.cyr` (ADR 0003). Never edit a generated file by hand;
+  CI regenerates both and fails on any difference.
 - Is this for a **shell-script consumer** (machine-readable output)?
   Use `kriya`'s `ls` instead — darshini is for human eyes on TTY.
 

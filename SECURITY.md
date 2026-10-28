@@ -15,8 +15,10 @@ filesystem beyond standard output. The realistic threats:
   a path argument (`darshini *` turns every name in a directory into
   one). **On a terminal**, every untrusted name or path darshini writes
   — listing entries, path arguments listed as non-directories or under `-d`,
-  the multi-path `<dir>:` header, the `-T` root, and paths quoted in
-  error messages on stderr — goes through darshana's
+  the multi-path `<dir>:` header, the `-T` root, a symlink's target
+  under `-l` (v1.7.0, shown only on a terminal; `readlink`, nothing
+  followed), and paths quoted in error messages on stderr, including
+  each entry `-l` cannot stat (v1.7.0) — goes through darshana's
   `tty_sanitize_buf` in `TTY_SANITIZE_UTF8` mode: each C0 control
   (0x00–0x1f), DEL (0x7f), C1 control written as UTF-8 (0xC2 0x80–0x9F),
   and byte that is not part of well-formed UTF-8 (including a raw

@@ -41,8 +41,8 @@
 #
 # M8 coverage (new at v0.9.0):
 #   * _mime_for_inode — file type → inode/* mime
-#   * _mime_for_filename — exact match (not prefix) per ADR 0003
-#   * _mime_for_ext — extension lookup
+#   * _mime_tbl_filename — exact match (not prefix) per ADR 0003
+#   * _mime_tbl_ext — extension lookup
 #   * _mime_for_magic_bytes — synthetic buffers, each magic signature
 #   * mime_for_entry — full precedence chain, fallthrough
 #
@@ -58,7 +58,9 @@ include "src/walk.cyr"
 include "src/cli.cyr"
 include "src/width_table.cyr"
 include "src/width.cyr"
+include "src/icons_table.cyr"
 include "src/icons.cyr"
+include "src/mime_table.cyr"
 include "src/mime.cyr"
 include "src/ignore.cyr"
 include "src/gitcfg.cyr"
@@ -656,7 +658,7 @@ fn main(): i64 {
     vec_push(av, str_from("src"));
     vec_push(av, str_from("src/main.cyr"));
     vec_push(av, str_from("no/such/path"));
-    var ad = compute_decor_args(av, 1, 1, 0, 1, 1);
+    var ad = compute_decor_args(av, 1, 1, 0, 1, 1, 0);
     assert_eq(vec_get(load64(ad), 1), TTY_FG_BLUE, "a directory argument is blue");
     assert_eq(vec_get(load64(ad), 0), 0, "a plain file argument is uncolored");
     assert_eq(streq(vec_get(load64(ad + 8), 0), icon_for_entry(str_from("README.md"), 0x81A4)), 1,
@@ -1001,6 +1003,15 @@ fn main(): i64 {
     assert_eq(streq(icon_lnk, icon_dir_other), 0, "symlink glyph != dir glyph");
     var icon_fifo = icon_for_entry(make_str("pipe"), mode_fifo);
     assert_neq(icon_fifo, 0, "fifo gets fifo glyph");
+    # v1.7.0, ADR 0002 rule 0: a directory gets the folder glyph even when
+    # its name matches a filename or prefix rule (through v1.6.1 it took
+    # the file's glyph) — and only a directory: a symlink or a fifo named
+    # like a file keeps the name's glyph.
+    assert_eq(streq(icon_for_entry(make_str("Makefile"), mode_dir), icon_dir_other), 1, "dir 'Makefile' -> folder");
+    assert_eq(streq(icon_for_entry(make_str("README.d"), mode_dir), icon_dir_other), 1, "dir 'README.d' -> folder");
+    assert_eq(streq(icon_for_entry(make_str(".gitignore"), mode_dir), icon_dir_other), 1, "dir '.gitignore' -> folder");
+    assert_eq(streq(icon_for_entry(make_str("README"), mode_lnk), icon_readme), 1, "symlink 'README' keeps README");
+    assert_eq(streq(icon_for_entry(make_str("Makefile"), mode_fifo), icon_make), 1, "fifo 'Makefile' keeps Makefile");
 
     # Rule 4: extension. .cyr vs .md vs .py — each picks its own.
     var icon_cyr = icon_for_entry(make_str("main.cyr"), mode_reg);
@@ -1689,25 +1700,37 @@ fn main(): i64 {
     assert_eq(streq(mime_blk, "inode/blockdevice"), 1, "blkdev");
     assert_eq(streq(mime_chr, "inode/chardevice"), 1, "chrdev");
 
-    test_group("_mime_for_filename");
+    test_group("_mime_tbl_filename");
     # Exact matches fire
-    assert_eq(streq(_mime_for_filename(make_str("Makefile")), "text/x-makefile"), 1, "Makefile exact");
-    assert_eq(streq(_mime_for_filename(make_str("Dockerfile")), "text/x-dockerfile"), 1, "Dockerfile exact");
-    assert_eq(streq(_mime_for_filename(make_str("LICENSE")), "text/plain"), 1, "LICENSE exact");
+    assert_eq(streq(_mime_tbl_filename(make_str("Makefile")), "text/x-makefile"), 1, "Makefile exact");
+    assert_eq(streq(_mime_tbl_filename(make_str("Dockerfile")), "text/x-dockerfile"), 1, "Dockerfile exact");
+    assert_eq(streq(_mime_tbl_filename(make_str("LICENSE")), "text/plain"), 1, "LICENSE exact");
     # NON-prefix per ADR 0003 — README.md must fall through (return 0)
-    assert_eq(_mime_for_filename(make_str("CHANGELOG.md")), 0, "CHANGELOG.md does NOT match prefix");
-    assert_eq(_mime_for_filename(make_str("README.txt")), 0, "README.txt does NOT match prefix");
-    assert_eq(_mime_for_filename(make_str("Makefile.in")), 0, "Makefile.in does NOT match (longer)");
+    assert_eq(_mime_tbl_filename(make_str("CHANGELOG.md")), 0, "CHANGELOG.md does NOT match prefix");
+    assert_eq(_mime_tbl_filename(make_str("README.txt")), 0, "README.txt does NOT match prefix");
+    assert_eq(_mime_tbl_filename(make_str("Makefile.in")), 0, "Makefile.in does NOT match (longer)");
 
-    test_group("_mime_for_ext");
-    assert_eq(streq(_mime_for_ext("md"), "text/markdown"), 1, "md -> text/markdown");
-    assert_eq(streq(_mime_for_ext("cyr"), "application/x-cyrius"), 1, "cyr -> application/x-cyrius");
-    assert_eq(streq(_mime_for_ext("py"), "text/x-python"), 1, "py -> text/x-python");
-    assert_eq(streq(_mime_for_ext("json"), "application/json"), 1, "json");
-    assert_eq(streq(_mime_for_ext("png"), "image/png"), 1, "png");
-    assert_eq(streq(_mime_for_ext("pdf"), "application/pdf"), 1, "pdf");
-    assert_eq(_mime_for_ext("xyzunknown"), 0, "unknown ext -> 0");
-    assert_eq(_mime_for_ext(0), 0, "null ext -> 0");
+    test_group("_mime_tbl_ext");
+    assert_eq(streq(_mime_tbl_ext("md"), "text/markdown"), 1, "md -> text/markdown");
+    assert_eq(streq(_mime_tbl_ext("cyr"), "application/x-cyrius"), 1, "cyr -> application/x-cyrius");
+    assert_eq(streq(_mime_tbl_ext("py"), "text/x-python"), 1, "py -> text/x-python");
+    assert_eq(streq(_mime_tbl_ext("json"), "application/json"), 1, "json");
+    assert_eq(streq(_mime_tbl_ext("png"), "image/png"), 1, "png");
+    assert_eq(streq(_mime_tbl_ext("pdf"), "application/pdf"), 1, "pdf");
+    assert_eq(_mime_tbl_ext("xyzunknown"), 0, "unknown ext -> 0");
+    assert_eq(_mime_tbl_ext(0), 0, "null ext -> 0");
+
+    # v1.7.0: the tables are generated from the CYML (tests/gen-tables.sh).
+    test_group("generated tables");
+    assert_eq(_icons_tbl_ext(0), 0, "icons: no extension -> 0");
+    assert_eq(_icons_tbl_ext("xyzzy"), 0, "icons: unknown extension -> 0");
+    assert_eq(_icons_tbl_filename(make_str("makefile")), 0, "icons: [filenames] is case-sensitive");
+    assert_eq(_icons_tbl_prefix(make_str("READ")), 0, "icons: a prefix must match whole");
+    assert_neq(_icons_tbl_prefix(make_str("README.anything")), 0, "icons: README* prefix");
+    assert_eq(streq(_mime_tbl_ext("xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"), 1,
+      "mime: the wrapped xlsx row");
+    assert_eq(streq(_mime_tbl_ext("7z"), "application/x-7z-compressed"), 1, "mime: the quoted CYML key \"7z\"");
+    assert_eq(_mime_tbl_filename(make_str("Makefile.in")), 0, "mime: [filenames] is exact");
 
     test_group("_mime_for_magic_bytes");
     var mbuf = alloc(16);

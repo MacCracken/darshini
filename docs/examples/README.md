@@ -78,10 +78,12 @@ columns.cyr
 git.cyr
 gitcfg.cyr
 icons.cyr
+icons_table.cyr
 ignore.cyr
 long.cyr
 main.cyr
 mime.cyr
+mime_table.cyr
 render.cyr
 test.cyr
 tree.cyr
@@ -95,10 +97,10 @@ darshini.bcyr
 darshini.fcyr
 darshini.tcyr
 examples.sh
+gen-tables.sh
 gen-width-table.py
 git-parity.sh
 parity.sh
-table-drift.sh
 tz-parity.sh
 ```
 

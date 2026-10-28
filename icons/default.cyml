@@ -4,10 +4,11 @@
 # see docs/adr/0002-icon-format.md. Codepoint references below
 # use Nerd Font v3+ patched-font conventions.
 #
-# This file is the human-readable source of truth. At v0.6.0
-# the mapping is compile-baked into src/icons.cyr; this CYML is
-# documentation + spec. When adding an icon, edit BOTH this file
-# AND src/icons.cyr.
+# This file is the source of truth. Since v1.7.0 its tables are
+# generated into src/icons_table.cyr; after an edit, regenerate:
+#   sh tests/gen-tables.sh icons > src/icons_table.cyr
+# (CI fails when the committed file differs). Keys: [A-Za-z0-9._+-],
+# extensions lowercase; values may not hold a backslash.
 
 [filenames]
 # Exact-match, case-sensitive, whole-basename.
@@ -128,6 +129,4 @@ lock = ""          # font-awesome lock
 # [regex]            — globbing is out of scope for v1.0
 # [icon_colors]      — per-icon color overrides; v1.1 candidate
 # [type_overrides]   — file-type glyphs (folder, link, ...);
-#                      hard-coded in src/icons.cyr for v1.0,
-#                      can be lifted into a [type_overrides]
-#                      table at runtime-CYML time
+#                      code in src/icons.cyr, not generated

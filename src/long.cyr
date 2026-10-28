@@ -44,6 +44,53 @@ fn _emit_spaces(n): i64 {
     return 0;
 }
 
+# v1.7.0: ` -> target` after a symlink's name under `-l` on a terminal,
+# as `ls -l` shows it (`-T -l` too). Pipe output stays name-only until
+# 2.0 (roadmap) because scripts read those rows. main() sets the switch
+# once from tty_isatty(stdout), the same decision as name sanitization:
+# `--no-color` turns off color, not the terminal. The target is the
+# link's own bytes (readlink — nothing is followed to read it), untrusted
+# like a name, so it goes out through emit_decorated's sanitizing writer.
+# With color on it takes the color of what it points to, as `ls` colors
+# it: the follow-stat's type (blue directory, green executable, a plain
+# file uncolored), red when the link is broken or loops (ADR 0001).
+# Under -F the `@` stays on the name and the target gets no indicator,
+# so the name's bytes are the pipe's. A link that is gone or unreadable
+# by the time of the readlink (a race: lstat on it just succeeded) gets
+# no arrow.
+var _link_targets = 0;
+var _link_buf = 0;
+var LINK_BUF_SIZE = 4096;      # PATH_MAX: a Linux link target is at most 4095 bytes
+
+fn set_link_targets(v): i64 {
+    _link_targets = v;
+    return 0;
+}
+
+fn link_targets_on(): i64 { return _link_targets; }
+
+fn emit_link_target(path_cstr, want_color): i64 {
+    if (_link_targets == 0) { return 0; }
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos's stat follows links (walk.cyr d_lstat), so no symlink row
+    # reaches here until lstat#102 is adopted (roadmap 1.8.0).
+    return 0;
+    #else
+    if (_link_buf == 0) { _link_buf = alloc(LINK_BUF_SIZE); }
+    var n = sys_readlink(path_cstr, _link_buf, LINK_BUF_SIZE);
+    if (n <= 0) { return 0; }
+    var col = 0;
+    if (want_color == 1) {
+        var st[144];
+        if (d_stat(path_cstr, &st) < 0) { col = TTY_FG_RED; }
+        else { col = color_for_mode(load32(&st + STAT_MODE)); }
+    }
+    d_write(STDOUT_FD, " -> ", 4);
+    emit_decorated(str_from_buf(_link_buf, n), col, 0, 0, 0, 0, 0, 0);
+    return 0;
+    #endif
+}
+
 # Render the long-format listing for the entries inside `dir_str`.
 # `want_human` controls size formatting (decimal vs IEC X.YK/M/G/T).
 # `colors` (M4) / `icons` (M5) / `gitchrs` (M7): parallel vecs
@@ -53,9 +100,10 @@ fn _emit_spaces(n): i64 {
 # tracks the max size-string width; pass 2 emits aligned rows.
 #
 # Per CLAUDE.md: lstat (not stat) is used so symlinks render as
-# `l...` with their own length rather than the target's. The link
-# target (`-> target`) is not rendered — adding it changes `-l`
-# output bytes, so it is a roadmap decision, not a fix.
+# `l...` with their own length rather than the target's. Since v1.7.0
+# a terminal also gets ` -> target` (emit_link_target, above).
+# `dir_str` is a Str; render_args passes an empty one, whose entries are
+# paths as given (path_join then returns the name unchanged).
 # v1.3.3: `stats` is the parallel vec of stat buffers compute_decor
 # already produced (0 per entry when its lstat failed), or 0 when no
 # decoration pass ran at all — `-l` on a pipe with no --git/--mime,
@@ -92,6 +140,9 @@ fn render_long(entries, dir_str, want_human, colors, icons, gitchrs, mimes, clas
             var full = path_join(dir_str, name);
             stat_buf = alloc(144);
             rc = lstat_path(str_data(full), stat_buf);
+            # v1.7.0: with no decor pass, this is the only lstat, so the
+            # failure is reported here (otherwise compute_decor did it).
+            if (rc < 0) { emit_stat_error(str_data(full), rc); }
         }
         var size_buf = alloc(32);
         var size_len = 0;
@@ -187,6 +238,13 @@ fn render_long(entries, dir_str, want_human, colors, icons, gitchrs, mimes, clas
         if (gitchrs != 0)    { git_pad = git_display_width(); }
         # No `-F` cell padding: the name ends the row (v1.4.1).
         emit_decorated(name, col_code, ic, icon_pad, gc, git_pad, cl, 0);
+        if (link_targets_on() == 1) { if (sb != 0) {
+                if ((load32(sb + STAT_MODE) & S_IFMT) == S_IFLNK) {
+                    var want_col = 0;
+                    if (colors != 0) { want_col = 1; }
+                    emit_link_target(str_data(path_join(dir_str, name)), want_col);
+                }
+            } }
         d_write(STDOUT_FD, "\n", 1);
         i = i + 1;
     }

@@ -66,6 +66,8 @@ line is one entry. It composes with:
 - `-l`: long-format prefix (perms / size / mtime) emitted
   before the connectors. Layout per row:
   `<perms> <size> <mtime> <ancestor-prefix><connector><git><icon><name>`
+  — on a terminal a symlink's row then ends ` -> <target>` (v1.7.0,
+  as flat `-l`; ADR 0001 colors the target). Not on a pipe.
 - `-h`: human-size formatting within the `-l` prefix.
 - `--git`: status decoration emitted per entry.
 - `--mime`: under `-T -l`, after the mtime at its natural width
@@ -76,6 +78,10 @@ line is one entry. It composes with:
   (v1.4.1 — nothing follows the name on a tree line).
 - An unreadable subdirectory is drawn, then reported on stderr,
   and the run exits 1 (v1.4.1; it was drawn as empty, exit 0).
+  So is an entry the tree cannot lstat — it needs the stat to know
+  whether to descend (v1.7.0): its row is drawn (`?` placeholders
+  under `-l`) and named on stderr. Linux only until agnos adopts
+  lstat (roadmap 1.8.0).
 - `--no-color` / `--no-icons`: suppression per the M4/M5 ADRs.
 - `-1`: no-op under `-T` (tree is already
   one-entry-per-line); doesn't error to keep bundling forgiving.

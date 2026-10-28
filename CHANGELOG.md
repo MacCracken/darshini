@@ -4,6 +4,127 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-28
+
+Behavior. Minor bump: `NO_COLOR` is new input, and terminal `-l` output
+changes. No flag added or removed, and a correct listing's pipe bytes are
+unchanged; what changes on a pipe is the exit status and stderr of a
+listing that could not stat its entries. Toolchain and darshana unchanged
+(cyrius 6.7.18, darshana 1.5.0).
+
+**Verified.** A/B against 1.6.1 (built from its tag) over 69 modes × 4
+captures (pipe; PTY at 100 × 30, 53 × 30 and 0 × 0) on the hostile
+fixture, on x86_64, aarch64 under `qemu-aarch64` and agnos under mirshi.
+Every differing capture was classified by script — 0 unexplained:
+
+- x86_64 and aarch64, 87 of 276 each, with byte-identical captures: 60
+  with the folder glyph on a directory named like a file, 33 with a link
+  target, 28 with a stat error on stderr (8 of them turning exit 0 into
+  1: `-l` and `-T` on the unsearchable directory), and 8 `--help` /
+  `--version`. Every other listing that met the unsearchable directory
+  already exited 1 for the fixture's unreadable one.
+- agnos, 8 of 276: `--help` / `--version` only (see *Notes*).
+- The table generator alone, before any behavior change: 0 of 276 on all
+  three targets, and 0 of 276 on a second fixture holding one file per
+  table key (158 names, upper-case extensions too).
+
+### Added
+
+- **Symlink targets under `-l` on a terminal**: `link -> target`, as
+  `ls -l` shows it, in a directory listing, for path arguments and under
+  `-T -l`. The target is the link's own bytes (`readlink`; nothing is
+  followed to read it) and is untrusted, so it goes through the same
+  sanitizer as a name. It is colored by what it points to, as `ls` colors
+  it — blue directory, green executable, a plain file uncolored, red when
+  broken or looping (ADR 0001); `--no-color` / `NO_COLOR` leave it plain.
+  Under `-lF` the `@` stays on the name (`link@ -> sub`), so the name's
+  bytes are the pipe's. A pipe keeps name-only rows until 2.0, since
+  scripts read them. Costs one `readlink` and one `stat` per symlink row,
+  on a terminal only.
+- **`NO_COLOR`** ([no-color.org](https://no-color.org)): set and
+  non-empty acts as `--no-color`, whatever the value (`0` and `false`
+  too); empty or unset changes nothing. The only environment input, and
+  only an off switch: no `CLICOLOR` / `CLICOLOR_FORCE`, icons unaffected
+  (ADR 0001). `--help` says so on the `--no-color` line.
+
+### Fixed
+
+- **An entry that cannot be stat'd is reported, and the run exits 1** (it
+  exited 0). In a readable but unsearchable directory (mode 0600) getdents
+  works and every lstat beneath it is EACCES: the rows keep their `?`
+  placeholders, and stderr now names each entry once, as `ls` does —
+  `darshini: dir/name: permission denied` (or `no such file or
+  directory` for one deleted mid-listing, `cannot stat` otherwise),
+  sanitized like every error path. Only where the stat carries data:
+  `-l`, `-F`, `--mime`, the `--git` column (inside a repository) and
+  `-T` (which needs it to descend). A listing that lstats only for color
+  or icons renders the name plain and stays 0, as `ls --color` does
+  (it reads the type from getdents), and a plain pipe listing never
+  lstats at all. Linux only for now (*Notes*).
+
+### Changed
+
+- **A directory gets the folder glyph whatever its name** (ADR 0002's new
+  rule 0, decided 2026-10-15). Through v1.6.1 the name rules came first,
+  so a directory named `Makefile`, `.gitignore` or `README.d` showed that
+  file's glyph — the opposite of eza. Only directories: a symlink named
+  `README` keeps the README glyph (its cyan shows the type). Terminal-only.
+- **The icon and mime tables are generated from their CYML.**
+  `tests/gen-tables.sh` (sh + POSIX awk; no toolchain, mawk-clean) writes
+  `src/icons_table.cyr` from `icons/default.cyml` and `src/mime_table.cyr`
+  from `mime/default.cyml`; both are committed, and CI regenerates them
+  and fails on any difference. Adding an icon is now a CYML edit plus a
+  regenerate — CLAUDE.md's "icon set is data" — at no runtime cost: the
+  same if-chains, in file order. The generator refuses what it cannot
+  represent exactly (a key outside `[A-Za-z0-9._+-]`, an upper-case
+  extension, an empty value, a backslash, text after a value, a duplicate
+  key, an entry in a table no lookup reads, such as `[magic_bytes]`)
+  rather than escape it. Before the switch, `table-drift.sh`'s own
+  extractor found the generated tables byte-identical to 1.6.1's
+  hand-written ones (82 icon and 79 mime entries). `src/icons.cyr` keeps
+  the lookup chain, type overrides and fallback; `src/mime.cyr` the inode
+  types, magic signatures and fallbacks. `_mime_for_filename` /
+  `_mime_for_ext` became the generated `_mime_tbl_filename` /
+  `_mime_tbl_ext`.
+
+### Removed
+
+- `tests/table-drift.sh` (v1.4.2), which parsed both sides of each table
+  and compared them; the regenerate-and-diff gate replaces it.
+
+### Tests
+
+- Unit **527 → 540**: the directory-only folder rule (a directory named
+  `Makefile`, `README.d`, `.gitignore`; a symlink `README` and a fifo
+  `Makefile` keep their name glyphs) and the generated tables (case,
+  whole prefixes, the wrapped `xlsx` row, the quoted `"7z"` key). aarch64
+  540 / 540, agnos 521 / 521; fuzz clean on all three.
+- CI: four new smokes — `NO_COLOR` (values `1`, `0`, `false` off, empty
+  on, icons kept); unstat-able entries (`-l`, `-F`, `-l --mime`, `-T`,
+  `-T -l`, `--git` in a repository: exit 1 and exactly one line; the `?`
+  row; plain pipe and TTY listings exit 0); link targets (`-l`, `-T -l`,
+  `-lF`, blue and red targets, none on a pipe); the folder glyph. The
+  untrusted-names gate gains a hostile link target and `-T -l`.
+- Each new smoke fails against the 1.6.1 binary. Planted defects, each
+  caught: a link target written raw (the untrusted gate), stat errors for
+  a color-only listing, link targets on a pipe, two lines per entry. The
+  generator gate: 14 mutations — a stale table, a hand edit, and each
+  refusal — all behave.
+- Replays: every `run:` step of `ci.yml` locally (GNU) and in an
+  `ubuntu:26.04` container (uutils, mawk), and the release job's steps.
+
+### Notes
+
+- **agnos keeps 1.6.1's behavior for unstat-able entries** (decided
+  2026-10-28): its stat follows symlinks until lstat#102 is adopted
+  (roadmap 1.8.0), so every broken or looping link would have been
+  reported as `cannot stat` and failed the run — an error Linux does not
+  have. There the `?` rows stay and the exit stays 0; 1.8.0 turns the
+  rule on. agnos shows no symlink targets either, for the same reason,
+  and no decoration at all, so the folder glyph does not reach it.
+- Size: the x86_64 build is 320,624 B (320,552 at 1.6.1), the DCE release
+  build 189,552 B (185,384).
+
 ## [1.6.1] - 2026-10-28
 
 Toolchain `6.7.9` → **`6.7.18`**, darshana `1.3.0` → **`1.5.0`**, CI on

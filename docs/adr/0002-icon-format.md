@@ -59,14 +59,17 @@ is out per the v1.0 out-of-scope list), `[icon_colors]`
 When deciding the icon for an entry named `name` with mode `m`,
 walk this list. First match wins; no fallthrough.
 
+0. **Directory** (v1.7.0) — a directory gets the folder glyph,
+   whatever its name. Only directories: every other type still
+   checks the name rules first.
 1. **Exact filename** — `[filenames][name]`
 2. **Filename prefix** — `[filename_prefixes][p]` for the first
    `p` (in table order) that is a prefix of `name`. No two shipped
    prefixes overlap, so first-match and longest-match agree today; a
    new prefix that nests inside an existing one must go above it.
-3. **File-type override** — if `m` is a directory / symlink /
-   fifo / socket / blockdev / chardev, use the type-specific
-   glyph (folder, link, etc.). Regular files fall through to (4).
+3. **File-type override** — if `m` is a symlink / fifo / socket /
+   blockdev / chardev, use the type-specific glyph (link, etc.).
+   Regular files fall through to (4).
 4. **Extension** — `[extensions][ext]` for the substring of
    `name` after the last `.` (lowercased)
 5. **Generic fallback** — `<file glyph>` for any other regular
@@ -74,15 +77,15 @@ walk this list. First match wins; no fallthrough.
 
 The exact-filename + prefix rules sit above type-override so
 `Makefile` (a regular file) gets its specific glyph rather than
-the generic file glyph. A consequence the v1.0 text got wrong
-(corrected at v1.4.1, verified against the binary): a
-*directory* named `README.d` or `Makefile` also matches step 1 or
-2 and gets the README / Makefile glyph, not the folder glyph —
-the opposite of eza. Moving the type override above the name
-rules would change icons in default TTY output, so it is a
-roadmap question, not a fix. Decided 2026-10-15: the folder glyph
-wins for directories, scheduled in [roadmap 1.7.0](../development/roadmap.md);
-this section changes when it ships.
+the generic file glyph. Through v1.6.1 that put them above
+directories too: a *directory* named `README.d` or `Makefile`
+matched step 1 or 2 and got the README / Makefile glyph — the
+opposite of eza (the v1.0 text claimed otherwise; corrected at
+v1.4.1). Decided 2026-10-15 and shipped in v1.7.0: step 0, the
+folder glyph wins for directories. The other types keep the name
+rules first, so a symlink named `README` (a common
+`README -> docs/README.md`) keeps the README glyph; its type shows
+in its cyan color.
 
 ### Display width
 
@@ -112,9 +115,13 @@ contract puts the responsibility on the user.
 
 ### Compile-baked vs runtime CYML parse
 
-For v0.6.0, the mapping is **compile-baked** into `src/icons.cyr`.
-The `icons/default.cyml` file ships as the human-readable
-source of truth + documentation; it is **not** read at runtime.
+The mapping is **compile-baked**: `icons/default.cyml` is the
+source of truth and is **not** read at runtime. Since v1.7.0 its
+three tables are generated into `src/icons_table.cyr` by
+`tests/gen-tables.sh` (sh + POSIX awk, no toolchain) and
+committed; `src/icons.cyr` keeps the lookup chain, the type
+overrides and the fallback glyph. Through v1.6.1 the tables were
+hand-copied into `src/icons.cyr` (v0.6.0's decision, below).
 
 Why bake:
 
@@ -129,19 +136,22 @@ Why bake:
 
 Why ship the CYML anyway:
 
-- It's the schema spec. The shape of `icons/default.cyml`
-  documents what the lookup chain in `src/icons.cyr` does. A
-  contributor wanting to add an icon edits both files in
-  lockstep.
+- It's the schema spec, and since v1.7.0 the input: adding an icon
+  is a CYML edit plus `sh tests/gen-tables.sh icons >
+  src/icons_table.cyr`. The generator refuses what it cannot
+  represent exactly (a key outside `[A-Za-z0-9._+-]`, an uppercase
+  extension, a backslash in a value, a duplicate key, an entry in a
+  table no lookup reads) instead of escaping it.
 - It pre-stages runtime CYML loading. If v1.1+ ever adds
   `--icons-file=PATH` (user-supplied mapping), the parser
   contract is already documented and the schema is already
   fixed.
 
-A sync between `icons/default.cyml` and `src/icons.cyr` is
-**human-enforced** at M5 (PR review, contributing docs). A CI
-gate that parses the CYML and verifies coverage is a follow-up
-if drift becomes a real problem.
+Keeping the two in sync was human-enforced from M5, then checked
+by `tests/table-drift.sh` from v1.4.2 (v1.4.1 found the first
+drift, `xlsx`). Since v1.7.0 CI regenerates the table and fails
+on any difference, so a CYML edit without a regenerate, or a hand
+edit of the generated file, cannot merge.
 
 ### Color
 
@@ -175,11 +185,10 @@ color overrides at v1.0.
 
 ## Consequences
 
-- Two files to keep in sync when adding an icon:
-  `icons/default.cyml` (the spec) and `src/icons.cyr` (the
-  implementation). Contributing docs at v0.6.0 release call
-  this out; if drift becomes a real problem, file a CI-gate
-  follow-up.
+- Adding an icon is a data edit (CLAUDE.md "icon set is data"):
+  the CYML, then a regenerate; CI checks the generated file. Until
+  v1.7.0 it meant editing `icons/default.cyml` and `src/icons.cyr`
+  in lockstep.
 - Terminals without Nerd Fonts show replacement characters.
   Documented in README; mitigated by `--no-icons`.
 - Column-fit math gets a `+ 2 * icons_enabled` adjustment per

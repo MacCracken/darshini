@@ -17,7 +17,9 @@
 include "src/walk.cyr"
 include "src/width_table.cyr"
 include "src/width.cyr"
+include "src/icons_table.cyr"
 include "src/icons.cyr"
+include "src/mime_table.cyr"
 include "src/mime.cyr"
 # git.cyr defines git_status_for / git_display_width, which color.cyr
 # and columns.cyr call. Without it every bench build warned

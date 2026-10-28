@@ -18,7 +18,7 @@ concurrency:
 jobs:
   build-and-test:
     name: Build & Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       # The agnos build runs under mirshi (AGNOS→Linux syscall translation,
       # github.com/MacCracken/mirshi). A test-harness pin, not the toolchain
@@ -27,7 +27,7 @@ jobs:
       # against the release's own SHA256SUMS before it runs.
       MIRSHI_VERSION: "1.11.3"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Cyrius toolchain
         # The cyrius.cyml `[package].cyrius` pin is the single source of truth
@@ -145,6 +145,8 @@ jobs:
         run: |
           set -e
           sudo apt-get update -qq
+          # qemu-user, not qemu-user-static: on Ubuntu 26.04 qemu-user ships
+          # the static /usr/bin/qemu-aarch64 and replaces qemu-user-static.
           sudo apt-get install -y -qq qemu-user > /dev/null
           qemu-aarch64 build/tests-aarch64
           qemu-aarch64 build/fuzz-aarch64
@@ -746,9 +748,9 @@ jobs:
 
   security:
     name: Security scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Scan for forbidden patterns in src/
         # darshini CLAUDE.md hard rules, scanned statically so a
@@ -813,9 +815,9 @@ jobs:
 
   docs:
     name: Documentation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Check required files
         # First-party documentation surface. Mirrors darshana's docs

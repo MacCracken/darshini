@@ -61,16 +61,23 @@ Minor bump: `NO_COLOR` is new surface, and terminal `-l` output changes.
   target there. Changes agnos output; needs a
   [mirshi](https://github.com/MacCracken/mirshi) run proving #102 is
   emulated.
+- **AGNOS decoration** (color, icons, the grid on the console): the
+  per-fd test is agnos 1.57.13's `fd_kind#111`, which
+  [darshana](https://github.com/MacCracken/darshana) 1.5.0's
+  `tty_isatty` uses (darshini 1.6.1); `term_width` then takes the
+  console size from `tty_winsize`. On older kernels, and under mirshi,
+  `tty_isatty` still answers for the console, so `term_width` must stay
+  0 there or `darshini > file` gets escapes. darshini needs a way to
+  tell the two answers apart through darshana (CLAUDE.md: terminal
+  queries go through darshana), which may mean a darshana request.
+  Changes agnos terminal output. mirshi 1.11.3 has no #111, so the
+  check is a real agnos boot, as darshana's `scripts/agnos-live.sh`
+  does.
 
 #### Waiting on upstream
 
 Scheduled when the dependency lands, not before.
 
-- **AGNOS decoration**: needs a per-fd terminal test in agnos (its
-  `winsize#60` describes the console, not fd 1, so using it would
-  decorate `darshini > file`). Then
-  [darshana](https://github.com/MacCracken/darshana)'s Linux arm of
-  `term_width` becomes the whole function.
 - **macOS / BSD**: needs [darshana](https://github.com/MacCracken/darshana)
   arms for `tty_winsize` / `tty_isatty`; the stdlib has the stat layouts
   and `getdirentries`.

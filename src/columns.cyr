@@ -32,17 +32,19 @@ fn term_width(): i64 {
     # the pipe-safe path. Not because the size is unknowable (through
     # v1.3.4 this comment said agnos had "no way to query the terminal
     # size", which was wrong: darshana's `tty_winsize` reads it from
-    # winsize#60). The reason is that agnos cannot say whether fd 1 IS
-    # the console. winsize#60 is a property of the framebuffer, not of
-    # the fd, so with the console up it answers for a pipe or a file
-    # too (darshana documents the same for its agnos `tty_isatty`).
+    # winsize#60). The reason is that winsize#60 cannot say whether fd 1
+    # IS the console: it is a property of the framebuffer, not of the
+    # fd, so with the console up it answers for a pipe or a file too.
     # agnsh implements `>` and `|` (redirect syscall #62), so taking the
     # console width here puts SGR escapes, Nerd Font glyphs and a
     # multi-column grid into `darshini > out.txt` and `darshini | ...` —
     # measured at v1.4.0 under mirshi with a probe build that called
     # tty_winsize here — the script-consumer surprise CLAUDE.md calls a
-    # bug. Revisit when agnos exposes a per-fd terminal property; the
-    # Linux arm below is then the whole function.
+    # bug. agnos 1.57.13 added a per-fd test (fd_kind#111), which
+    # darshana 1.5.0's `tty_isatty` uses; gating decoration on it is
+    # roadmap 1.8.0, not done here (v1.6.1 only moved the dep). Older
+    # kernels and mirshi answer `tty_isatty` for the console, so the
+    # gate would have to keep this 0 there.
     return 0;
     #else
     var rows = 0;

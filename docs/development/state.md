@@ -7,9 +7,16 @@
 
 ## Version
 
-**1.6.0** — display correctness, shipped 2026-10-15. Minor bump: a new
-flag and visible output changes, every one a fix or an opt-in.
-Toolchain and darshana unchanged (cyrius 6.7.9, darshana 1.3.0).
+**1.6.1** — toolchain and dependency patch, 2026-10-28: cyrius 6.7.9 →
+6.7.18, darshana 1.3.0 → 1.5.0. No flag, exit code or Linux output byte
+changed (A/B 0 / 276 on x86_64 and aarch64; on agnos under mirshi the
+only difference is mirshi's own `ENOSYS agnos#110` stderr line). On
+agnos ≥ 1.57.13 name sanitization now follows the fd (darshana 1.5.0's
+per-fd `tty_isatty`). CI moved to `ubuntu-26.04` and SHA-pinned
+actions (not yet run on GitHub).
+
+Prior: **1.6.0** — display correctness, shipped 2026-10-15. Minor bump:
+a new flag and visible output changes, every one a fix or an opt-in.
 
 - **Columns measured in terminal cells**: UTF-8 decoded against a
   generated Unicode 16 width table (`src/width_table.cyr`, from
@@ -23,16 +30,19 @@ Toolchain and darshana unchanged (cyrius 6.7.9, darshana 1.3.0).
 - **Pre-1970 mtimes render as dates** (Hinnant's civil algorithm; was
   the `????` placeholder since v1.3.2).
 
-Prior: **1.5.0** — `--git` reimplements git's rules
+Earlier: **1.5.0** — `--git` reimplements git's rules
 ([ADR 0005](../adr/0005-git-status-semantics.md)). **1.4.x** — audit
 and repair sweep, stdlib sort, CI cross-target runs. Earlier releases:
 see the CHANGELOG.
 
 ## Toolchain
 
-- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`)
+- **Cyrius pin**: `6.7.18` (in `cyrius.cyml [package].cyrius`)
 - `lib/` is generated: `rm -rf lib/ && cyrius deps` (33 files at
-  6.7.9 — the declared `[deps].stdlib` footprint, closed).
+  6.7.18 — the declared `[deps].stdlib` footprint, closed).
+- Moving a dep tag: `cyrius deps` keeps the old commit row in
+  `cyrius.lock` (fail-closed); delete `cyrius.lock` and run `cyrius
+  deps` again to re-pin, then `cyrius deps --locked` to check.
 
 ## Shape
 
@@ -138,21 +148,26 @@ matrix on every push since v1.4.2) but is not declared supported
   `tests/table-drift.sh` (CYML vs compiled tables),
   `tests/examples.sh` (regenerates the golden `docs/examples/README.md`)
   — CI helpers, runnable locally from the repo root.
-- CI (`.github/workflows/ci.yml`) — build, golden examples, strict lint,
-  tests, fuzz, agnos (mirshi) + aarch64 (qemu) suite / fuzz runs and
-  aarch64 output parity, git parity, tz parity, 25 smoke gates, DCE
-  parity,
-  security scan,
-  table drift, docs / version consistency.
+- CI (`.github/workflows/ci.yml`, every job on `ubuntu-26.04`, actions
+  pinned by commit SHA since v1.6.1) — build, golden examples, strict
+  lint, tests, fuzz, agnos (mirshi) + aarch64 (qemu) suite / fuzz runs
+  and aarch64 output parity, git parity, tz parity, 25 smoke gates, DCE
+  parity, security scan, table drift, docs / version consistency.
 
 ## Dependencies
 
 - stdlib — string, fmt, alloc, io, vec, str, syscalls, args, fs,
   chrono, hashmap, assert, bench (`cyrius.cyml [deps].stdlib`).
-- `[deps.darshana]` (git, tag **1.3.0**; needs cyrius ≥ 6.7.2) — used:
+- `[deps.darshana]` (git, tag **1.5.0**; needs cyrius ≥ 6.7.2 on
+  Linux, ≥ 6.7.11 for an AGNOS build) — used:
   `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`, `tty_winsize`,
   `tty_isatty`, `tty_sanitize_buf` / `tty_has_ctl` +
   `TTY_SANITIZE_UTF8`. API frozen since 1.0.0 (additive only).
+- CI test harness: [mirshi](https://github.com/MacCracken/mirshi)
+  `1.11.3` (`MIRSHI_VERSION` in `ci.yml`; latest release). It has no
+  `console_mode#110` / `fd_kind#111`, so darshana 1.5.0 takes its
+  old-kernel path there and mirshi prints one `ENOSYS agnos#110` line
+  to stderr per process.
 
 ## Consumers
 
@@ -190,10 +205,12 @@ icon / mime tables generated from CYML), then 1.8.0 (platforms).
 - **Grid widths are cells, from a generated table**: regenerate
   `src/width_table.cyr` with `tests/gen-width-table.py` (deliberately,
   not in CI — a runner's Python may carry another Unicode version).
-- **AGNOS terminal detection is console-wide**: `term_width` returns 0
-  there (no decoration even on the console), while sanitization keys on
-  `tty_isatty` and is on whenever the console is up. Opposite defaults,
-  each failing safe. agnos also has no `getcwd` (`--git` needs an
+- **AGNOS terminal detection depends on the kernel**: `term_width`
+  returns 0 there (no decoration even on the console), while
+  sanitization keys on `tty_isatty` — per fd on agnos ≥ 1.57.13
+  (darshana 1.5.0, `fd_kind#111`), and on older kernels and under
+  mirshi "is the console up", so a redirected listing is sanitized
+  there. Opposite defaults, each failing safe. agnos also has no `getcwd` (`--git` needs an
   absolute path), a stub `fstat`, and no `lstat` wired yet
   ([`../architecture/002-agnos-fs-abi-split.md`](../architecture/002-agnos-fs-abi-split.md)).
 - **`format_mtime` reads chrono's `DateTime` by named offset**
@@ -204,9 +221,10 @@ icon / mime tables generated from CYML), then 1.8.0 (platforms).
   64-byte records cap names at 63 bytes. The stdlib's `dir_list_checked`
   uses getdents (#29), which is what darshini wants.
 - **Include order is convention, not a compiler requirement.** cycc
-  6.7.9 resolves a call to a function defined later — in the same file
-  or a later include (probed at v1.4.1); older comments in the tree
-  claimed otherwise. `main.cyr` keeps dependency order for readability.
+  resolves a call to a function defined later — in the same file or a
+  later include (probed on 6.7.9 at v1.4.1, and on 6.7.18); older
+  comments in the tree claimed otherwise. `main.cyr` keeps dependency
+  order for readability.
   The compiler does reject an arity mismatch, so a signature change
   fails the build at every stale call site.
 - **The stdlib has a `path_basename`** that keeps trailing slashes;

@@ -49,14 +49,19 @@ the column silently does not appear — the same degradation as the
 out-of-a-repo case. (agnos's stat also has no owner field, so the
 v1.5.0 `safe.directory` ownership check is compiled out there.)
 
-**Terminal detection is console-wide, not per-fd.** There is no
+**The console size is console-wide, not per-fd.** There is no
 `ioctl`/`TIOCGWINSZ`; agnos reports the console grid through `winsize#60`,
-which darshana's `tty_winsize` / `tty_isatty` read. It describes the
-framebuffer, not fd 1, so it answers the same for a pipe or a file. Hence two
-deliberate, opposite defaults (v1.4.0): `term_width` returns 0 on agnos, so
-decoration and multi-column layout never reach a redirected listing; and name
-sanitization keys on `tty_isatty`, so it is on whenever the console is up,
-redirected or not. Each fails safe in its own direction.
+which darshana's `tty_winsize` reads. It describes the framebuffer, not fd 1,
+so it answers the same for a pipe or a file. Hence two deliberate, opposite
+defaults (v1.4.0): `term_width` returns 0 on agnos, so decoration and
+multi-column layout never reach a redirected listing; and name sanitization
+keys on `tty_isatty`. Each fails safe in its own direction. Through darshana
+1.4.0 `tty_isatty` also read the console, so sanitization was on whenever the
+console was up, redirected or not. From darshana 1.5.0 (darshini 1.6.1) it
+asks agnos 1.57.13's `fd_kind#111` about the fd itself (the console or a
+terminal emulator's #97 channel), so a redirected listing is written raw, as
+on Linux; on older kernels, and under mirshi, it keeps the console answer.
+`term_width` still returns 0 on every kernel.
 
 **Consequence for error handling**: agnos reports a flat `-1` rather than a
 specific errno, so the fine-grained `ENOENT` / `EACCES` branches simply fall

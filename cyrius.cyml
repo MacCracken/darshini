@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "darshini — eza-equivalent pretty file listing (colors, icons, git-status, tree view, mime-type recognition). Sanskrit दर्शिनी: she who shows. Sibling-not-competitor to kriya's minimal ls."
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.7.9"
+cyrius = "6.7.18"
 
 [build]
 entry = "src/main.cyr"
@@ -16,18 +16,20 @@ stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "args", "fs"
 
 # darshana — TTY/ANSI/cursor primitives. Per CLAUDE.md's hard rule
 # (no raw ANSI inline), every escape darshini emits and every terminal
-# query it makes routes through darshana. Pinned at 1.3.0 (was 1.0.0).
-# darshana's API is frozen since 1.0.0 and only additive since, so the
-# bump itself changes no byte darshini emits (A/B-verified on every
-# target). 1.3.0 needs cyrius >= 6.7.2 (its bundle uses `const`), which
-# is why the toolchain pin moved first.
+# query it makes routes through darshana. Pinned at 1.5.0 (was 1.3.0).
+# darshana's API is frozen since 1.0.0 and only additive since; the
+# 1.3.0 → 1.5.0 bump changes no byte darshini emits on Linux
+# (A/B-verified on x86_64 and aarch64). On AGNOS 1.5.0's `tty_isatty`
+# answers about the fd, not the console, on agnos >= 1.57.13. An AGNOS
+# build of the 1.5.0 bundle needs cyrius >= 6.7.11 (the stdlib's
+# `sys_fd_kind` / `sys_console_mode`); Linux builds need >= 6.7.2.
 #
 # Used (v1.4.0): tty_sgr_buf / tty_sgr_reset_buf + TTY_FG_* (color),
 # tty_winsize (terminal width), tty_isatty (per-stream terminal test),
 # tty_sanitize_buf / tty_has_ctl + TTY_SANITIZE_UTF8 (untrusted names).
 [deps.darshana]
 git = "https://github.com/MacCracken/darshana.git"
-tag = "1.3.0"
+tag = "1.5.0"
 modules = ["dist/darshana.cyr"]
 
 # Future: possibly [deps.chakshu] later for AI-augmented mime-

@@ -336,11 +336,13 @@ fn compute_decor_args(paths, want_color, want_icons, want_git, want_mime, want_c
 # stdout gates names in the listing, stderr gates the paths quoted in
 # error messages, because `darshini * > out.txt` still prints its
 # errors on the terminal. On Linux `tty_isatty` is the same TIOCGWINSZ
-# probe `term_width` makes. On AGNOS it answers whether the CONSOLE is
-# up, not whether this fd is it (there is no per-fd terminal property
-# there), so a listing piped to a file on AGNOS is sanitized too: the
-# safe failure for a terminal-safety control. See term_width for why
-# decoration takes the opposite default.
+# probe `term_width` makes. On AGNOS >= 1.57.13 (darshana >= 1.5.0) it
+# answers about the fd too — fd_kind#111: the console or a terminal
+# emulator's #97 channel — so a listing piped to a file is written raw,
+# as on Linux. On older kernels (and under mirshi, which lacks the
+# call) it answers whether the CONSOLE is up, so a redirected listing
+# is sanitized too: the safe failure for a terminal-safety control.
+# See term_width for why decoration takes the opposite default.
 var _sanitize_names = 0;
 var _sanitize_errs = 0;
 

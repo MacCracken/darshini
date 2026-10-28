@@ -6,8 +6,9 @@
 # — getopt-bundle semantics are part of the v1.0 CLI contract.
 #
 # Stdlib auto-included via cyrius.cyml [deps].stdlib.
-# Includes are in dependency order, by convention (cycc 6.7.9 resolves
-# a call to a function defined later, so this is for the reader):
+# Includes are in dependency order, by convention (cycc resolves a call
+# to a function defined later — probed on 6.7.9 and 6.7.18 — so this is
+# for the reader):
 # walk.cyr defines d_write and the ModeBit enum used by everything after
 # it, icons.cyr defines icon_for_entry used by color.cyr's compute_decor,
 # color.cyr defines emit_decorated / emit_error used by the emit paths

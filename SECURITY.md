@@ -28,9 +28,11 @@ filesystem beyond standard output. The realistic threats:
   `ls --quoting-style=literal`, so a script consumer receives a name
   it can actually open. A pipeline that renders untrusted names to a
   terminal is responsible for its own sanitization.
-  **On AGNOS** there is no per-fd terminal test — darshana's
-  `tty_isatty` there reports whether the console is up — so names are
-  sanitized whenever the console is up, piped or not.
+  **On AGNOS** the test is per-fd on agnos 1.57.13 and later (darshana
+  1.5.0's `tty_isatty` asks `fd_kind#111`), so piped names go out
+  byte-for-byte as on Linux. On older kernels (and under mirshi)
+  `tty_isatty` reports whether the console is up, so names are
+  sanitized whenever it is, piped or not.
 
   **Metadata is untrusted too.** A file's mtime survives extraction from
   a hostile archive (tar keeps it; tmpfs and btrfs store it). Through

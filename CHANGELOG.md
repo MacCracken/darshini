@@ -4,6 +4,87 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-28
+
+Toolchain `6.7.9` → **`6.7.18`**, darshana `1.3.0` → **`1.5.0`**, CI on
+Ubuntu 26.04 with SHA-pinned actions. Patch: no flag, exit code or Linux
+output byte changes, and no source repair.
+Upstream reshaped neither surface darshini calls: darshana 1.4.0 only
+added the SGR scanner, and 1.5.0 changes only its AGNOS arm (below).
+
+**Verified.** A/B against 1.6.0 (built from the 1.6.0 tree on 6.7.9) over
+69 modes × 4 captures (pipe; PTY at 100 × 30, 53 × 30 and 0 × 0) on a
+hostile fixture: dirs, live / broken / dir / looping symlinks, a FIFO, a
+socket, unreadable and unsearchable dirs, setuid / setgid / sticky, ELF and
+PNG magic, a 5 GB sparse file, 1960 / 2100 / out-of-range mtimes, a git repo
+with modified / untracked / ignored entries and a CRLF `.gitignore`, a
+200-byte name, CJK / combining / emoji / fullwidth names, and Latin-1,
+truncated-UTF-8 and control-byte names. Each step was measured on its own:
+
+- Toolchain alone (darshana still 1.3.0): **0 / 276** captures differ on
+  x86_64, on aarch64 under `qemu-aarch64`, and on agnos under mirshi.
+- darshana 1.5.0 on top: **0 / 276** on x86_64 and aarch64. On agnos every
+  capture differs by exactly one line from mirshi itself,
+  `mirshi: ENOSYS agnos#110 -> -1` on stderr (darshana's once-per-process
+  console probe, which mirshi 1.11.3 does not implement); with that line
+  removed, 0 / 276 differ.
+
+### Changed
+
+- **Toolchain `6.7.9` → `6.7.18`.** `lib/` re-vendored with
+  `rm -rf lib/ && cyrius deps`: still the same 33 files, each identical to
+  the 6.7.18 snapshot; 24 of them changed upstream. `cyrius deps --verify`
+  reports 33 verified and `cyrius deps --locked` accepts the tree. Zero
+  compile warnings and zero lint warnings on x86_64, agnos and aarch64.
+- **darshana `1.3.0` → `1.5.0`.** The Linux arm is byte-identical; the
+  x86_64 binary is 4 KB larger (1.4.0's `tty_sgr_len` / `tty_sgr_strip_buf`,
+  unused here, which the non-DCE build keeps). An AGNOS build of the 1.5.0
+  bundle needs cyrius ≥ 6.7.11, which 6.7.18 satisfies.
+- **AGNOS: sanitization follows the fd on agnos 1.57.13 and later.**
+  darshana 1.5.0's `tty_isatty(fd)` asks the kernel (`fd_kind#111`) whether
+  the fd is the console or a terminal emulator's #97 channel; through 1.4.0
+  it answered whether the console was up. darshini decides sanitization per
+  stream from `tty_isatty` (v1.4.0), so on those kernels `darshini > file`
+  and `darshini | …` now carry names byte-for-byte, as on Linux, while the
+  console still gets `?` for control bytes. Older kernels, and mirshi, keep
+  the console answer and so keep sanitizing redirected output. `term_width`
+  is still 0 on agnos (no decoration or grid anywhere); gating it on the
+  per-fd test is now a roadmap 1.8.0 item.
+  **Not run on a real agnos kernel**: mirshi has no `fd_kind#111`, so the
+  new answers are darshana's (its 1.5.0 live suite, 57 / 57 on agnos
+  1.57.14), not measured through darshini.
+- Comments and docs that described the AGNOS `tty_isatty` as console-wide
+  (`src/color.cyr`, `src/columns.cyr`, SECURITY.md, architecture note 002,
+  state.md) now say which kernels answer per fd. `src/main.cyr`'s note
+  that cycc resolves forward references was re-probed on 6.7.18.
+
+### Changed — CI
+
+- **Every job runs on `ubuntu-26.04`** instead of `ubuntu-latest` (still
+  24.04), as darshana's do since 1.3.1. The aarch64 step already installs
+  `qemu-user`, which on 26.04 ships the static `qemu-aarch64`.
+- **Actions moved to their latest releases, pinned by commit SHA** (they
+  were floating major tags): `actions/checkout` v4 → v7.0.1,
+  `actions/upload-artifact` v4 → v7.0.2, `actions/download-artifact`
+  v4 → v8.0.2, `softprops/action-gh-release` v2 → v3.0.3 — the SHAs
+  darshana uses, each checked against its tag on GitHub. darshini uses
+  them with the same inputs as darshana (download-artifact fetches every
+  artifact and `find` consolidates them, so v5's single-artifact path
+  change does not apply; v8 makes a digest mismatch an error).
+- ⚠ **Neither workflow has run on a GitHub runner with these changes.**
+  Every `run:` step of `ci.yml` and the release job's steps were replayed
+  locally (green), but that cannot exercise the actions or the 26.04
+  image; `ci.yml` first runs on the next push, `release.yml` at the 1.6.1
+  tag.
+- mirshi stays at **1.11.3**, its latest release.
+
+### Notes
+
+- After the tag moved, `cyrius deps` kept the lockfile's darshana commit
+  row at 1.3.0 (fail-closed, with a note saying so) while writing 1.5.0's
+  bundle hash. `cyrius.lock` was removed and regenerated: one commit row
+  (`16cfe7d`, 1.5.0) and every hash row matching the vendored file.
+
 ## [1.6.0] - 2026-10-15
 
 Display correctness. Minor bump: one new flag and visible output changes,

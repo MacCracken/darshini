@@ -71,11 +71,34 @@ truncated-UTF-8 and control-byte names. Each step was measured on its own:
   them with the same inputs as darshana (download-artifact fetches every
   artifact and `find` consolidates them, so v5's single-artifact path
   change does not apply; v8 makes a digest mismatch an error).
-- ⚠ **Neither workflow has run on a GitHub runner with these changes.**
-  Every `run:` step of `ci.yml` and the release job's steps were replayed
-  locally (green), but that cannot exercise the actions or the 26.04
-  image; `ci.yml` first runs on the next push, `release.yml` at the 1.6.1
-  tag.
+- **26.04's coreutils are uutils (Rust), and two gates depended on GNU's.**
+  The first 26.04 run failed at tz parity; replaying the rest in an
+  `ubuntu:26.04` container then found the second. darshini itself was
+  right both times.
+  - **tz parity's oracle is GNU `date`, by name.** `/usr/bin/date` there
+    is uutils 0.10.0, which applies a POSIX rule before 1970 and reads a
+    DST name with no rule (`XST8XDT`) as UTC, so 7 of the 33 TZ forms
+    failed: every POSIX string darshini handles the glibc way on purpose.
+    `tests/tz-parity.sh` now takes the first of `date` / `gnudate` that
+    reports GNU coreutils and fails (it does not skip) when neither
+    does; the CI step installs `gnu-coreutils` (9.7), which ships
+    `gnudate`.
+  - **Every `od | grep` check reads to EOF** (`grep -E … > /dev/null`
+    instead of `grep -q`). uutils `od` writes line by line, so when
+    `grep -q` stops at the first match `od` dies of SIGPIPE, and `run:`
+    blocks are `bash -eo pipefail`: the tree smoke failed on its own
+    correct output, and the negative gates — no escapes from a hostile
+    mtime, no icons on a pipe, untrusted names neutralized on a TTY —
+    would pass whatever darshini printed. Measured under 26.04 with a
+    planted ESC: the old form saw it 0 times in 200, the new 200 / 200.
+    GNU `od` writes the whole dump at once, which is why 24.04 never hit
+    it. Eight lines; the `tests/*.sh` scripts run under `sh`, without
+    pipefail, so they were not affected.
+- Replays: every `run:` step of `ci.yml` in an `ubuntu:26.04` container
+  (uutils coreutils, glibc 2.43, cyrius from the CI installer, uid 1000
+  with passwordless sudo, umask 022), and locally on GNU coreutils; the
+  release job's steps locally. The actions themselves are first exercised
+  on GitHub: `ci.yml` on the next push, `release.yml` at the 1.6.1 tag.
 - mirshi stays at **1.11.3**, its latest release.
 
 ### Notes

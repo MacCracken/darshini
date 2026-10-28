@@ -17,6 +17,19 @@ export LC_ALL=C
 B="$PWD/build/darshini"
 [ -x "$B" ] || { echo "tz-parity: build/darshini not built" >&2; exit 1; }
 N="${1:-300}"
+# The oracle is glibc's localtime as GNU date reports it: darshini copies
+# glibc's rules on purpose (state.md). Not any date(1) — Ubuntu 26.04's is
+# uutils (Rust), which applies POSIX rules before 1970 and reads a
+# DST name with no rule (XST8XDT) as UTC. There GNU's is `gnudate`
+# (package gnu-coreutils). No GNU date is a failure, not a skip.
+DATE=
+for d in date gnudate; do
+    if command -v "$d" > /dev/null 2>&1 && "$d" --version 2> /dev/null | head -1 | grep -q 'GNU coreutils'; then
+        DATE="$d"
+        break
+    fi
+done
+[ -n "$DATE" ] || { echo "tz-parity: needs GNU date (glibc's TZ rules; Ubuntu 26.04: gnu-coreutils)" >&2; exit 1; }
 ZI="${TZDIR:-/usr/share/zoneinfo}"
 [ -f "$ZI/America/New_York" ] || { echo "tz-parity: skip (no zoneinfo at $ZI)"; exit 0; }
 T="$(mktemp -d)"
@@ -35,7 +48,7 @@ if command -v zdump > /dev/null 2>&1; then
             | awk '$7 == "UT" && $6 ~ /^[0-9]+$/ && $6 >= 1902 && $6 <= 2240 { print $3, $4, $6, $5, "UTC" }' \
             > "$T/zd" || true
         if [ -s "$T/zd" ]; then
-            date -u -f "$T/zd" '+%s' 2> /dev/null | awk '{ print $1 - 1; print $1; print $1 + 1 }' >> "$T/epochs" || true
+            "$DATE" -u -f "$T/zd" '+%s' 2> /dev/null | awk '{ print $1 - 1; print $1; print $1 + 1 }' >> "$T/epochs" || true
         fi
     done
 fi
@@ -51,10 +64,10 @@ fail=0
 check() {   # $1 = label, $2 = TZ value or "-unset-", [$3 = only instants below this epoch]
     if [ "$2" = "-unset-" ]; then
         env -u TZ "$B" -l --local-time "$T/f" > "$T/out"
-        env -u TZ date -f "$T/at" '+%Y-%m-%d %H:%M' > "$T/want_t"
+        env -u TZ "$DATE" -f "$T/at" '+%Y-%m-%d %H:%M' > "$T/want_t"
     else
         TZ="$2" "$B" -l --local-time "$T/f" > "$T/out"
-        TZ="$2" date -f "$T/at" '+%Y-%m-%d %H:%M' > "$T/want_t"
+        TZ="$2" "$DATE" -f "$T/at" '+%Y-%m-%d %H:%M' > "$T/want_t"
     fi
     # darshini rows: perms size date time e_EPOCH (sorted by name) -> by epoch
     awk '{ sub(/^e_/, "", $5); print $5, $3 " " $4 }' "$T/out" | sort -n > "$T/got"

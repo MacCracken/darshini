@@ -13,7 +13,8 @@ changed (A/B 0 / 276 on x86_64 and aarch64; on agnos under mirshi the
 only difference is mirshi's own `ENOSYS agnos#110` stderr line). On
 agnos ≥ 1.57.13 name sanitization now follows the fd (darshana 1.5.0's
 per-fd `tty_isatty`). CI moved to `ubuntu-26.04` and SHA-pinned
-actions (not yet run on GitHub).
+actions; its first run there showed two gates assumed GNU coreutils
+(26.04 ships uutils), both fixed in the gates, not in darshini.
 
 Prior: **1.6.0** — display correctness, shipped 2026-10-15. Minor bump:
 a new flag and visible output changes, every one a fix or an opt-in.
@@ -138,8 +139,10 @@ matrix on every push since v1.4.2) but is not declared supported
   sanitizer, the mtime formatter (v1.4.1, mutation-validated). Runs in
   CI since v1.4.1.
 - `tests/darshini.bcyr` — micro-benchmarks (`cyrius bench`).
-- `tests/tz-parity.sh` (v1.6.0: `--local-time` vs `date(1)` across ~30
-  zones and TZ forms, random instants and every DST transition),
+- `tests/tz-parity.sh` (v1.6.0: `--local-time` vs GNU `date(1)` across
+  ~30 zones and TZ forms, random instants and every DST transition;
+  fails without GNU date — v1.6.1 — and on Ubuntu 26.04 uses `gnudate`
+  from gnu-coreutils),
   `tests/git-parity.sh` (v1.5.0: `--git` vs real git — ignore sets,
   `.git`, submodules, worktrees, ownership with sudo or as root; run it
   locally with the ownership part via
@@ -200,8 +203,11 @@ icon / mime tables generated from CYML), then 1.8.0 (platforms).
   follows glibc deliberately — including glibc's rule that such a
   string applies no DST before 1970 (northern rules), and its
   posixrules history for a DST name with no rule — so it agrees with
-  `date` and `ls -l`; past posixrules' last transition darshini uses the
-  string's own offsets where glibc (a defect) uses the file's.
+  GNU `date` and `ls -l`; past posixrules' last transition darshini uses
+  the string's own offsets where glibc (a defect) uses the file's.
+  uutils' `date` (Ubuntu 26.04's default `/usr/bin/date`) disagrees on
+  exactly those strings — DST before 1970, a no-rule name read as UTC —
+  so `tests/tz-parity.sh` insists on GNU's (`gnudate` there).
 - **Grid widths are cells, from a generated table**: regenerate
   `src/width_table.cyr` with `tests/gen-width-table.py` (deliberately,
   not in CI — a runner's Python may carry another Unicode version).
@@ -210,9 +216,17 @@ icon / mime tables generated from CYML), then 1.8.0 (platforms).
   sanitization keys on `tty_isatty` — per fd on agnos ≥ 1.57.13
   (darshana 1.5.0, `fd_kind#111`), and on older kernels and under
   mirshi "is the console up", so a redirected listing is sanitized
-  there. Opposite defaults, each failing safe. agnos also has no `getcwd` (`--git` needs an
-  absolute path), a stub `fstat`, and no `lstat` wired yet
+  there. Opposite defaults, each failing safe. agnos also has no
+  `getcwd` (`--git` needs an absolute path), a stub `fstat`, and no
+  `lstat` wired yet
   ([`../architecture/002-agnos-fs-abi-split.md`](../architecture/002-agnos-fs-abi-split.md)).
+- **CI runs on uutils coreutils** (ubuntu-26.04: `date`, `od`, `touch`,
+  `stat`… are the Rust ports). In a `run:` block (bash, pipefail) never
+  end a pipe from a coreutils producer with `grep -q` / `head`: uutils
+  writes as it goes and dies of SIGPIPE, which fails a positive check
+  and can silently pass a negative one — use `grep … > /dev/null`. An
+  oracle that must be GNU says so by name (`tests/tz-parity.sh` →
+  `gnudate`). Replay CI in an `ubuntu:26.04` container to see it.
 - **`format_mtime` reads chrono's `DateTime` by named offset**
   (`DT_YEAR`…), pinned by assertions against the `dt_*` accessors.
   Migrating to the accessors was measured and rejected (each re-runs

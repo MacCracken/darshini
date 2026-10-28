@@ -359,7 +359,12 @@ jobs:
             echo "filesystem cannot hold the mtime; skipping"; exit 0
           fi
           timeout 10 "$B" -l "$T" > /tmp/mt
-          if od -An -tx1 /tmp/mt | grep -qE ' (1b|9b)( |$)'; then echo "control byte from an mtime:"; od -c /tmp/mt; exit 1; fi
+          # Every `od | grep` in this file reads to EOF (`> /dev/null`, not
+          # `-q`): on ubuntu-26.04 od is uutils, which writes line by line
+          # and dies of SIGPIPE when grep -q stops early, and run: blocks
+          # are pipefail — a positive check then fails and a negative one
+          # can pass vacuously (v1.6.1).
+          if od -An -tx1 /tmp/mt | grep -E ' (1b|9b)( |$)' > /dev/null; then echo "control byte from an mtime:"; od -c /tmp/mt; exit 1; fi
           grep -q '????-??-?? ??:?? f$' /tmp/mt || { echo "no placeholder:"; cat /tmp/mt; exit 1; }
 
       - name: Smoke — -d renders single entry for dir
@@ -481,8 +486,14 @@ jobs:
         # 45-minute offsets, southern-hemisphere and negative DST, Casablanca,
         # Samoa's skipped day, POSIX rule strings in every date form, a no-rule
         # string (glibc's posixrules), ":name", an absolute path, TZ empty and
-        # unset.
-        run: sh tests/tz-parity.sh
+        # unset. The oracle is GNU date: on ubuntu-26.04 /usr/bin/date is
+        # uutils, which disagrees with glibc before 1970 and on no-rule
+        # strings, so gnu-coreutils supplies GNU's as `gnudate` (v1.6.1).
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gnu-coreutils > /dev/null
+          sh tests/tz-parity.sh
 
       - name: Smoke — multibyte names align in the grid
         # v1.6.0. Column widths are terminal cells (wide = 2, combining = 0),
@@ -510,7 +521,7 @@ jobs:
           out="$("$B" -l small big | awk '{ print index($0, $NF) }' | sort -u | wc -l)"
           test "$out" -eq 1 || { echo "-l across arguments is not one aligned table:"; "$B" -l small big; exit 1; }
           script -qec "$B --no-color small big" /dev/null > tty_out
-          od -An -tx1 tty_out | grep -q -E ' (ee|ef) ' || { echo "file arguments not decorated on a TTY"; exit 1; }
+          od -An -tx1 tty_out | grep -E ' (ee|ef) ' > /dev/null || { echo "file arguments not decorated on a TTY"; exit 1; }
 
       - name: Smoke — -T -l --mime shows the mime column
         # v1.6.0: ADR 0004 promised it; through v1.5.0 tree.cyr had no mime path.
@@ -529,9 +540,9 @@ jobs:
         run: |
           set -e
           ./build/${{ github.event.repository.name }} -T docs > /tmp/tree
-          od -An -tx1 /tmp/tree | grep -q -E ' e2 94 9c ' \
+          od -An -tx1 /tmp/tree | grep -E ' e2 94 9c ' > /dev/null \
             || { echo "tree output missing ├ connector:"; cat /tmp/tree; exit 1; }
-          od -An -tx1 /tmp/tree | grep -q -E ' e2 94 94 ' \
+          od -An -tx1 /tmp/tree | grep -E ' e2 94 94 ' > /dev/null \
             || { echo "tree output missing └ connector:"; cat /tmp/tree; exit 1; }
           # --level 1 on docs: shows docs + its direct children
           # (adr / architecture / development / examples / guides)
@@ -556,7 +567,7 @@ jobs:
         run: |
           set -e
           ./build/${{ github.event.repository.name }} > /tmp/no_icons
-          if od -An -tx1 /tmp/no_icons | grep -q -E ' (ee|ef) '; then
+          if od -An -tx1 /tmp/no_icons | grep -E ' (ee|ef) ' > /dev/null; then
             echo "pipe output contained Nerd Font PUA bytes:"
             cat -v /tmp/no_icons
             exit 1
@@ -568,13 +579,13 @@ jobs:
         run: |
           set -e
           script -qec "./build/${{ github.event.repository.name }}" /dev/null > /tmp/tty_icons
-          od -An -tx1 /tmp/tty_icons | grep -q -E ' (ee|ef) ' || {
+          od -An -tx1 /tmp/tty_icons | grep -E ' (ee|ef) ' > /dev/null || {
             echo "TTY-attached output had no Nerd Font PUA bytes (icons not firing):"
             cat -v /tmp/tty_icons
             exit 1
           }
           script -qec "./build/${{ github.event.repository.name }} --no-icons" /dev/null > /tmp/tty_no_icons
-          if od -An -tx1 /tmp/tty_no_icons | grep -q -E ' (ee|ef) '; then
+          if od -An -tx1 /tmp/tty_no_icons | grep -E ' (ee|ef) ' > /dev/null; then
             echo "--no-icons failed to suppress Nerd Font PUA bytes:"
             cat -v /tmp/tty_no_icons
             exit 1
@@ -634,7 +645,7 @@ jobs:
           mkdir "$(printf 'd\033[1A\033[2Kx')" "$(printf 'n\033[1Ax')"
           chmod 000 "$(printf 'n\033[1Ax')"
           inject() {   # $1 = label, $2 = captured output
-            if od -An -tx1 "$2" | grep -qE ' (1b|9b)( |$)'; then
+            if od -An -tx1 "$2" | grep -E ' (1b|9b)( |$)' > /dev/null; then
               echo "terminal-control byte reached the TTY ($1):"; od -c "$2"; exit 1
             fi
           }

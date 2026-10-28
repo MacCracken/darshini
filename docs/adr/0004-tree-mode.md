@@ -80,8 +80,9 @@ line is one entry. It composes with:
   and the run exits 1 (v1.4.1; it was drawn as empty, exit 0).
   So is an entry the tree cannot lstat — it needs the stat to know
   whether to descend (v1.7.0): its row is drawn (`?` placeholders
-  under `-l`) and named on stderr. Linux only until agnos adopts
-  lstat (roadmap 1.8.0).
+  under `-l`) and named on stderr. On agnos only where it has lstat#102
+  (v1.8.0); a link there is drawn as a link and not descended, as on
+  Linux.
 - `--no-color` / `--no-icons`: suppression per the M4/M5 ADRs.
 - `-1`: no-op under `-T` (tree is already
   one-entry-per-line); doesn't error to keep bundling forgiving.

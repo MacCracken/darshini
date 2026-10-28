@@ -16,19 +16,26 @@ them rather than the raw syscalls. (The open wrappers also carry the v1.4.1
 non-blocking flags on Linux; agnos has no such flags, and its `fstat` is a
 stub, so `d_fd_regular_size` answers "regular, size unknown" there.)
 
-**2. There was no `lstat` on agnos** — syscall 6 is `close` there, not `lstat`.
-`d_lstat` falls back to `d_stat`, so on agnos a symlink reports its target.
-agnos has since grown `lstat#102` (agnos 1.56.53), which the stdlib wraps as
-`sys_lstat(path, len, buf)`; adopting it changes how agnos renders symlinks and
-is tracked in the roadmap, not done. Two v1.7.0 features wait on it there: a
-broken link cannot be stat'd without it, so the stat-error rule
-(`emit_stat_error`) is off on agnos, and no symlink row ever reaches
-`emit_link_target`.
+**2. `lstat` is newer on agnos than the target** — syscall 6 is `close` there,
+not `lstat`, and through v1.7.0 `d_lstat` was `stat#33`, which follows, so on
+agnos a symlink reported its target. agnos grew `lstat#102` at 1.56.53 (the
+stdlib's `sys_lstat(path, len, buf)`), and since v1.8.0 `d_lstat` uses it when
+the kernel has it. Which call is decided once, on the first path that can
+decide it: `#33` and `#102` succeed on exactly the same backends (ext2, ZFS,
+the `/fonts` intercept — both return -1 on FAT / exFAT), so lstat failing
+where stat succeeds means no `#102` (mirshi 1.11.3, older kernels), and those
+keep `#33`. A fixed probe path such as `/` would not do: it need not be on a
+backend either call serves. The 1.7.0 stat-error rule (`emit_stat_error`)
+follows the same answer — on with `#102`, off on the fallback, where a broken
+link cannot be stat'd. Link targets stay off on agnos for another reason
+(*The console size is console-wide*, below). mirshi has no `#102`, so CI
+exercises only the fallback;
+`tests/agnos-live.sh` boots a real kernel for the lstat path.
 (Through v1.3.4 the Linux arm issued the literal 6 too, which is why the
 `--aarch64` build rendered `?` for every stat-derived column — 6 is
 `lsetxattr` there. Since v1.4.0 it calls the stdlib's arch-aware `sys_lstat`,
-and the aarch64 build's output is byte-identical to x86_64's. aarch64 is still
-not a declared supported target.)
+and the aarch64 build's output is byte-identical to x86_64's. aarch64 Linux is
+a declared target since v1.8.0.)
 
 **3. The directory-read ABI is a different call with a different record
 layout.** Linux is `getdents64` (#217); agnos is `getdents` (#29) with a
@@ -64,7 +71,9 @@ console was up, redirected or not. From darshana 1.5.0 (darshini 1.6.1) it
 asks agnos 1.57.13's `fd_kind#111` about the fd itself (the console or a
 terminal emulator's #97 channel), so a redirected listing is written raw, as
 on Linux; on older kernels, and under mirshi, it keeps the console answer.
-`term_width` still returns 0 on every kernel.
+`term_width` still returns 0 on every kernel, and `-l` shows no link targets
+on agnos (v1.7.0 gates them on the same `tty_isatty`): both wait on a darshana
+probe that says whether its answer was per fd (roadmap, waiting on upstream).
 
 **Consequence for error handling**: agnos reports a flat `-1` rather than a
 specific errno, so the fine-grained `ENOENT` / `EACCES` branches simply fall

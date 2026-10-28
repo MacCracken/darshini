@@ -4,6 +4,101 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-28
+
+Platforms. Minor bump: a new declared target, and agnos output changes. No
+flag, exit code or Linux output byte changes. Toolchain and darshana
+unchanged (cyrius 6.7.18, darshana 1.5.0).
+
+**Verified.**
+
+- **aarch64 on real hardware**, a Raspberry Pi 4 on Linux 7.0: the unit
+  suite 542 / 542, the fuzz harness clean, and the A/B matrix (69 modes ×
+  pipe and PTY at 100 × 30, 53 × 30, 0 × 0) over the hostile fixture,
+  shipped as one tarball and extracted identically on both machines:
+  **276 / 276 captures byte-identical** to x86_64's, with the release (DCE)
+  binaries of both.
+- **agnos on a real kernel**: the new `tests/agnos-live.sh` boots agnos
+  1.57.14 in QEMU, and its driver runs the agnos build with a real argv and
+  its output redirected: **28 / 28**, including the 1.7.0 agnos build
+  showing the old followed links on the same image, and the console
+  listing checked from the serial log. A build that never uses lstat fails
+  it.
+- A/B against 1.7.0 (built from its tag), every difference classified:
+  x86_64 and aarch64 differ only in `--help` / `--version` (8 of 276).
+  agnos under mirshi differs in those and by mirshi's own `mirshi: ENOSYS
+  agnos#102 -> -1` stderr line (196 of 276 in all): otherwise 1.7.0's
+  behavior on the fallback path, as designed.
+- Every `run:` step of `ci.yml` replayed locally (GNU) and in an
+  `ubuntu:26.04` container (uutils): 47 / 47; the release jobs replayed
+  for the 1.8.0 tag, both architectures packaged, `SHA256SUMS` verifying.
+
+### Added
+
+- **aarch64 Linux is a declared target.** Each release ships
+  `darshini-<version>-aarch64-linux` (the binary) and its `.tar.gz` beside
+  the x86_64 pair, and `release.yml` first checks the shipped aarch64
+  binary against the shipped x86_64 one under `qemu-aarch64`
+  (`tests/parity.sh`, 21 modes, pipe and PTY). Inside each tarball the
+  binary is `darshini`. CI has gated the aarch64 build's output on every
+  push since v1.4.2; the real-hardware run is a release step (state.md).
+- **`tests/agnos-live.sh`** and its driver **`tests/agnos_live.cyr`**: the
+  agnos build on a real agnos kernel (>= 1.56.53) in QEMU, from local agnos
+  and gnoboot builds — darshana's image recipe (an ESP with gnoboot and the
+  kernel, an ext2 root seeded with `mkfs.ext2 -d`). The driver is init; it
+  spawns `/bin/darshini` (spawn_path#43 with a real argv) with stdout and
+  stderr redirected to files (exec_redirect#62) and asserts on them, over a
+  fixture with links to a file, a directory, nothing, and each other.
+  `LIVE_REF_BIN` seeds an older build whose old behavior is asserted too.
+  A release step, not CI: a runner has no agnos kernel.
+
+### Changed
+
+- **agnos lists a symlink as itself.** `d_lstat` uses lstat#102 (agnos
+  1.56.53) where the kernel has it; through v1.7.0 it was stat#33, which
+  follows. So on agnos a link is now an `l` row with its own size, `@`
+  under `-F`, `inode/symlink` under `--mime`, and `-T` does not descend
+  into a link to a directory; a broken or looping link has a
+  real row instead of `?`. A link to a directory named as an argument
+  still lists the directory, as on Linux.
+  - The kernel is asked once, on the first path that can decide: #33 and
+    #102 succeed on exactly the same backends (ext2, ZFS, the `/fonts`
+    intercept, per agnos's `kernel/core/syscall.cyr`), so lstat failing
+    where stat succeeds means no #102 — older kernels and mirshi 1.11.3,
+    which keep stat#33 and 1.7.0's behavior. A fixed probe path such as
+    `/` was not used: it need not be on a backend either call serves.
+  - **The 1.7.0 stat-error rule is on with it** (decided 2026-10-28):
+    with lstat a broken link can be stat'd, so an entry that cannot be is
+    a real failure. On the fallback it stays off. agnos reports every
+    failure as -1, so its message is `cannot stat`; and since #33 / #102
+    cannot stat anything on FAT / exFAT, a FAT listing that needs the
+    stat now names each entry and exits 1.
+- `src/columns.cyr`, `src/long.cyr`, ADR 0004, architecture note 002, the
+  README and state.md describe the agnos behavior; the README names the
+  aarch64 target.
+
+### Tests
+
+- Unit 540 → **542**: the `d_lstat` probe decides on the first readable
+  path (agnos), and Linux always lstats. aarch64 542 / 542 (qemu and the
+  Pi), agnos 523 / 523 under mirshi; fuzz clean on all three.
+
+### Notes
+
+- **AGNOS decoration and agnos link targets were split out of 1.8.0**
+  (decided 2026-10-28). Both are gated on `tty_isatty`, which on kernels
+  before 1.57.13 and under mirshi answers for the console, not the fd, so
+  turning either on would put escapes or targets into `darshini > file`
+  there. They wait on a public darshana probe that says which answer it
+  gave (darshana has only the private `_agnos_has_tty_calls`); roadmap,
+  *Waiting on upstream*.
+- The roadmap planned to prove #102 with a mirshi run; mirshi 1.11.3 has
+  no #102 (nor #110 / #111), so the proof is the live boot (decided
+  2026-10-28), and CI under mirshi exercises only the fallback.
+- On aarch64 `CYRIUS_DCE=1` NOP-fills dead code instead of compacting it
+  (cyrius has no aarch64 compaction repair model yet), so the aarch64
+  release binary is 410,648 B against x86_64's 189,552.
+
 ## [1.7.0] - 2026-10-28
 
 Behavior. Minor bump: `NO_COLOR` is new input, and terminal `-l` output

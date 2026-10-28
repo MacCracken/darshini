@@ -919,6 +919,19 @@ fn main(): i64 {
     assert_eq(tw_is_tty, tty_isatty(STDOUT_FD), "term_width() > 0 iff tty_isatty(stdout)");
     #endif
 
+    test_group("d_lstat");
+    # v1.8.0: Linux always lstats. agnos decides once, on the first path
+    # either call can read: lstat#102 (a real kernel >= 1.56.53, 1) or the
+    # stat#33 fallback (mirshi 1.11.3, which has no #102: -1). The live
+    # boot (tests/agnos-live.sh) checks which; here, only that one is made.
+    var lst_buf = alloc(144);
+    assert_eq(lstat_path("README.md", lst_buf) >= 0, 1, "lstat of a file in the checkout");
+    #ifdef CYRIUS_TARGET_AGNOS
+    assert_neq(d_has_lstat(), 0, "agnos: the probe decided on the first readable path");
+    #else
+    assert_eq(d_has_lstat(), 1, "Linux: lstat always");
+    #endif
+
     test_group("color_for_mode");
     # Directory (any perms) -> BLUE
     assert_eq(color_for_mode(0x41ED), TTY_FG_BLUE, "dir 0755 -> BLUE");

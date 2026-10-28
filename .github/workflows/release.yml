@@ -126,25 +126,51 @@ jobs:
       - name: Resolve dependencies
         run: cyrius deps
 
-      - name: Build release binary (DCE)
+      - name: Build release binaries (DCE)
+        # v1.8.0: x86_64 and aarch64 (cross-compiled; the toolchain ships
+        # cycc_aarch64). On aarch64 CYRIUS_DCE=1 NOP-fills the dead code
+        # rather than compacting it (cyrius has no aarch64 compaction repair
+        # model yet), so that binary is no smaller — but it is the bytes the
+        # next step checks.
         run: |
-          mkdir -p build
-          CYRIUS_DCE=1 cyrius build src/main.cyr "build/${{ github.event.repository.name }}"
-          echo "build/${{ github.event.repository.name }}: $(wc -c < build/${{ github.event.repository.name }}) bytes"
-
-      - name: Package binary artifact
-        # Tarball (binary + minimal metadata) for offline mirrors /
-        # vendoring, plus the standalone binary for direct download.
-        run: |
+          set -e
           BIN="${{ github.event.repository.name }}"
-          PKG="${BIN}-${VERSION}-x86_64-linux"
-          mkdir -p "pkg/$PKG"
-          cp "build/$BIN" "pkg/$PKG/"
-          cp README.md LICENSE CHANGELOG.md VERSION cyrius.cyml "pkg/$PKG/"
+          mkdir -p build
+          CYRIUS_DCE=1 cyrius build src/main.cyr "build/$BIN"
+          CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr "build/$BIN-aarch64"
+          echo "build/$BIN: $(wc -c < "build/$BIN") bytes; build/$BIN-aarch64: $(wc -c < "build/$BIN-aarch64") bytes"
+
+      - name: The aarch64 release binary matches x86_64's (qemu)
+        # CI gates the aarch64 build's output on every push; this checks the
+        # bytes actually shipped: the DCE aarch64 binary against the DCE
+        # x86_64 one, over tests/parity.sh's 21 modes, pipe + PTY. (Real
+        # hardware is a release step: state.md, "aarch64 on a Raspberry Pi".)
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user > /dev/null
+          BIN="${{ github.event.repository.name }}"
+          sh tests/parity.sh "./build/$BIN" "qemu-aarch64 ./build/$BIN-aarch64"
+
+      - name: Package binary artifacts
+        # Per architecture: a tarball (binary + minimal metadata) for offline
+        # mirrors / vendoring, plus the standalone binary for direct
+        # download. aarch64 since v1.8.0. Inside each tarball the binary is
+        # `darshini`, whatever the architecture.
+        run: |
+          set -e
+          BIN="${{ github.event.repository.name }}"
           mkdir -p out
-          tar czf "out/${PKG}.tar.gz" -C pkg "$PKG"
-          # Standalone binary for direct fetch.
-          cp "build/$BIN" "out/${BIN}-${VERSION}-x86_64-linux"
+          for arch in x86_64 aarch64; do
+            src="build/$BIN"
+            [ "$arch" = aarch64 ] && src="build/$BIN-aarch64"
+            PKG="${BIN}-${VERSION}-${arch}-linux"
+            mkdir -p "pkg/$PKG"
+            cp "$src" "pkg/$PKG/$BIN"
+            cp README.md LICENSE CHANGELOG.md VERSION cyrius.cyml "pkg/$PKG/"
+            tar czf "out/${PKG}.tar.gz" -C pkg "$PKG"
+            cp "$src" "out/${PKG}"
+          done
 
       - name: Generate SHA256
         run: |
@@ -157,7 +183,7 @@ jobs:
           name: release-dist
           path: |
             out/*.tar.gz
-            out/${{ github.event.repository.name }}-*-x86_64-linux
+            out/${{ github.event.repository.name }}-*-linux
             out/SHA256SUMS.*
 
   # ────────────────────────────────────────────────────────────────
@@ -213,7 +239,7 @@ jobs:
         run: |
           mkdir -p out
           find dist-raw -type f \
-            \( -name '*.tar.gz' -o -name '${{ github.event.repository.name }}-*-x86_64-linux' -o -name 'SHA256SUMS.*' \) \
+            \( -name '*.tar.gz' -o -name '${{ github.event.repository.name }}-*-linux' -o -name 'SHA256SUMS.*' \) \
             -exec cp {} out/ \;
           cd out
           cat SHA256SUMS.* | sort -u > SHA256SUMS
@@ -239,7 +265,7 @@ jobs:
           prerelease: ${{ startsWith(env.VERSION, '0.') }}
           files: |
             out/*.tar.gz
-            out/${{ github.event.repository.name }}-*-x86_64-linux
+            out/${{ github.event.repository.name }}-*-linux
             out/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true

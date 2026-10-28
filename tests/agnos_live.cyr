@@ -1,0 +1,234 @@
+# darshini on a real agnos kernel — v1.8.0.
+#
+# mirshi 1.11.3 answers lstat#102 with ENOSYS, so under it darshini's agnos
+# build falls back to stat#33 and behaves as v1.7.0 did; nothing in CI can
+# exercise the lstat path. This driver runs on agnos itself:
+# tests/agnos-live.sh seeds it as /bin/agnsh (init) on an ext2 root beside
+# /bin/darshini and a fixture, boots a real agnos kernel in QEMU, and reads
+# the result from the serial log, where the console's output goes.
+#
+# Each case runs the real binary as a child (spawn_path#43 with a real
+# argv), its stdout and stderr redirected to files (exec_redirect#62), then
+# reads them back. One case writes to the console instead, between
+# markers, for the script to check. When the script seeds a reference
+# build as /bin/darshini-ref (LIVE_REF_BIN), the driver also asserts that
+# it shows the old behavior, which proves the fixture's links are real.
+#
+# A `.cyr`, not a `.tcyr`, so `cyrius test` never runs it on the host.
+
+var _out = 0;
+var _err = 0;
+var _out_len = 0;
+var _err_len = 0;
+var _code = 0;
+var CAP = 65536;
+
+fn _slurp(path, buf): i64 {
+    var fd = sys_open(path, strlen(path), AO_RDONLY);
+    if (fd < 0) { return 0; }
+    var n = 0;
+    var go = 1;
+    while (go == 1) {
+        var r = sys_read(fd, buf + n, CAP - 1 - n);
+        if (r <= 0) { go = 0; }
+        else { n = n + r; if (n >= CAP - 1) { go = 0; } }
+    }
+    sys_close(fd);
+    store8(buf + n, 0);
+    return n;
+}
+
+# Run `args` (space-separated; argv[0] is the binary's path) with stdout and
+# stderr captured. Sets _out / _err / _code.
+fn run(args): i64 {
+    var n = strlen(args);
+    var blob = alloc(n + 1);
+    var i = 0;
+    while (i < n) {
+        var b = load8(args + i);
+        if (b == 32) { b = 0; }
+        store8(blob + i, b);
+        i = i + 1;
+    }
+    store8(blob + n, 0);
+    var ofd = sys_open("/out/o", 6, AO_WRONLY | AO_CREAT | AO_TRUNC);
+    var efd = sys_open("/out/e", 6, AO_WRONLY | AO_CREAT | AO_TRUNC);
+    sys_exec_redirect(1, ofd);
+    sys_exec_redirect_add(2, efd);
+    var pid = sys_spawn_argv(blob, n + 1, 0, 0, 0);
+    _code = 0 - 1;
+    if (pid >= 0) { _code = WEXITSTATUS(sys_waitpid_block(pid)); }
+    sys_close(ofd);
+    sys_close(efd);
+    _out_len = _slurp("/out/o", _out);
+    _err_len = _slurp("/out/e", _err);
+    return _code;
+}
+
+# Run `args` on the console (no redirect), for the script to read.
+fn run_console(args): i64 {
+    var n = strlen(args);
+    var blob = alloc(n + 1);
+    var i = 0;
+    while (i < n) {
+        var b = load8(args + i);
+        if (b == 32) { b = 0; }
+        store8(blob + i, b);
+        i = i + 1;
+    }
+    store8(blob + n, 0);
+    var pid = sys_spawn_argv(blob, n + 1, 0, 0, 0);
+    if (pid < 0) { return 0 - 1; }
+    return WEXITSTATUS(sys_waitpid_block(pid));
+}
+
+# The start of the output line that ends with " <name>" (or is exactly
+# <name>), or 0.
+fn row(name): i64 {
+    var nl = strlen(name);
+    var p = 0;
+    var found = 0;
+    while (p < _out_len) {
+        var e = p;
+        var scan = 1;
+        while (scan == 1) {
+            if (e >= _out_len) { scan = 0; }
+            else { if (load8(_out + e) == 10) { scan = 0; } else { e = e + 1; } }
+        }
+        if (found == 0) { if (e - p >= nl) {
+                if (memeq(_out + e - nl, name, nl) == 1) {
+                    if (e - p == nl) { found = _out + p; }
+                    else { if (load8(_out + e - nl - 1) == 32) { found = _out + p; } }
+                }
+            } }
+        p = e + 1;
+    }
+    return found;
+}
+
+fn starts(p, pre): i64 {
+    if (p == 0) { return 0; }
+    return memeq(p, pre, strlen(pre));
+}
+
+fn count(hay, hay_len, needle): i64 {
+    var nl = strlen(needle);
+    var c = 0;
+    var i = 0;
+    while (i + nl <= hay_len) {
+        if (memeq(hay + i, needle, nl) == 1) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+# The row's text up to its newline, for a mime / size check.
+fn row_has(name, needle): i64 {
+    var p = row(name);
+    if (p == 0) { return 0; }
+    var e = 0;
+    var scan = 1;
+    while (scan == 1) {
+        var c = load8(p + e);
+        if (c == 10) { scan = 0; }
+        else { if (c == 0) { scan = 0; } else { e = e + 1; } }
+    }
+    return count(p, e, needle) > 0;
+}
+
+fn dump(): i64 {
+    println("--- stdout");
+    sys_write(1, _out, _out_len);
+    println("--- stderr");
+    sys_write(1, _err, _err_len);
+    print_cstr_exit_code();
+    return 0;
+}
+
+fn print_cstr_exit_code(): i64 {
+    var m = "--- exit ";
+    sys_write(1, m, strlen(m));
+    fmt_int(_code);
+    println("");
+    return 0;
+}
+
+fn main(): i64 {
+    alloc_init();
+    _out = alloc(CAP);
+    _err = alloc(CAP);
+    println("DARSHINI-LIVE-BEGIN");
+
+    # A listing: each link is itself, `l...` with its own size, and a broken
+    # or looping link has a real row, not `?` (v1.7.0 followed them).
+    run("/bin/darshini -l /fx");
+    assert_eq(_code, 0, "-l: exit 0 (no false stat errors)");
+    assert_eq(_err_len, 0, "-l: nothing on stderr");
+    assert(starts(row("broken"), "lrwx"), "-l: broken link is an l row");
+    assert(row_has("broken", " 7 "), "-l: broken link's size is its target's length (7)");
+    assert(starts(row("loop_a"), "lrwx"), "-l: looping link is an l row");
+    assert(starts(row("to_d"), "lrwx"), "-l: link to a directory is an l row");
+    assert(starts(row("to_f"), "lrwx"), "-l: link to a file is an l row");
+    assert(starts(row("d"), "drwx"), "-l: the directory is a d row");
+    assert(starts(row("f"), "-rw-"), "-l: the file is a - row");
+    assert_eq(count(_out, _out_len, "?"), 0, "-l: no ? placeholder anywhere");
+    assert_eq(count(_out, _out_len, " -> "), 0, "-l: no link targets in a file (and none on agnos yet)");
+    if (_code != 0) { dump(); }
+
+    run("/bin/darshini -F /fx");
+    assert(row("broken@") != 0, "-F: broken@");
+    assert(row("to_d@") != 0, "-F: to_d@ (not to_d/)");
+    assert(row("to_f@") != 0, "-F: to_f@");
+    assert(row("d/") != 0, "-F: d/");
+    assert(row("x*") != 0, "-F: x*");
+
+    run("/bin/darshini -l --mime /fx");
+    assert(row_has("broken", "inode/symlink"), "--mime: broken link is inode/symlink");
+    assert(row_has("to_d", "inode/symlink"), "--mime: link to a directory is inode/symlink");
+    assert(row_has("d", "inode/directory"), "--mime: the directory is inode/directory");
+
+    run("/bin/darshini -T /fx");
+    assert_eq(_code, 0, "-T: exit 0");
+    assert_eq(count(_out, _out_len, "inner"), 1, "-T: does not descend into the link to a directory");
+
+    run("/bin/darshini /fx/to_d");
+    assert(row("inner") != 0, "a link to a directory, as an argument, lists the directory");
+
+    run("/bin/darshini -ld /fx/to_d");
+    assert(starts(_out, "lrwx"), "-ld on a link to a directory: the link's own row");
+
+    run("/bin/darshini -l /fx/broken");
+    assert_eq(_code, 0, "-l on a broken link argument: exit 0");
+    assert(starts(_out, "lrwx"), "-l on a broken link argument: an l row");
+
+    run("/bin/darshini -l /fx/missing");
+    assert_eq(_code, 1, "a missing argument: exit 1");
+
+    # The reference build (v1.7.0), when seeded: stat#33 followed every link.
+    var st[64];
+    if (sys_stat("/bin/darshini-ref", 17, &st) == 0) {
+        run("/bin/darshini-ref -l /fx");
+        assert(starts(row("broken"), "??????????"), "ref: the broken link was a ? row");
+        assert(starts(row("to_d"), "drwx"), "ref: the link to a directory was a d row");
+    }
+
+    # The console: a terminal on agnos >= 1.57.13. Still no link targets
+    # and no decoration (roadmap); the script checks this segment.
+    println("DARSHINI-CONSOLE-BEGIN");
+    run_console("/bin/darshini -l /fx");
+    println("DARSHINI-CONSOLE-END");
+
+    var rc = assert_summary();
+    var endm = "DARSHINI-LIVE-END rc=";
+    sys_write(1, endm, strlen(endm));
+    fmt_int(rc);
+    println("");
+    # Exiting would make init run /bin/agnsh again; wait on the console
+    # instead, until the harness stops QEMU.
+    var b[8];
+    while (1) { sys_read(0, &b, 1); }
+    return rc;
+}
+
+var exit_code = main();
+sys_exit(exit_code);

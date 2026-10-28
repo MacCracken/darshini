@@ -72,8 +72,12 @@ fn link_targets_on(): i64 { return _link_targets; }
 fn emit_link_target(path_cstr, want_color): i64 {
     if (_link_targets == 0) { return 0; }
     #ifdef CYRIUS_TARGET_AGNOS
-    # agnos's stat follows links (walk.cyr d_lstat), so no symlink row
-    # reaches here until lstat#102 is adopted (roadmap 1.8.0).
+    # Off on agnos. Symlink rows reach here since v1.8.0 (lstat#102), but
+    # `_link_targets` comes from tty_isatty, which on kernels before
+    # 1.57.13 and under mirshi answers for the console, not for fd 1 — so
+    # `darshini -l > file` would get targets there. Waits, with AGNOS
+    # decoration, on a darshana probe that says which answer it gave
+    # (roadmap). agnos's readlink#70 also takes (path, len, buf, buflen).
     return 0;
     #else
     if (_link_buf == 0) { _link_buf = alloc(LINK_BUF_SIZE); }

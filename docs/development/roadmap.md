@@ -23,38 +23,34 @@
 
 ## Path
 
-### 1.8.0 — platforms
+No 1.x release is scheduled past 1.8.0: what remains waits on an
+upstream change (below), and is scheduled when it lands.
 
-- **aarch64 Linux, declared**: an aarch64 release asset in
-  `release.yml`, and the docs naming it supported. Its output parity
-  with x86_64 is already gated in CI ([state.md](state.md)).
-- **AGNOS `lstat`** (#102, agnos 1.56.53): symlinks render as their
-  target there. Changes agnos output; needs a
-  [mirshi](https://github.com/MacCracken/mirshi) run proving #102 is
-  emulated. It also turns on 1.7.0's stat errors on agnos, which stay
-  off there until then (decided 2026-10-28): without lstat a broken
-  link cannot be stat'd, so it would be reported as an error. The same
-  release can drop `emit_link_target`'s agnos guard.
-- **AGNOS decoration** (color, icons, the grid on the console): the
-  per-fd test is agnos 1.57.13's `fd_kind#111`, which
-  [darshana](https://github.com/MacCracken/darshana) 1.5.0's
-  `tty_isatty` uses (darshini 1.6.1); `term_width` then takes the
-  console size from `tty_winsize`. On older kernels, and under mirshi,
-  `tty_isatty` still answers for the console, so `term_width` must stay
-  0 there or `darshini > file` gets escapes. darshini needs a way to
-  tell the two answers apart through darshana (CLAUDE.md: terminal
-  queries go through darshana), which may mean a darshana request.
-  Changes agnos terminal output. mirshi 1.11.3 has no #111, so the
-  check is a real agnos boot, as darshana's `scripts/agnos-live.sh`
-  does.
-
-#### Waiting on upstream
+### Waiting on upstream
 
 Scheduled when the dependency lands, not before.
 
+- **AGNOS decoration** (color, icons, the grid on the console) **and
+  link targets there** (split out of 1.8.0, decided 2026-10-28). The
+  per-fd test is agnos 1.57.13's `fd_kind#111`, which
+  [darshana](https://github.com/MacCracken/darshana) 1.5.0's
+  `tty_isatty` uses; `term_width` would then take the console size
+  from `tty_winsize`, and `-l` would show targets as on Linux. But on
+  older kernels, and under mirshi, `tty_isatty` answers for the
+  console, so both must stay off there or `darshini > file` gets
+  escapes and targets. Needs: a **public darshana probe** saying which
+  answer `tty_isatty` gave (darshana has only the private
+  `_agnos_has_tty_calls`; CLAUDE.md routes terminal queries through
+  darshana). Changes agnos terminal output. Verified on a real kernel
+  with `tests/agnos-live.sh` (mirshi 1.11.3 has no #110 / #111), whose
+  console-segment checks then flip.
 - **macOS / BSD**: needs [darshana](https://github.com/MacCracken/darshana)
   arms for `tty_winsize` / `tty_isatty`; the stdlib has the stat layouts
   and `getdirentries`.
+- **AGNOS in CI**: mirshi 1.11.3 has no lstat#102, console_mode#110 or
+  fd_kind#111, so the agnos runs under mirshi exercise only darshini's
+  stat#33 fallback; the lstat path is checked by `tests/agnos-live.sh`
+  as a release step. A mirshi that emulates #102 would let CI cover it.
 
 ### 2.0 — when it comes
 

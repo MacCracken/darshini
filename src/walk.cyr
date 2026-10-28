@@ -251,13 +251,43 @@ fn d_fd_regular_size(fd, out_size): i64 {
 # call on aarch64, so the build no longer depends on the backend
 # translating a foreign number.
 #
-# agnos: its single stat — symlinks resolve to their target's metadata
-# there. The agnos stdlib now carries `sys_lstat` (lstat#102, agnos
-# 1.56.53); adopting it is an agnos behavior change tracked in the
-# roadmap, not part of this fix.
+# agnos (v1.8.0): lstat#102 (agnos 1.56.53) when the kernel has it, so a
+# symlink is listed as itself — `l...`, its own size, `@` under -F, the
+# link glyph — not as its target, and a broken link has a row of its own
+# instead of `?`. Through v1.7.0 this was stat#33, which follows.
+#
+# Older kernels, and mirshi 1.11.3 (no #102: `ENOSYS agnos#102`), keep
+# stat#33. Which one is decided once, on the first path that can decide
+# it — not by probing a fixed path such as "/", which need not be on a
+# backend either call serves: #33 and #102 succeed on exactly the same
+# backends (ext2, ZFS, the /fonts intercept; agnos kernel/core/syscall.cyr),
+# so where lstat fails and stat succeeds, the kernel has no #102. lstat
+# succeeding decides yes. Both failing (a missing or unreachable entry)
+# decides nothing, and the next path asks again. So under mirshi the
+# probe costs one extra call, until the first entry stat can read.
+var _agnos_lstat = 0;            # 0 not known yet, 1 lstat#102, -1 stat#33 only
+
+fn d_has_lstat(): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return _agnos_lstat;
+    #else
+    return 1;
+    #endif
+}
+
 fn d_lstat(cpath, buf): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return sys_stat(cpath, strlen(cpath), buf);
+    var n = strlen(cpath);
+    if (_agnos_lstat == 0 - 1) { return sys_stat(cpath, n, buf); }
+    var r = sys_lstat(cpath, n, buf);
+    if (_agnos_lstat == 1) { return r; }
+    if (r >= 0) {
+        _agnos_lstat = 1;
+        return r;
+    }
+    var rs = sys_stat(cpath, n, buf);
+    if (rs >= 0) { _agnos_lstat = 0 - 1; }
+    return rs;
     #else
     return sys_lstat(cpath, buf);
     #endif

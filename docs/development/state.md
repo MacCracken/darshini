@@ -7,24 +7,27 @@
 
 ## Version
 
-**1.7.0** — behavior, 2026-10-28. Minor bump: new input (`NO_COLOR`)
-and terminal `-l` output changes; a correct listing's pipe bytes are
-unchanged. Toolchain and darshana unchanged (cyrius 6.7.18, darshana
-1.5.0).
+**1.8.0** — platforms, 2026-10-28. Minor bump: a new declared target
+and an agnos output change. Toolchain and darshana unchanged (cyrius
+6.7.18, darshana 1.5.0).
 
-- **Symlink targets under `-l` on a terminal** (`link -> target`,
-  `-T -l` too), sanitized, colored by what they point to; `-lF` keeps
-  `@` on the name; pipes stay name-only until 2.0.
-- **`NO_COLOR`** set and non-empty acts as `--no-color` (off switch only).
-- **Unstat-able entries** (an unsearchable directory) are named on
-  stderr, one line each, and exit 1 — where the stat carries data
-  (`-l`, `-F`, `--mime`, `--git` in a repo, `-T`); Linux only until
-  agnos adopts lstat (1.8.0).
-- **A directory gets the folder glyph** whatever its name.
-- **Icon / mime tables generated from their CYML**
-  (`tests/gen-tables.sh`; CI regenerates and diffs).
+- **aarch64 Linux is a declared target**: `release.yml` ships
+  `darshini-<v>-aarch64-linux` (tarball + binary) beside x86_64, after
+  checking the shipped aarch64 bytes against the shipped x86_64 ones
+  under qemu. On a real Raspberry Pi 4 the suite passes and 276 / 276
+  captures are byte-identical to x86_64's.
+- **agnos lists a symlink as itself** (lstat#102, agnos >= 1.56.53):
+  `l...`, its own size, `@`, `inode/symlink`, not descended by `-T`;
+  a broken link has a real row. The 1.7.0 stat-error rule is on there
+  with it. Probed once; mirshi and older kernels keep stat#33, so CI
+  under mirshi sees 1.7.0's behavior. Checked on a real agnos 1.57.14
+  boot (`tests/agnos-live.sh`, 28 / 28).
+- AGNOS decoration and agnos link targets were split out: they wait on
+  a darshana probe (roadmap).
 
-Prior: **1.6.1** — toolchain and dependency patch, 2026-10-28 (cyrius
+Prior: **1.7.0** — behavior: link targets under `-l` on a terminal,
+`NO_COLOR`, unstat-able entries reported (exit 1), the folder glyph for
+every directory, icon / mime tables generated from CYML. **1.6.1** — toolchain and dependency patch, 2026-10-28 (cyrius
 6.7.18, darshana 1.5.0, CI on `ubuntu-26.04` with SHA-pinned actions;
 two gates fixed for 26.04's uutils coreutils). **1.6.0** — display
 correctness: columns in terminal cells, path arguments as one decorated
@@ -111,16 +114,19 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 | `--git` with git's own rules: full ignore precedence, submodules, worktrees, `safe.directory` ([ADR 0005](../adr/0005-git-status-semantics.md)) | v1.5.0 |
 | Columns in terminal cells; path arguments as one decorated listing; `-T -l --mime`; `--local-time`; pre-1970 dates | v1.6.0 |
 | Symlink targets on a terminal; `NO_COLOR`; unstat-able entries reported (exit 1); folder glyph for every directory; icon / mime tables generated from CYML | v1.7.0 |
+| aarch64 Linux declared (release asset); agnos lists symlinks as themselves (lstat#102) | v1.8.0 |
 
-Supported targets: **Linux x86_64, AGNOS**. The aarch64 build matches
-x86_64 byte-for-byte (304 / 304 A/B captures; CI checks a 21-mode
-matrix on every push since v1.4.2) but is not declared supported
-(roadmap 1.8.0).
+Supported targets: **Linux x86_64, Linux aarch64** (declared v1.8.0),
+**AGNOS**. aarch64 output is byte-identical to x86_64's: CI checks a
+21-mode matrix under qemu on every push (since v1.4.2), the release
+job checks the shipped binaries the same way, and the release steps
+below run it on real hardware.
 
 ## Tests
 
-- `tests/darshini.tcyr` — **540** assertions (v1.7.0; 527 at v1.6.0,
-  463 at v1.5.0, 301 at v1.4.0). v1.7.0: the directory-only folder rule,
+- `tests/darshini.tcyr` — **542** assertions (v1.8.0; 540 at v1.7.0,
+  527 at v1.6.0, 463 at v1.5.0, 301 at v1.4.0). v1.8.0: the `d_lstat`
+  probe decides. v1.7.0: the directory-only folder rule,
   the generated tables. v1.6.0: terminal cells (CJK, combining, emoji,
   malformed), the cells grid, path-argument decoration, civil dates and
   their round trip, POSIX TZ rules, TZif zones. Earlier: v1.5.0: git's 137-row wildmatch table (t3070),
@@ -133,8 +139,8 @@ matrix on every push since v1.4.2) but is not declared supported
   extended flags, v4 prefix compression, long names, SHA-256, misframing),
   `_git_oid_len`, every `--git` status outcome including the u32 compare
   and `git_status_for_root`, the hardened magic probe. Cross-targets,
-  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 540 / 540;
-  agnos under mirshi 521 / 521 (no ownership or TZif tests there; its
+  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 542 / 542;
+  agnos under mirshi 523 / 523 (no ownership or TZif tests there; its
   errno assertions expect agnos's flat `-1`).
 - `tests/darshini.fcyr` — 8 fuzz targets with named invariants
   (v1.5.0 added wildmatch vs an independent reference matcher, v1.6.0
@@ -157,11 +163,41 @@ matrix on every push since v1.4.2) but is not declared supported
   `src/mime_table.cyr` from the CYML; CI regenerates and diffs),
   `tests/examples.sh` (regenerates the golden `docs/examples/README.md`)
   — CI helpers, runnable locally from the repo root.
+- `tests/agnos-live.sh` + `tests/agnos_live.cyr` (v1.8.0) — the agnos
+  build on a **real agnos kernel** in QEMU (KVM when `/dev/kvm` is
+  writable): the driver runs as init, spawns `/bin/darshini` with a real
+  argv and its output redirected to files, and asserts 26 checks (28
+  with `LIVE_REF_BIN`, a pre-1.8.0 agnos build that must show the old
+  followed links); the console listing is checked from the serial log.
+  Needs `../agnos/build/agnos` (>= 1.56.53), `../gnoboot/build/BOOTX64.EFI`,
+  OVMF, qemu, parted / sgdisk / mtools / mkfs.ext2. Not CI: a release
+  step (below).
 - CI (`.github/workflows/ci.yml`, every job on `ubuntu-26.04`, actions
   pinned by commit SHA since v1.6.1) — build, golden examples, strict
   lint, tests, fuzz, agnos (mirshi) + aarch64 (qemu) suite / fuzz runs
-  and aarch64 output parity, git parity, tz parity, 25 smoke gates, DCE
-  parity, security scan, table drift, docs / version consistency.
+  and aarch64 output parity, git parity, tz parity, 29 smoke gates, DCE
+  parity, security scan, generated tables, docs / version consistency.
+  `release.yml` also checks the shipped aarch64 binary against the
+  shipped x86_64 one (v1.8.0).
+
+### Release steps (not CI)
+
+Each needs hardware or builds a runner lacks; run them before tagging.
+
+- **aarch64 on a Raspberry Pi** (`ssh pi`, a Pi 4 on Linux 7.0). Do it
+  in **one ssh session**: the Pi's systemd-logind removes a user's
+  `/dev/shm` files when their last session ends (`RemoveIPC`), so files
+  copied in one `scp` are gone by the next `ssh`. Stream a bundle in on
+  stdin and results out on stdout. Run the aarch64 suite from a
+  checkout with `build/darshini` present (two tests read the checkout
+  and the build), the fuzz harness, and a capture of the A/B matrix
+  over a fixture tarball extracted identically on both machines,
+  compared byte for byte with the x86_64 capture. (The fixture's socket
+  is recreated after extraction, with its mode set explicitly: `bind()`
+  applies the umask, and the Pi's ssh session runs with 002.)
+  v1.8.0: 542 / 542, fuzz ok, 276 / 276 captures identical.
+- **agnos on a real kernel**: `LIVE_REF_BIN=<previous agnos build> sh
+  tests/agnos-live.sh`. v1.8.0: 28 / 28 on agnos 1.57.14.
 
 ## Dependencies
 
@@ -185,9 +221,10 @@ sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md): 1.8.0 (platforms — aarch64 declared,
-AGNOS `lstat`, which also turns on 1.7.0's stat errors there, and AGNOS
-decoration), then 2.0.
+See [`roadmap.md`](roadmap.md): nothing scheduled past 1.8.0 in 1.x.
+Waiting on upstream: AGNOS decoration and agnos link targets (a public
+darshana probe), macOS / BSD (darshana arms), agnos lstat in CI (mirshi
+#102). Then 2.0.
 
 ## Known gotchas
 
@@ -239,8 +276,15 @@ decoration), then 2.0.
   data: `-l`, `-F`, `--mime`, `--git` with a repo); `render_long`
   reports only on its own lstat path (no decor pass); the tree always.
   A new lstat site must pick one of those, or an entry is reported
-  twice or not at all. `emit_stat_error` is a no-op on agnos until
-  lstat#102.
+  twice or not at all. `emit_stat_error` is a no-op on agnos unless
+  `d_lstat` is lstat#102 (`d_has_lstat() == 1`).
+- **agnos lstat is probed, not assumed** (v1.8.0, walk.cyr). Under
+  mirshi the probe prints `mirshi: ENOSYS agnos#102 -> -1` on stderr —
+  once per process, more when the first entries probed are broken links
+  (both calls fail, nothing is decided). Classify it out of an agnos
+  A/B like darshana's `#110` line. On FAT / exFAT agnos can stat
+  nothing (#33 and #102 serve ext2 and ZFS), so a listing there that
+  needs the stat reports every entry.
 - **Generated tables**: edit `icons/default.cyml` / `mime/default.cyml`,
   then `sh tests/gen-tables.sh icons > src/icons_table.cyr` (or `mime`).
   The generator uses byte lengths (`LC_ALL=C`), so gawk and mawk write

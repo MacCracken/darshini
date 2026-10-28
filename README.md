@@ -56,8 +56,9 @@ additions, fixes and performance. Audits:
 [2026-05-23](docs/audit/2026-05-23-audit.md) (pre-v1),
 [2026-08-23](docs/audit/2026-08-23-audit.md),
 [2026-10-15](docs/audit/2026-10-15-audit.md). Targets: Linux
-x86_64 and AGNOS; the aarch64 build's output matches x86_64's
-byte-for-byte but it is not yet a declared target. On a terminal,
+x86_64, Linux aarch64 (since 1.8.0; each release ships both
+binaries, and the aarch64 output is byte-identical to x86_64's) and
+AGNOS. On a terminal,
 untrusted names (and metadata) are neutralized before they reach the
 screen (see [SECURITY.md](SECURITY.md)).
 
@@ -113,12 +114,13 @@ Feature surface:
   name starts with `-`.
 - **`--help` / `--version`** — standard meta flags.
 - **Exit status** — 0 on success; 1 when a path is missing or
-  unreadable, a write fails, or (Linux) an entry the listing needs
-  to stat can't be (`-l`, `-F`, `--git`, `--mime`, `-T` in an
-  unsearchable directory — named on stderr, as `ls` does).
+  unreadable, a write fails, or an entry the listing needs to stat
+  can't be (`-l`, `-F`, `--git`, `--mime`, `-T` in an unsearchable
+  directory — named on stderr, as `ls` does; on agnos with lstat#102).
 
-Next: see the [roadmap](docs/development/roadmap.md) — 1.8.0
-platforms (aarch64 declared, AGNOS `lstat` and decoration).
+Next: see the [roadmap](docs/development/roadmap.md) — 2.0 (link
+targets on pipes), and AGNOS decoration once darshana can say when its
+terminal answer is per fd.
 
 ## Build
 
@@ -135,9 +137,24 @@ toolchain on PATH; the version is pinned in `cyrius.cyml`.
 
 ## Install
 
+A release ships one static binary per architecture — x86_64 and, since
+1.8.0, aarch64 Linux — named so `uname -m` picks it, with `SHA256SUMS`
+beside them ([releases](https://github.com/MacCracken/darshini/releases)):
+
 ```sh
-cp build/darshini ~/.local/bin/                       # or wherever your PATH points
-darshini --version                                     # → "darshini 1.6.0"
+v=1.8.0                                                # the release you want
+a="darshini-$v-$(uname -m)-linux"
+curl -fLO "https://github.com/MacCracken/darshini/releases/download/$v/$a"
+curl -fLO "https://github.com/MacCracken/darshini/releases/download/$v/SHA256SUMS"
+grep " $a\$" SHA256SUMS | sha256sum -c -
+install -m 755 "$a" ~/.local/bin/darshini              # or wherever your PATH points
+```
+
+Or from a build (`cyrius build src/main.cyr build/darshini`):
+
+```sh
+cp build/darshini ~/.local/bin/
+darshini --version                                     # → "darshini <version>"
 ```
 
 Suggested zsh aliases (the maintainer's

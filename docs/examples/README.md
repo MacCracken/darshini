@@ -93,6 +93,8 @@ width.cyr
 width_table.cyr
 
 tests:
+agnos-live.sh
+agnos_live.cyr
 darshini.bcyr
 darshini.fcyr
 darshini.tcyr

@@ -41,10 +41,10 @@ fn term_width(): i64 {
     # measured at v1.4.0 under mirshi with a probe build that called
     # tty_winsize here — the script-consumer surprise CLAUDE.md calls a
     # bug. agnos 1.57.13 added a per-fd test (fd_kind#111), which
-    # darshana 1.5.0's `tty_isatty` uses; gating decoration on it is
-    # roadmap 1.8.0, not done here (v1.6.1 only moved the dep). Older
-    # kernels and mirshi answer `tty_isatty` for the console, so the
-    # gate would have to keep this 0 there.
+    # darshana 1.5.0's `tty_isatty` uses; gating decoration on it waits
+    # on a public darshana probe that says whether that answer was per fd
+    # (roadmap, "waiting on upstream"). Older kernels and mirshi answer
+    # `tty_isatty` for the console, so the gate must keep this 0 there.
     return 0;
     #else
     var rows = 0;

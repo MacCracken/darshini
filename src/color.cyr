@@ -578,19 +578,20 @@ fn emit_dir_error(path_cstr, rc): i64 {
 # data — `-l`, `-F`, `--git`, `--mime`, `-T` — not for color or icons
 # alone, as `ls --color` (which reads the type from getdents) exits 0.
 #
-# Not on agnos yet: its stat follows symlinks (walk.cyr d_lstat), so a
-# broken or looping link cannot be stat'd there and would be reported as
-# an error Linux does not have. agnos keeps v1.6.1's behavior — `?` rows,
-# exit 0 — until lstat#102 is adopted (roadmap 1.8.0), which turns this
-# on there too.
+# On agnos only where d_lstat is lstat#102 (v1.8.0; walk.cyr). Without it
+# darshini lstats with stat#33, which follows symlinks, so a broken or
+# looping link could not be stat'd and would be reported as an error
+# Linux does not have: there the `?` rows stay and the exit stays 0, as
+# in v1.7.0. Note that agnos answers -1 for every failure, so its message
+# is "cannot stat", and that it cannot stat any entry on FAT / exFAT
+# (#33 and #102 serve ext2 and ZFS only), so a FAT listing that needs
+# the stat reports each entry.
 var _stat_failed = 0;
 
 fn stat_failed(): i64 { return _stat_failed; }
 
 fn emit_stat_error(path_cstr, rc): i64 {
-    #ifdef CYRIUS_TARGET_AGNOS
-    return 0;
-    #endif
+    if (d_has_lstat() != 1) { return 0; }
     _stat_failed = 1;
     if (rc == 0 - EACCES) {
         return emit_error("darshini", path_cstr, "permission denied");

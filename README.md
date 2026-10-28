@@ -58,7 +58,8 @@ additions, fixes and performance. Audits:
 [2026-10-15](docs/audit/2026-10-15-audit.md). Targets: Linux
 x86_64, Linux aarch64 (since 1.8.0; each release ships both
 binaries, and the aarch64 output is byte-identical to x86_64's) and
-AGNOS. On a terminal,
+AGNOS (decorated on the console since 1.8.1, on agnos 1.57.13 and
+later). On a terminal,
 untrusted names (and metadata) are neutralized before they reach the
 screen (see [SECURITY.md](SECURITY.md)).
 
@@ -119,8 +120,7 @@ Feature surface:
   directory — named on stderr, as `ls` does; on agnos with lstat#102).
 
 Next: see the [roadmap](docs/development/roadmap.md) — 2.0 (link
-targets on pipes), and AGNOS decoration once darshana can say when its
-terminal answer is per fd.
+targets on pipes); macOS / BSD wait on darshana.
 
 ## Build
 

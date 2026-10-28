@@ -71,9 +71,17 @@ console was up, redirected or not. From darshana 1.5.0 (darshini 1.6.1) it
 asks agnos 1.57.13's `fd_kind#111` about the fd itself (the console or a
 terminal emulator's #97 channel), so a redirected listing is written raw, as
 on Linux; on older kernels, and under mirshi, it keeps the console answer.
-`term_width` still returns 0 on every kernel, and `-l` shows no link targets
-on agnos (v1.7.0 gates them on the same `tty_isatty`): both wait on a darshana
-probe that says whether its answer was per fd (roadmap, waiting on upstream).
+Through v1.8.0 `term_width` returned 0 on every kernel and `-l` showed no link
+targets on agnos (v1.7.0 gates them on the same `tty_isatty`). Since v1.8.1
+both are on where darshana 1.6.0's `tty_isatty_is_per_fd()` is 1 (agnos >=
+1.57.13) and `tty_isatty(1)` is 1: color, icons, the grid and link targets on
+the console or a terminal emulator's channel, as on Linux, and still nothing in
+a redirected listing. On older kernels and under mirshi the probe is 0, so
+there it is all still off. The grid takes `tty_winsize`'s width, which is the
+console's even in an emulator window (darshana ADR 0008), so in a window
+narrower than the console its rows wrap — chosen over one column on agnos
+(2026-10-28). Sanitization keeps keying on `tty_isatty` alone: on an older
+kernel that sanitizes a redirected listing too, the safe direction.
 
 **Consequence for error handling**: agnos reports a flat `-1` rather than a
 specific errno, so the fine-grained `ENOENT` / `EACCES` branches simply fall

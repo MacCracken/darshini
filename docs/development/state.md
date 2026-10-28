@@ -7,24 +7,18 @@
 
 ## Version
 
-**1.8.0** — platforms, 2026-10-28. Minor bump: a new declared target
-and an agnos output change. Toolchain and darshana unchanged (cyrius
-6.7.18, darshana 1.5.0).
+**1.8.1** — 2026-10-28: darshana 1.5.0 → 1.6.0, and **AGNOS
+decoration**. Where darshana's new `tty_isatty_is_per_fd()` is 1 (agnos
+≥ 1.57.13) and stdout is a terminal, agnos gets what a Linux terminal
+gets: color, icons, the grid (at the console's width) and `-l` link
+targets. Redirected output, older kernels and mirshi are unchanged, and
+so is Linux (A/B 0 / 276 on x86_64, aarch64 and agnos under mirshi).
+Checked on a real agnos 1.57.14 boot (`tests/agnos-live.sh`, 30 / 30 plus
+three decorated console listings, the 1.8.0 build undecorated there).
+Toolchain unchanged (cyrius 6.7.18).
 
-- **aarch64 Linux is a declared target**: `release.yml` ships
-  `darshini-<v>-aarch64-linux` (tarball + binary) beside x86_64, after
-  checking the shipped aarch64 bytes against the shipped x86_64 ones
-  under qemu. On a real Raspberry Pi 4 the suite passes and 276 / 276
-  captures are byte-identical to x86_64's.
-- **agnos lists a symlink as itself** (lstat#102, agnos >= 1.56.53):
-  `l...`, its own size, `@`, `inode/symlink`, not descended by `-T`;
-  a broken link has a real row. The 1.7.0 stat-error rule is on there
-  with it. Probed once; mirshi and older kernels keep stat#33, so CI
-  under mirshi sees 1.7.0's behavior. Checked on a real agnos 1.57.14
-  boot (`tests/agnos-live.sh`, 28 / 28).
-- AGNOS decoration and agnos link targets were split out: they wait on
-  a darshana probe (roadmap).
-
+Prior: **1.8.0** — platforms: aarch64 Linux declared (release asset,
+Pi-verified), agnos lists symlinks as themselves (lstat#102, probed).
 Prior: **1.7.0** — behavior: link targets under `-l` on a terminal,
 `NO_COLOR`, unstat-able entries reported (exit 1), the folder glyph for
 every directory, icon / mime tables generated from CYML. **1.6.1** — toolchain and dependency patch, 2026-10-28 (cyrius
@@ -115,6 +109,7 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 | Columns in terminal cells; path arguments as one decorated listing; `-T -l --mime`; `--local-time`; pre-1970 dates | v1.6.0 |
 | Symlink targets on a terminal; `NO_COLOR`; unstat-able entries reported (exit 1); folder glyph for every directory; icon / mime tables generated from CYML | v1.7.0 |
 | aarch64 Linux declared (release asset); agnos lists symlinks as themselves (lstat#102) | v1.8.0 |
+| AGNOS decoration (color, icons, grid, link targets) where `tty_isatty` is per fd | v1.8.1 |
 
 Supported targets: **Linux x86_64, Linux aarch64** (declared v1.8.0),
 **AGNOS**. aarch64 output is byte-identical to x86_64's: CI checks a
@@ -124,7 +119,8 @@ below run it on real hardware.
 
 ## Tests
 
-- `tests/darshini.tcyr` — **542** assertions (v1.8.0; 540 at v1.7.0,
+- `tests/darshini.tcyr` — **543** assertions (v1.8.1: the decoration
+  contract holds on agnos too; 542 at v1.8.0, 540 at v1.7.0,
   527 at v1.6.0, 463 at v1.5.0, 301 at v1.4.0). v1.8.0: the `d_lstat`
   probe decides. v1.7.0: the directory-only folder rule,
   the generated tables. v1.6.0: terminal cells (CJK, combining, emoji,
@@ -139,7 +135,7 @@ below run it on real hardware.
   extended flags, v4 prefix compression, long names, SHA-256, misframing),
   `_git_oid_len`, every `--git` status outcome including the u32 compare
   and `git_status_for_root`, the hardened magic probe. Cross-targets,
-  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 542 / 542;
+  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 543 / 543;
   agnos under mirshi 523 / 523 (no ownership or TZif tests there; its
   errno assertions expect agnos's flat `-1`).
 - `tests/darshini.fcyr` — 8 fuzz targets with named invariants
@@ -166,9 +162,10 @@ below run it on real hardware.
 - `tests/agnos-live.sh` + `tests/agnos_live.cyr` (v1.8.0) — the agnos
   build on a **real agnos kernel** in QEMU (KVM when `/dev/kvm` is
   writable): the driver runs as init, spawns `/bin/darshini` with a real
-  argv and its output redirected to files, and asserts 26 checks (28
-  with `LIVE_REF_BIN`, a pre-1.8.0 agnos build that must show the old
-  followed links); the console listing is checked from the serial log.
+  argv and its output redirected to files (which must stay plain), and
+  asserts 30 checks; three console listings are checked from the serial
+  log — decorated, with link targets, a grid (v1.8.1). `LIVE_REF_BIN`, a
+  pre-1.8.1 agnos build, adds a console listing that must stay plain.
   Needs `../agnos/build/agnos` (>= 1.56.53), `../gnoboot/build/BOOTX64.EFI`,
   OVMF, qemu, parted / sgdisk / mtools / mkfs.ext2. Not CI: a release
   step (below).
@@ -197,16 +194,17 @@ Each needs hardware or builds a runner lacks; run them before tagging.
   applies the umask, and the Pi's ssh session runs with 002.)
   v1.8.0: 542 / 542, fuzz ok, 276 / 276 captures identical.
 - **agnos on a real kernel**: `LIVE_REF_BIN=<previous agnos build> sh
-  tests/agnos-live.sh`. v1.8.0: 28 / 28 on agnos 1.57.14.
+  tests/agnos-live.sh`. v1.8.1: 30 / 30 and the console segments on agnos
+  1.57.14.
 
 ## Dependencies
 
 - stdlib — string, fmt, alloc, io, vec, str, syscalls, args, fs,
   chrono, hashmap, assert, bench (`cyrius.cyml [deps].stdlib`).
-- `[deps.darshana]` (git, tag **1.5.0**; needs cyrius ≥ 6.7.2 on
+- `[deps.darshana]` (git, tag **1.6.0**; needs cyrius ≥ 6.7.2 on
   Linux, ≥ 6.7.11 for an AGNOS build) — used:
   `tty_sgr_buf` / `tty_sgr_reset_buf` + `TTY_FG_*`, `tty_winsize`,
-  `tty_isatty`, `tty_sanitize_buf` / `tty_has_ctl` +
+  `tty_isatty`, `tty_isatty_is_per_fd` (v1.8.1), `tty_sanitize_buf` / `tty_has_ctl` +
   `TTY_SANITIZE_UTF8`. API frozen since 1.0.0 (additive only).
 - CI test harness: [mirshi](https://github.com/MacCracken/mirshi)
   `1.11.3` (`MIRSHI_VERSION` in `ci.yml`; latest release). It has no
@@ -221,10 +219,9 @@ sessions and the maintainer's `ls` alias.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md): nothing scheduled past 1.8.0 in 1.x.
-Waiting on upstream: AGNOS decoration and agnos link targets (a public
-darshana probe), macOS / BSD (darshana arms), agnos lstat in CI (mirshi
-#102). Then 2.0.
+See [`roadmap.md`](roadmap.md): nothing scheduled past 1.8.1 in 1.x.
+Waiting on upstream: macOS / BSD (darshana arms), agnos lstat and
+decoration in CI (mirshi #102 / #110 / #111). Then 2.0.
 
 ## Known gotchas
 
@@ -255,14 +252,16 @@ darshana probe), macOS / BSD (darshana arms), agnos lstat in CI (mirshi
 - **Grid widths are cells, from a generated table**: regenerate
   `src/width_table.cyr` with `tests/gen-width-table.py` (deliberately,
   not in CI — a runner's Python may carry another Unicode version).
-- **AGNOS terminal detection depends on the kernel**: `term_width`
-  returns 0 there (no decoration even on the console), while
-  sanitization keys on `tty_isatty` — per fd on agnos ≥ 1.57.13
-  (darshana 1.5.0, `fd_kind#111`), and on older kernels and under
-  mirshi "is the console up", so a redirected listing is sanitized
-  there. Opposite defaults, each failing safe. agnos also has no
-  `getcwd` (`--git` needs an absolute path), a stub `fstat`, and no
-  `lstat` wired yet
+- **AGNOS terminal detection depends on the kernel**: `tty_isatty` is
+  per fd on agnos ≥ 1.57.13 (darshana 1.5.0, `fd_kind#111`) and "is the
+  console up" on older kernels and under mirshi. Decoration and link
+  targets (v1.8.1) need darshana's `tty_isatty_is_per_fd()` to be 1 as
+  well, so they are off on the fallback; sanitization keys on
+  `tty_isatty` alone, so on the fallback a redirected listing is
+  sanitized. Opposite defaults, each failing safe. The agnos grid width
+  is the console's (`tty_winsize`), even in a terminal emulator's
+  window. agnos also has no `getcwd` (`--git` needs an absolute path)
+  and a stub `fstat`; `lstat` is probed (below)
   ([`../architecture/002-agnos-fs-abi-split.md`](../architecture/002-agnos-fs-abi-split.md)).
 - **CI runs on uutils coreutils** (ubuntu-26.04: `date`, `od`, `touch`,
   `stat`… are the Rust ports). In a `run:` block (bash, pipefail) never

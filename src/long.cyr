@@ -71,17 +71,15 @@ fn link_targets_on(): i64 { return _link_targets; }
 
 fn emit_link_target(path_cstr, want_color): i64 {
     if (_link_targets == 0) { return 0; }
-    #ifdef CYRIUS_TARGET_AGNOS
-    # Off on agnos. Symlink rows reach here since v1.8.0 (lstat#102), but
-    # `_link_targets` comes from tty_isatty, which on kernels before
-    # 1.57.13 and under mirshi answers for the console, not for fd 1 — so
-    # `darshini -l > file` would get targets there. Waits, with AGNOS
-    # decoration, on a darshana probe that says which answer it gave
-    # (roadmap). agnos's readlink#70 also takes (path, len, buf, buflen).
-    return 0;
-    #else
     if (_link_buf == 0) { _link_buf = alloc(LINK_BUF_SIZE); }
+    # agnos (v1.8.1): readlink#70 takes the path's length too. Symlink rows
+    # reach here there since v1.8.0 (lstat#102); main() turns the switch on
+    # only where darshana's terminal test is per fd (tty_isatty_is_per_fd).
+    #ifdef CYRIUS_TARGET_AGNOS
+    var n = sys_readlink(path_cstr, strlen(path_cstr), _link_buf, LINK_BUF_SIZE);
+    #else
     var n = sys_readlink(path_cstr, _link_buf, LINK_BUF_SIZE);
+    #endif
     if (n <= 0) { return 0; }
     var col = 0;
     if (want_color == 1) {
@@ -92,7 +90,6 @@ fn emit_link_target(path_cstr, want_color): i64 {
     d_write(STDOUT_FD, " -> ", 4);
     emit_decorated(str_from_buf(_link_buf, n), col, 0, 0, 0, 0, 0, 0);
     return 0;
-    #endif
 }
 
 # Render the long-format listing for the entries inside `dir_str`.

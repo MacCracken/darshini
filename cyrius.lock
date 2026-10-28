@@ -1,4 +1,4 @@
-commit	16cfe7d23d6d05af4dee9bed7bb06c2127f54990	darshana	https://github.com/MacCracken/darshana.git	1.5.0
+commit	7a07d580d47d5b1530c4a69c3eaf56ac19646355	darshana	https://github.com/MacCracken/darshana.git	1.6.0
 346716377b00f36e58eb16cf7fe1dd62dd8fe577930d0d0429f822795b35817c  lib/alloc.cyr
 5afd5bb7cba4e49fee331f6a2838f4e01d9781defaf531403f6616f42ac7151b  lib/alloc_agnos.cyr
 57af1877c5082793ecfcfb2bf358c81cda79eaaae4feaa12eb7b963c4cbdf739  lib/alloc_cx.cyr
@@ -12,7 +12,7 @@ commit	16cfe7d23d6d05af4dee9bed7bb06c2127f54990	darshana	https://github.com/MacC
 23516d97b8eb5ba1c7a1b6e34a89b3b0653f68d858edca8521a7ccce5a06bce5  lib/atomic.cyr
 cd9321d9400401cd8895d1f488d969ea391a1194b327f7a1fa60b99912b73cf2  lib/bench.cyr
 2e2e802085112d781225c517fca853b4adbf29850a96b21b6ff32469f0736516  lib/chrono.cyr
-d676cbb3e771a0929aa2760a78b045df84126d98af73775e2c71c437c6ea911d  lib/darshana.cyr
+24ce2e947937c69d3d0eb38bd7d3c624ce020894ad313d90c5694f7aa62ce2c1  lib/darshana.cyr
 217f7e11e89b826b5cb789f1eaef15b7acd00e9810a04a5cfa298f72612aabd3  lib/fmt.cyr
 6077a8c1cc5cec69d0680703986af142d3d1a5bec9674481288615a2c0616d87  lib/fnptr.cyr
 9d5acefc05994ece25876d98ff19e69e167bf6e41ce830f5e07ee3d11842e74f  lib/fs.cyr

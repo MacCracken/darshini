@@ -4,6 +4,74 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-10-28
+
+darshana `1.5.0` → **`1.6.0`**, and **AGNOS decoration**. Patch: terminal-only
+presentation on agnos (`Changed`, per the 1.x rules); no flag, exit code,
+pipe or file byte changes on any target, and nothing on Linux. Toolchain
+unchanged (cyrius 6.7.18).
+
+**Verified.**
+
+- The darshana bump alone: **0 / 276** captures differ from 1.8.0 on x86_64,
+  aarch64 under `qemu-aarch64`, and agnos under mirshi.
+- With the decoration on top: still **0 / 276** on all three. Linux takes
+  the same path as before, and under mirshi darshana's new probe answers 0,
+  so agnos there keeps 1.8.0's output.
+- **On a real agnos 1.57.14 kernel** (`tests/agnos-live.sh`): 30 / 30 on the
+  redirected runs, which stay plain (no escape, no icon, no link target, one
+  entry per line). The three console listings are decorated as on a Linux
+  terminal: `-l` with icons, cyan and red link names, and targets colored by
+  type (blue `d`, red `nowhere`); the grid on one row; `-l --no-color
+  --no-icons` plain, but with its link targets. The 1.8.0 agnos build on the
+  same console is undecorated.
+- Planted defects, both caught: decorating whenever winsize answers (no
+  terminal test) fails the live run's file checks; ignoring the probe fails
+  the unit suite under mirshi on a PTY, where the console answer says
+  "terminal" but the probe says 0 (521 / 523; the real build passes 523 there).
+
+### Changed
+
+- **darshana `1.5.0` → `1.6.0`.** It adds `tty_isatty_is_per_fd()` (darshana
+  ADR 0008), which darshini asked for: 1 when `tty_isatty(fd)` answers about
+  the fd — always on Linux, and on agnos 1.57.13 and later — and 0 where it
+  answers for the console (older kernels, mirshi 1.11.3). `cyrius.lock`
+  regenerated (`7a07d58`). Nothing else in `lib/` changed.
+- **AGNOS decoration**, split out of 1.8.0 to wait for that probe. Where it
+  is 1 and stdout is a terminal (the console, or a terminal emulator's #97
+  channel), agnos now gets what a Linux terminal gets:
+  - **color, icons and the multi-column grid**: `term_width` takes
+    `tty_winsize`'s columns there, 80 for a terminal whose size reads as 0.
+    Through v1.8.0 it was 0 on every agnos, deliberately — winsize#60 answers
+    for a pipe or a file too, and taking it put escapes into
+    `darshini > out.txt` (measured at v1.4.0). That is still what an older
+    kernel or mirshi would do, so there it stays 0.
+  - **`-l` link targets** (`link -> target`, colored by what the target is),
+    through agnos's `readlink#70`; the switch in `main()` now also needs the
+    probe.
+
+  The grid's width is the console's even in a terminal emulator's window
+  (darshana ADR 0008's caveat), so in a window narrower than the console its
+  rows wrap — chosen over one column on agnos (decided 2026-10-28).
+  Sanitization is unchanged: it still keys on `tty_isatty` alone, so on an
+  older kernel a redirected listing is sanitized too (the safe direction).
+- Docs: ADR 0001 (when color is on, on AGNOS), architecture note 002,
+  SECURITY.md, the README, state.md; the roadmap's *AGNOS decoration* item
+  is done and gone.
+
+### Tests
+
+- Unit 542 → **543**: the `term_width` contract — decorated exactly when
+  `tty_isatty(stdout)` and the probe agree — now holds on agnos as on Linux
+  (it pinned `term_width() == 0` there), and Linux's probe is 1. aarch64
+  543 / 543, agnos 523 / 523 under mirshi.
+- `tests/agnos-live.sh` / `tests/agnos_live.cyr`: the console segments now
+  require decoration (escapes, link targets with blue and red targets, a
+  grid in fewer lines than entries) and the redirected runs its absence
+  (no escape, no icon byte, one line per entry); 26 → **30** driver checks.
+  `LIVE_REF_BIN` now means any pre-1.8.1 agnos build, run on the console,
+  which must stay undecorated.
+
 ## [1.8.0] - 2026-10-28
 
 Platforms. Minor bump: a new declared target, and agnos output changes. No

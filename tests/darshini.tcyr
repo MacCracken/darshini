@@ -910,13 +910,17 @@ fn main(): i64 {
     # single signal that gates color, icons and multi-column. darshana's
     # tty_isatty is the same TIOCGWINSZ probe, so they must agree — on a
     # pipe (the usual `cyrius test` case) both say "not a terminal".
-    #ifdef CYRIUS_TARGET_AGNOS
-    # agnos: 0 by decision — winsize#60 cannot tell fd 1 from the console.
-    assert_eq(term_width(), 0, "agnos: term_width() is 0 (no per-fd terminal test)");
-    #else
+    # v1.8.1: on agnos too, but only where darshana's terminal test is
+    # about fd 1 itself (tty_isatty_is_per_fd: agnos >= 1.57.13). Under
+    # mirshi the probe is 0, so term_width() must be 0 even if the console
+    # answer says "terminal". On Linux the probe is always 1.
     var tw_is_tty = 0;
     if (term_width() > 0) { tw_is_tty = 1; }
-    assert_eq(tw_is_tty, tty_isatty(STDOUT_FD), "term_width() > 0 iff tty_isatty(stdout)");
+    var tw_want = tty_isatty(STDOUT_FD);
+    if (tty_isatty_is_per_fd() != 1) { tw_want = 0; }
+    assert_eq(tw_is_tty, tw_want, "term_width() > 0 iff tty_isatty(stdout) and the answer is per fd");
+    #ifndef CYRIUS_TARGET_AGNOS
+    assert_eq(tty_isatty_is_per_fd(), 1, "Linux: tty_isatty answers about the fd");
     #endif
 
     test_group("d_lstat");

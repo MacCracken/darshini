@@ -9,10 +9,13 @@
 #
 # Each case runs the real binary as a child (spawn_path#43 with a real
 # argv), its stdout and stderr redirected to files (exec_redirect#62), then
-# reads them back. One case writes to the console instead, between
-# markers, for the script to check. When the script seeds a reference
-# build as /bin/darshini-ref (LIVE_REF_BIN), the driver also asserts that
-# it shows the old behavior, which proves the fixture's links are real.
+# reads them back: a file is not a terminal, so those listings must stay
+# plain. Three cases write to the console instead, between markers, for
+# the script to check that they are decorated (v1.8.1: color, icons, the
+# grid and link targets where darshana's tty_isatty is per fd). When the
+# script seeds an older build as /bin/darshini-ref (LIVE_REF_BIN), it is
+# run on the console too, and the script checks it was not decorated:
+# the contrast proves the console segment measures the new code.
 #
 # A `.cyr`, not a `.tcyr`, so `cyrius test` never runs it on the host.
 
@@ -172,7 +175,8 @@ fn main(): i64 {
     assert(starts(row("d"), "drwx"), "-l: the directory is a d row");
     assert(starts(row("f"), "-rw-"), "-l: the file is a - row");
     assert_eq(count(_out, _out_len, "?"), 0, "-l: no ? placeholder anywhere");
-    assert_eq(count(_out, _out_len, " -> "), 0, "-l: no link targets in a file (and none on agnos yet)");
+    assert_eq(count(_out, _out_len, " -> "), 0, "-l: no link targets in a file");
+    assert_eq(count(_out, _out_len, "\x1b"), 0, "-l: no escape in a file");
     if (_code != 0) { dump(); }
 
     run("/bin/darshini -F /fx");
@@ -204,19 +208,29 @@ fn main(): i64 {
     run("/bin/darshini -l /fx/missing");
     assert_eq(_code, 1, "a missing argument: exit 1");
 
-    # The reference build (v1.7.0), when seeded: stat#33 followed every link.
+    # A plain listing into a file: one entry per line, no color, no icon.
+    run("/bin/darshini /fx");
+    assert_eq(count(_out, _out_len, "\n"), 9, "plain, to a file: one line per entry");
+    assert_eq(count(_out, _out_len, "\x1b"), 0, "plain, to a file: no escape");
+    assert_eq(count(_out, _out_len, "\xef"), 0, "plain, to a file: no icon glyph");
+
+    # The console: a terminal on agnos >= 1.57.13, whose tty_isatty is per
+    # fd there (darshana 1.6.0). The script checks each segment.
+    println("DARSHINI-CONSOLE-LONG-BEGIN");
+    run_console("/bin/darshini -l /fx");
+    println("DARSHINI-CONSOLE-LONG-END");
+    println("DARSHINI-CONSOLE-GRID-BEGIN");
+    run_console("/bin/darshini /fx");
+    println("DARSHINI-CONSOLE-GRID-END");
+    println("DARSHINI-CONSOLE-PLAIN-BEGIN");
+    run_console("/bin/darshini -l --no-color --no-icons /fx");
+    println("DARSHINI-CONSOLE-PLAIN-END");
     var st[64];
     if (sys_stat("/bin/darshini-ref", 17, &st) == 0) {
-        run("/bin/darshini-ref -l /fx");
-        assert(starts(row("broken"), "??????????"), "ref: the broken link was a ? row");
-        assert(starts(row("to_d"), "drwx"), "ref: the link to a directory was a d row");
+        println("DARSHINI-CONSOLE-REF-BEGIN");
+        run_console("/bin/darshini-ref -l /fx");
+        println("DARSHINI-CONSOLE-REF-END");
     }
-
-    # The console: a terminal on agnos >= 1.57.13. Still no link targets
-    # and no decoration (roadmap); the script checks this segment.
-    println("DARSHINI-CONSOLE-BEGIN");
-    run_console("/bin/darshini -l /fx");
-    println("DARSHINI-CONSOLE-END");
 
     var rc = assert_summary();
     var endm = "DARSHINI-LIVE-END rc=";

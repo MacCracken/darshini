@@ -23,34 +23,21 @@
 
 ## Path
 
-No 1.x release is scheduled past 1.8.0: what remains waits on an
+No 1.x release is scheduled past 1.8.1: what remains waits on an
 upstream change (below), and is scheduled when it lands.
 
 ### Waiting on upstream
 
 Scheduled when the dependency lands, not before.
 
-- **AGNOS decoration** (color, icons, the grid on the console) **and
-  link targets there** (split out of 1.8.0, decided 2026-10-28). The
-  per-fd test is agnos 1.57.13's `fd_kind#111`, which
-  [darshana](https://github.com/MacCracken/darshana) 1.5.0's
-  `tty_isatty` uses; `term_width` would then take the console size
-  from `tty_winsize`, and `-l` would show targets as on Linux. But on
-  older kernels, and under mirshi, `tty_isatty` answers for the
-  console, so both must stay off there or `darshini > file` gets
-  escapes and targets. Needs: a **public darshana probe** saying which
-  answer `tty_isatty` gave (darshana has only the private
-  `_agnos_has_tty_calls`; CLAUDE.md routes terminal queries through
-  darshana). Changes agnos terminal output. Verified on a real kernel
-  with `tests/agnos-live.sh` (mirshi 1.11.3 has no #110 / #111), whose
-  console-segment checks then flip.
 - **macOS / BSD**: needs [darshana](https://github.com/MacCracken/darshana)
   arms for `tty_winsize` / `tty_isatty`; the stdlib has the stat layouts
   and `getdirentries`.
 - **AGNOS in CI**: mirshi 1.11.3 has no lstat#102, console_mode#110 or
   fd_kind#111, so the agnos runs under mirshi exercise only darshini's
-  stat#33 fallback; the lstat path is checked by `tests/agnos-live.sh`
-  as a release step. A mirshi that emulates #102 would let CI cover it.
+  fallbacks (stat#33, no decoration); the lstat path and AGNOS
+  decoration are checked by `tests/agnos-live.sh` as a release step. A
+  mirshi that emulates them would let CI cover both.
 
 ### 2.0 — when it comes
 

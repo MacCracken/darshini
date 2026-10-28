@@ -452,8 +452,15 @@ fn main(): i64 {
     # that term_width makes; for AGNOS see color.cyr.
     set_sanitize_names(tty_isatty(STDOUT_FD));
     set_sanitize_errs(tty_isatty(STDERR_FD));
-    # v1.7.0: `-l` shows ` -> target` for a symlink on a terminal only.
-    set_link_targets(tty_isatty(STDOUT_FD));
+    # v1.7.0: `-l` shows ` -> target` for a symlink on a terminal only —
+    # and, since v1.8.1, only where that answer is about fd 1 itself
+    # (darshana's tty_isatty_is_per_fd: always on Linux; agnos >= 1.57.13).
+    # On an older agnos and under mirshi tty_isatty answers for the
+    # console, so `darshini -l > file` would get targets. Sanitization
+    # above keeps the console answer: there it fails safe.
+    var link_targets = tty_isatty(STDOUT_FD);
+    if (tty_isatty_is_per_fd() != 1) { link_targets = 0; }
+    set_link_targets(link_targets);
     # v1.4.1: stdout is buffered (walk.cyr), line by line on a terminal.
     d_set_line_buffered(tty_isatty(STDOUT_FD));
     var want_long = 0;

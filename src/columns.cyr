@@ -28,24 +28,30 @@
 # still a terminal, so it gets the classic 80.
 fn term_width(): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    # AGNOS: 0, deliberately — single-column, decoration-free output,
-    # the pipe-safe path. Not because the size is unknowable (through
-    # v1.3.4 this comment said agnos had "no way to query the terminal
-    # size", which was wrong: darshana's `tty_winsize` reads it from
-    # winsize#60). The reason is that winsize#60 cannot say whether fd 1
-    # IS the console: it is a property of the framebuffer, not of the
-    # fd, so with the console up it answers for a pipe or a file too.
-    # agnsh implements `>` and `|` (redirect syscall #62), so taking the
-    # console width here puts SGR escapes, Nerd Font glyphs and a
-    # multi-column grid into `darshini > out.txt` and `darshini | ...` —
-    # measured at v1.4.0 under mirshi with a probe build that called
-    # tty_winsize here — the script-consumer surprise CLAUDE.md calls a
-    # bug. agnos 1.57.13 added a per-fd test (fd_kind#111), which
-    # darshana 1.5.0's `tty_isatty` uses; gating decoration on it waits
-    # on a public darshana probe that says whether that answer was per fd
-    # (roadmap, "waiting on upstream"). Older kernels and mirshi answer
-    # `tty_isatty` for the console, so the gate must keep this 0 there.
-    return 0;
+    # AGNOS (v1.8.1): decorated where darshana says its terminal test is
+    # about fd 1 itself — `tty_isatty_is_per_fd()` (darshana 1.6.0, ADR
+    # 0008: agnos >= 1.57.13, fd_kind#111) — and fd 1 is a terminal: the
+    # console, or a terminal emulator's #97 channel. Through v1.8.0 this
+    # was 0 on every agnos, deliberately: winsize#60 is a property of the
+    # framebuffer, not of the fd, so with the console up it answers for a
+    # pipe or a file too, and agnsh implements `>` and `|` (redirect #62).
+    # Measured at v1.4.0 under mirshi, taking the console width here put
+    # SGR escapes, Nerd Font glyphs and a grid into `darshini > out.txt`.
+    # That is still what an older kernel or mirshi would do, so there the
+    # probe answers 0 and this stays 0.
+    #
+    # The width is winsize#60's, which is the CONSOLE's grid even on a
+    # terminal emulator's channel (ADR 0008's caveat): in a window
+    # narrower than the console the grid's rows wrap. Decided 2026-10-28
+    # — the grid at the console width, rather than one column on agnos.
+    # A terminal whose size reads as 0 or fails gets the classic 80.
+    if (tty_isatty_is_per_fd() != 1) { return 0; }
+    if (tty_isatty(STDOUT_FD) != 1) { return 0; }
+    var arows = 0;
+    var acols = 0;
+    if (tty_winsize(STDOUT_FD, &arows, &acols) != 0) { return 80; }
+    if (acols <= 0) { return 80; }
+    return acols;
     #else
     var rows = 0;
     var cols = 0;

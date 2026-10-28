@@ -61,7 +61,11 @@ test below is darshana's `tty_winsize` on fd 1 — the same
 ### When color is on
 
 - **TTY default**: stdout is a TTY (`ioctl(TIOCGWINSZ)` succeeds)
-  AND `--no-color` was not passed.
+  AND `--no-color` was not passed. On AGNOS (v1.8.1; off there
+  through v1.8.0) the TTY test is darshana's `tty_isatty`, and only
+  where `tty_isatty_is_per_fd()` says it answers about fd 1 (agnos
+  1.57.13 and later): on an older kernel, and under mirshi, it
+  answers for the console, so color stays off there.
 - **Pipe default**: stdout is not a TTY → off (no escapes emitted
   at all — script consumers see plain bytes). Same gate as M3's
   single-column-on-pipe fallback.

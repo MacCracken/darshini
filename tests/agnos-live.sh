@@ -16,8 +16,9 @@
 #   AGNOS_KERNEL  default ${SIBLINGS_ROOT:-..}/agnos/build/agnos (>= 1.56.53, lstat#102)
 #   GNOBOOT_EFI   default ${SIBLINGS_ROOT:-..}/gnoboot/build/BOOTX64.EFI
 #   OVMF          the edk2 / OVMF firmware the distribution installs
-#   LIVE_REF_BIN  optional: an older darshini agnos build (v1.7.0), seeded as
-#                 /bin/darshini-ref; the driver then asserts it followed links
+#   LIVE_REF_BIN  optional: an older darshini agnos build (before v1.8.1),
+#                 seeded as /bin/darshini-ref and run on the console, where it
+#                 must NOT be decorated — the contrast for the console checks
 # Env: LIVE_TIMEOUT seconds to wait for one boot (default 120);
 #      LIVE_TRIES boots before giving up as VOID (default 4);
 #      SMOKE_KVM=0 to use TCG even when /dev/kvm is writable.
@@ -32,10 +33,9 @@ KERNEL="${AGNOS_KERNEL:-$SIB/agnos/build/agnos}"
 EFI="${GNOBOOT_EFI:-$SIB/gnoboot/build/BOOTX64.EFI}"
 TIMEOUT="${LIVE_TIMEOUT:-120}"
 MIN_AGNOS="1.56.53"
-# The driver's assertion total (without / with LIVE_REF_BIN), pinned: a
-# count that moves by itself is a check that stopped running.
-EXPECT_LIVE=26
-[ -n "${LIVE_REF_BIN:-}" ] && EXPECT_LIVE=28
+# The driver's assertion total, pinned: a count that moves by itself is a
+# check that stopped running. (LIVE_REF_BIN adds a console segment, below.)
+EXPECT_LIVE=30
 
 void() { echo "agnos-live: VOID — $1 (nothing was measured)" >&2; exit 2; }
 fail() { echo "agnos-live: FAIL — $1" >&2; exit 1; }
@@ -158,11 +158,28 @@ printf '%s\n' "$OUT"
 printf '%s\n' "$OUT" | grep -q "^$EXPECT_LIVE passed, 0 failed ($EXPECT_LIVE total)\$" \
     || fail "expected $EXPECT_LIVE passed, 0 failed ($EXPECT_LIVE total)"
 
-# The console segment: darshini wrote to a terminal there (fd_kind#111 on
-# agnos >= 1.57.13). It must show the links as themselves, and — until
-# AGNOS decoration lands (roadmap) — no link target and no escape.
-CON=$(printf '%s\n' "$OUT" | awk '/DARSHINI-CONSOLE-BEGIN/ { on = 1; next } /DARSHINI-CONSOLE-END/ { exit } on { print }')
-printf '%s\n' "$CON" | grep -q '^lrwx.* to_d$' || fail "console listing: no l row for to_d"
-if printf '%s\n' "$CON" | grep -q ' -> '; then fail "console listing: a link target appeared"; fi
-if printf '%s' "$CON" | od -An -tx1 | grep -q ' 1b'; then fail "console listing: an escape appeared"; fi
-echo "agnos-live: PASS ($EXPECT_LIVE assertions + the console listing on agnos v$KVER)"
+# The console segments: darshini wrote to a terminal there, and since
+# v1.8.1 decorates it where darshana's tty_isatty is per fd (agnos >=
+# 1.57.13, darshana 1.6.0's tty_isatty_is_per_fd). Each must show what a
+# Linux terminal shows; the redirected runs above stayed plain.
+seg() { printf '%s\n' "$OUT" | awk -v b="DARSHINI-CONSOLE-$1-BEGIN" -v e="DARSHINI-CONSOLE-$1-END" \
+    '$0 == b { on = 1; next } $0 == e { exit } on { print }'; }
+has_esc() { printf '%s' "$1" | od -An -tx1 | grep ' 1b' > /dev/null; }
+LONG=$(seg LONG); GRID=$(seg GRID); PLAIN=$(seg PLAIN)
+[ -n "$LONG" ] && [ -n "$GRID" ] && [ -n "$PLAIN" ] || fail "a console segment is missing"
+has_esc "$LONG" || fail "console -l: not decorated (no escape)"
+printf '%s\n' "$LONG" | grep -q '^lrwx.*to_d.* -> ' || fail "console -l: to_d is not an l row with its target"
+printf '%s\n' "$LONG" | grep -q "$(printf 'broken.* -> \033\\[31mnowhere')" || fail "console -l: the broken link's target is not red"
+printf '%s\n' "$LONG" | grep -q "$(printf 'to_d.* -> \033\\[34md')" || fail "console -l: the directory target is not blue"
+has_esc "$GRID" || fail "console grid: not decorated"
+[ "$(printf '%s\n' "$GRID" | grep -c .)" -lt 9 ] || fail "console grid: one entry per line (no grid)"
+if has_esc "$PLAIN"; then fail "console -l --no-color --no-icons: an escape appeared"; fi
+printf '%s\n' "$PLAIN" | grep -q '^lrwx.* to_d -> d$' || fail "console -l --no-color: no plain link target"
+note=""
+if [ -n "${LIVE_REF_BIN:-}" ]; then
+    REF=$(seg REF)
+    [ -n "$REF" ] || fail "the reference build's console segment is missing"
+    if has_esc "$REF"; then fail "the reference build decorated the console: the contrast is gone"; fi
+    note=", the reference build undecorated"
+fi
+echo "agnos-live: PASS ($EXPECT_LIVE assertions + 3 decorated console listings$note, on agnos v$KVER)"

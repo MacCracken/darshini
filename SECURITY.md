@@ -34,7 +34,10 @@ filesystem beyond standard output. The realistic threats:
   1.5.0's `tty_isatty` asks `fd_kind#111`), so piped names go out
   byte-for-byte as on Linux. On older kernels (and under mirshi)
   `tty_isatty` reports whether the console is up, so names are
-  sanitized whenever it is, piped or not.
+  sanitized whenever it is, piped or not. Decoration and link targets
+  (v1.8.1) take the other direction: they appear only where darshana's
+  `tty_isatty_is_per_fd()` says that answer is about the fd, so a
+  redirected listing never carries escapes there.
 
   **Metadata is untrusted too.** A file's mtime survives extraction from
   a hostile archive (tar keeps it; tmpfs and btrfs store it). Through

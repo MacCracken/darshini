@@ -717,6 +717,17 @@ fn main(): i64 {
     assert_eq(_tz_rule_offset(rq, 1700000000), 12600, "<+0330>-3:30 = +3:30, no DST");
     var rp = _tz_parse_rule("EST5EDT4,0/0,J365/25", 20);
     assert_eq(_tz_rule_offset(rp, 1700000000), 0 - 14400, "permanent DST (TZif v3 hours > 24)");
+    # v1.8.3: glibc's compute_offset. An offset's hours stop at 24, and its minutes
+    # and seconds at 59. A rule's time is not an offset: "/25" above still counts.
+    assert_eq(_tz_rule_offset(_tz_parse_rule("AAA25", 5), 1700000000), 0 - 86400, "an offset stops at 24 hours");
+    assert_eq(_tz_rule_offset(_tz_parse_rule("AAA99", 5), 1700000000), 0 - 86400, "however far past");
+    assert_eq(_tz_rule_offset(_tz_parse_rule("AAA-27", 6), 1700000000), 86400, "east too");
+    assert_eq(_tz_rule_offset(_tz_parse_rule("AAA5:99:99", 10), 1700000000), 0 - 21599, "minutes and seconds at 59");
+    assert_eq(_tz_rule_offset(_tz_parse_rule("AAA5:30:15", 10), 1700000000), 0 - 19815, "seconds count");
+    assert_eq(_tz_rule_offset(_tz_parse_rule("AAA24", 5), 1700000000), 0 - 86400, "24 itself is an offset");
+    assert_eq(_tz_parse_rule("<A>5", 4), 0, "a quoted name needs 3 characters too");
+    assert_eq(_tz_parse_rule("<AB>5", 5), 0, "and 2 is not enough");
+    assert_eq(_tz_parse_rule("<ABC>5", 6) != 0, 1, "3 is");
     assert_eq(_tz_parse_rule("EST", 3), 0, "no offset -> not a rule");
     assert_eq(_tz_parse_rule("ES5", 3), 0, "a 2-letter name -> not a rule");
     assert_eq(_tz_parse_rule("EST5EDT,M13.1.0,M11.1.0", 23), 0, "month 13 -> not a rule");
@@ -816,9 +827,33 @@ fn main(): i64 {
     sys_close(tzfd);
     assert_eq(_tz_slurp(tzbig, tzl), 0, "one byte past the cap is refused, not cut");
 
+    # v1.8.3: isdst is 0 or 1. Anything else was stored raw and later used as a
+    # type index, and vec_get aborts: no output at all. glibc refuses such a file.
+    var tziny = alloc(64);
+    memset(tziny, 0, 64);
+    memcpy(tziny, "TZif", 4);
+    store8(tziny + 39, 1);                       # typecnt
+    store8(tziny + 43, 4);                       # charcnt
+    memcpy(tziny + 50, "AAA", 4);
+    assert_eq(_tz_tzif(tziny, 54) != 0, 1, "a minimal file parses");
+    store8(tziny + 48, 1);
+    assert_eq(_tz_tzif(tziny, 54) != 0, 1, "isdst 1 parses");
+    store8(tziny + 48, 2);
+    assert_eq(_tz_tzif(tziny, 54), 0, "isdst 2 is not a zone");
+    store8(tziny + 48, 255);
+    assert_eq(_tz_tzif(tziny, 54), 0, "isdst 255 is not a zone");
+
+    assert_eq(_TZ_READ_CAP, 65536, "a zone is a few KB, and this runs on a prompt");
+
     var tzp = _tz_path(tzd, "fifo");
     assert_eq(sys_mknodat(AT_FDCWD, tzp, 4480, 0), 0, "scratch FIFO");   # S_IFIFO | 0600
     assert_eq(_tz_slurp(tzp, tzl), 0, "a FIFO with no writer reads as nothing");
+    # The size check stops a FIFO first, so go past it: this is what stands
+    # between a swap after the stat and a prompt that never comes back.
+    var tzfifofd = _tz_open(tzp);
+    assert_eq(tzfifofd >= 0, 1, "a FIFO opens without blocking");
+    assert_eq(_tz_fd_regular(tzfifofd), 0, "and the fd check refuses it");
+    sys_close(tzfifofd);
     assert_eq(_tz_load_file(tzp), 0, "and does not load as a zone");
     assert_eq(_tz_slurp("/dev/zero", tzl), 0, "a device reads as nothing");
     assert_eq(_tz_slurp("/", tzl), 0, "a directory reads as nothing");

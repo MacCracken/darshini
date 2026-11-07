@@ -24,7 +24,7 @@
 
 ## Path
 
-No 1.x release is scheduled past 1.8.2: what remains waits on an
+No 1.x release is scheduled past 1.8.3: what remains waits on an
 upstream change (below), and is scheduled when it lands.
 
 ### Waiting on upstream

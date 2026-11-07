@@ -4,6 +4,45 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-11-06
+
+`src/tz.cyr` repairs, found when commandress pinned that file: a hostile zone
+could end the process, and some `TZ` strings disagreed with `date`. Patch.
+Output is unchanged for every real zone. Toolchain and darshana unchanged
+(cyrius 6.7.18, darshana 1.6.0).
+
+### Fixed
+
+- **A zone file with `isdst` above 1 could end the process.** The raw byte went
+  in as a type index, and a later `vec_get` aborted with `vec: index out of
+  bounds`, exit 1, with no listing. It took `TZDIR` naming a hostile
+  `posixrules` and a `TZ` with DST but no rule. Such a file is now refused, as
+  glibc refuses it.
+- **`TZ=:EST5` read as UTC**, against this file's own header. One leading `:` is
+  dropped for a POSIX string as it is for a zone name, so `:EST5`, `:IST-5:30`
+  and `:EST5EDT,M3.2.0,M11.1.0` now match `date`.
+- **A UTC offset stops at 24 hours, and its minutes and seconds at 59**, as in
+  glibc. `EST25` was an hour off `date`. A rule's time is not an offset, so
+  `/25` still counts in full.
+- **A quoted name needs three characters.** `<A>5` applied -5 where `date` says
+  UTC.
+
+### Changed
+
+- **`_TZ_READ_CAP` is 64 KB, down from 1 MB.** The largest real zone is under 4 KB,
+  and a 1 MB file cost 8 to 19 ms, on every redraw for a prompt that reads it.
+- The remaining `alloc` calls in `src/tz.cyr` are checked.
+- The header lists what still differs from glibc: `EST5EDT,M3.2.0`, `EST5,` and
+  `EST5EDT ` read as UTC. No zone uses them.
+
+### Verified
+
+- `tests/darshini.tcyr` 598 / 598. `tests/tz-parity.sh` 41 / 41, with new cases for
+  each fix above, each failing on 1.8.2. `tests/tz-standalone.sh` passes.
+- A/B against 1.8.2 on `-l --local-time`, stdout, stderr and exit code: 0 differences
+  across all 1,795 zone files on this machine and 13 POSIX and edge strings.
+- The crash replayed through commandress: exit 1 on 1.8.2, a clean render on 1.8.3.
+
 ## [1.8.2] - 2026-11-06
 
 `src/tz.cyr` **stands alone**, so another project can pull that one file as a

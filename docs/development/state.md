@@ -7,6 +7,11 @@
 
 ## Version
 
+**1.8.3** — 2026-11-06: **`src/tz.cyr` repairs** found when commandress
+pinned it: a zone with `isdst` above 1 could end the process, `TZ=:EST5` read
+as UTC, and offsets past 24 hours disagreed with `date`. No output change on
+any real zone (A/B 0 / 1,808 against 1.8.2).
+
 **1.8.2** — 2026-11-06: **`src/tz.cyr` stands alone**, so commandress
 can pin that one file as a source dep. No output change on any target
 (A/B 0 / 2,973 on x86_64, 0 / 2,955 on aarch64, 0 / 2,105 on agnos under
@@ -126,7 +131,7 @@ below run it on real hardware.
 
 ## Tests
 
-- `tests/darshini.tcyr` — **582** assertions (v1.8.2: `tz.cyr`'s own
+- `tests/darshini.tcyr` — **598** assertions (582 at v1.8.2: `tz.cyr`'s own
   helpers and everything its read refuses; 543 at v1.8.1, 542 at v1.8.0,
   540 at v1.7.0, 527 at v1.6.0, 463 at v1.5.0, 301 at v1.4.0). v1.8.1:
   the decoration contract holds on agnos too. v1.8.0: the `d_lstat`

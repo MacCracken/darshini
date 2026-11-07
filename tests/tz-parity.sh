@@ -106,6 +106,32 @@ check "POSIX permanent DST" "EST5EDT4,0/0,J365/25"
 # keeps the file's OWN offsets — a glibc defect darshini does not copy — and
 # a "slim" posixrules ends its explicit transitions in 2007, so compare
 # only instants before 2007-01-01.
+# One leading ':' is dropped for a string as it is for a name (v1.8.3).
+check "POSIX after a colon, no DST" ":EST5"
+check "POSIX after a colon, half hour" ":IST-5:30"
+check "POSIX after a colon, with rules" ":EST5EDT,M3.2.0,M11.1.0"
+# An offset's hours stop at 24, its minutes and seconds at 59, a quoted name
+# needs three characters (v1.8.3).
+check "POSIX offset past 24 hours" "EST25"
+check "POSIX offset far past 24 hours" "EST99"
+check "POSIX offset with seconds" "AAA5:30:15"
+check "POSIX quoted name too short" "<A>5"
+# A type with isdst above 1 used to end the process (v1.8.3): `vec: index out of
+# bounds`, exit 1. glibc refuses the file. It stands in for posixrules, with the
+# bad type in force between its two transitions, 2004 to 2012, so that an instant
+# reaches it. Without that this passes on the broken code.
+mkdir "$T/hz"
+{
+    printf 'TZif\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000'
+    printf '\000\000\000\000\000\000\000\000\000\000\000\000'
+    printf '\000\000\000\002\000\000\000\002\000\000\000\004'
+    printf '\100\000\000\000\120\000\000\000\001\000'
+    printf '\377\377\271\260\000\000\377\377\307\300\005\000AAA\000'
+} > "$T/hz/posixrules"
+TZDIR="$T/hz"
+export TZDIR
+check "posixrules with a bad isdst" "XST8XDT"
+unset TZDIR
 check "POSIX DST without a rule (posixrules, < 2007)" "XST8XDT" 1167609600
 check "POSIX east, no rule (posixrules, < 2007)" "AAA-3BBB" 1167609600
 exit $fail

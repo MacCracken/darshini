@@ -4,6 +4,74 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-11-06
+
+`src/tz.cyr` **stands alone**, so another project can pull that one file as a
+tag-pinned source dep: commandress 1.5.1 does, for its `time` segment. Patch:
+internals only. No flag, exit code, pipe or terminal byte changes on any
+target. Toolchain and darshana unchanged (cyrius 6.7.18, darshana 1.6.0).
+
+**Verified.**
+
+- A/B against 1.8.1, on stdout, stderr and exit code: **0 differences** in
+  2,973 captures on x86_64 and 2,955 on aarch64 under `qemu-aarch64`. Each run
+  is `-l --local-time` over mtimes from 1901 to 2242: all 1,795 zone files on
+  this machine, every TZ form, 628 POSIX strings (valid, malformed, mutated),
+  29 hostile paths (FIFO, devices, directories, symlink loops, `/proc`, `/sys`,
+  one byte over the cap), 472 truncated or corrupted TZif files, and pipe plus
+  PTY on x86_64. agnos under mirshi: **0 differences** in 2,105 captures, the
+  same zones and hostile files as `/etc/localtime`, the one input mirshi can
+  vary (it gives a child no environment; 1,731 of the captures differ from UTC,
+  so the comparison can see a zone).
+- `tests/tz-parity.sh` 33 / 33, `tests/parity.sh` 21 modes against 1.8.1,
+  x86_64 and aarch64.
+- **On a real agnos 1.57.17 kernel**, the standalone program from the new gate,
+  spawned with real `TZ` values: 14 cases, 112 instants, equal to `date` with a
+  zone database on the disk. On a second boot with none, every zone name is
+  UTC and POSIX strings still equal `date`. `tests/agnos-live.sh`: 30 / 30 plus
+  the three console listings.
+- On a Raspberry Pi 4 (Linux 7.0): suite 582 / 582, fuzz clean, the standalone
+  program equal to `date` at 48 instants, and 0 differences from 1.8.1 in 1,647
+  captures on that machine.
+- 21 planted defects, all caught: dropped guards, the cap off by one, the whole
+  cap allocated up front, a leaked fd, `st_mode` hardcoded at x86_64's offset,
+  and calls back into `walk.cyr` and `git.cyr`.
+- The race the guards exist for: a path flipping between a zone file and a FIFO
+  while a program calls `tz_init` 300 times. 0 of 300 runs hung; with the
+  non-blocking open removed, 56 of 60 did.
+
+### Changed
+
+- **`src/tz.cyr` needs no other darshini file.** It compiles against the stdlib
+  alone: it calls string, alloc, io, vec and syscalls. `_be_u32`, `_git_slurp`
+  and `_git_path` from `git.cyr`, and `d_stat`, `d_open_data`,
+  `d_fd_regular_size`, `S_IFMT` and `S_IFREG` from `walk.cyr`, became private
+  `_tz_` / `_TZ_` copies. `_tz_slurp` is `_git_slurp`'s guarded read: stat
+  first, so a FIFO or device of size 0 is never opened; a non-blocking,
+  close-on-exec open on Linux; fstat must say regular; the buffer sized from
+  the file, under a 1 MiB ceiling; a read that cannot be whole is refused.
+  agnos keeps the same stat and open calls, so nothing changes there either,
+  and with no zone database the result is UTC.
+- **`tz_init()` and `tz_offset(t)` are a contract**, stated in the file's
+  header and in the roadmap's frozen list: commandress pins them, and calls
+  `tz_init` on every redraw. Each call starts over.
+
+### Tests
+
+- Unit 543 → **582**: the helpers against the ones they copied, and what the
+  read refuses: missing, empty, unreadable, a symlink loop, FIFO, device,
+  directory, one byte over the cap, a file shorter than its stat. Also what it
+  accepts (a symlink, exactly the cap) and that a small file costs its size,
+  not the cap. The fd guards are pinned on their own, because the stat stops a
+  FIFO first and no fixed test can arrange the swap they exist for. aarch64
+  582 / 582, agnos 531 / 531 under mirshi.
+- `tests/tz-standalone.sh`, a new CI gate. darshini compiles `tz.cyr` beside
+  everything else, so its own build cannot see a dependency creeping in. This
+  builds the file in a scratch project from the allowed stdlib modules alone,
+  for x86_64, aarch64 and agnos, with and without DCE, then compares it with
+  `date`, repeats `tz_init` under a low `ulimit -n`, and names a FIFO and
+  devices in `TZ`.
+
 ## [1.8.1] - 2026-10-28
 
 darshana `1.5.0` → **`1.6.0`**, and **AGNOS decoration**. Patch: terminal-only

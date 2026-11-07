@@ -11,7 +11,8 @@
   ([ADR 0002](../adr/0002-icon-format.md)), the color scheme
   ([ADR 0001](../adr/0001-color-scheme.md)), mime precedence
   ([ADR 0003](../adr/0003-mime-detection.md)), tree shape
-  ([ADR 0004](../adr/0004-tree-mode.md)).
+  ([ADR 0004](../adr/0004-tree-mode.md)), and `tz_init()` /
+  `tz_offset(t)` in `src/tz.cyr`, which commandress pins from outside.
 - **Breaking** (→ 2.0): a change to the exit code or default output
   bytes of a *correct* run (CLAUDE.md). Fixing output that was wrong —
   a lying `--git` column, a trailing pad, a raw control byte — is
@@ -23,7 +24,7 @@
 
 ## Path
 
-No 1.x release is scheduled past 1.8.1: what remains waits on an
+No 1.x release is scheduled past 1.8.2: what remains waits on an
 upstream change (below), and is scheduled when it lands.
 
 ### Waiting on upstream

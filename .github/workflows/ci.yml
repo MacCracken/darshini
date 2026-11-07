@@ -173,6 +173,7 @@ jobs:
           "$D/mirshi" --root "$PWD" build/fuzz-agnos
           "$D/mirshi" --root "$PWD" build/darshini-agnos -F src > /tmp/agnos_ls
           grep -qx 'main.cyr' /tmp/agnos_ls || { echo "agnos listing smoke failed:"; cat /tmp/agnos_ls; exit 1; }
+          echo "MIRSHI=$D/mirshi" >> "$GITHUB_ENV"
 
       - name: Smoke — listing of the checkout
         # M1 acceptance check: built binary actually lists the
@@ -494,6 +495,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq gnu-coreutils > /dev/null
           sh tests/tz-parity.sh
+
+      - name: tz standalone — src/tz.cyr with no other darshini file
+        # v1.8.2. commandress pins src/tz.cyr alone, and darshini's own build
+        # compiles every file together, so it cannot see a dependency creeping
+        # in. This builds the file in a scratch project from the stdlib modules
+        # its header allows, for x86_64, aarch64 and agnos, with and without
+        # DCE, then checks it against date(1), under repeated tz_init and a low
+        # `ulimit -n`, and with TZ naming a FIFO and devices. GNU date comes
+        # from the step above, qemu-aarch64 and $MIRSHI from the cross steps.
+        run: sh tests/tz-standalone.sh
 
       - name: Smoke — multibyte names align in the grid
         # v1.6.0. Column widths are terminal cells (wide = 2, combining = 0),

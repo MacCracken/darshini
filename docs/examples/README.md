@@ -104,6 +104,7 @@ gen-width-table.py
 git-parity.sh
 parity.sh
 tz-parity.sh
+tz-standalone.sh
 ```
 
 ## Classify (`-F`)

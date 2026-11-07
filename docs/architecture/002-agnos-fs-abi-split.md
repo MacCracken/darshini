@@ -1,6 +1,6 @@
 # 002 — the agnos filesystem ABI differs from Linux in four ways, and `walk.cyr` hides all of them
 
-**Applies to**: `src/walk.cyr`, `src/columns.cyr`, `src/git.cyr`, `src/color.cyr`.
+**Applies to**: `src/walk.cyr`, `src/columns.cyr`, `src/git.cyr`, `src/color.cyr`, `src/tz.cyr`.
 **Landed**: v1.3.0.
 
 darshini builds for Linux x86_64 and for AGNOS from the same source. The
@@ -14,7 +14,10 @@ NUL-terminated cstr. The wrappers `d_stat` / `d_lstat` / `d_open_probe` /
 `d_open_data` / `d_open_dir` in `walk.cyr` exist solely to hide this; call
 them rather than the raw syscalls. (The open wrappers also carry the v1.4.1
 non-blocking flags on Linux; agnos has no such flags, and its `fstat` is a
-stub, so `d_fd_regular_size` answers "regular, size unknown" there.)
+stub, so `d_fd_regular_size` answers "regular, size unknown" there.) The one
+exception is `src/tz.cyr`: another project pins that file alone, so since
+v1.8.2 it cannot call `walk.cyr` and carries the same split as `_tz_stat`,
+`_tz_open` and `_tz_fd_regular`.
 
 **2. `lstat` is newer on agnos than the target** — syscall 6 is `close` there,
 not `lstat`, and through v1.7.0 `d_lstat` was `stat#33`, which follows, so on

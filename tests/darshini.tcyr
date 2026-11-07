@@ -739,6 +739,135 @@ fn main(): i64 {
     _tz_on = 0;
     #endif
 
+    test_group("tz.cyr stands alone (v1.8.2)");
+    # commandress pins src/tz.cyr as a source dep, so the file carries its
+    # own copies of what it used to borrow from git.cyr and walk.cyr.
+    var tzb = alloc(8);
+    store8(tzb, 0xFF);
+    store8(tzb + 1, 0xFE);
+    store8(tzb + 2, 0xFD);
+    store8(tzb + 3, 0xFC);
+    assert_eq(_tz_be_u32(tzb, 0), _be_u32(tzb, 0), "_tz_be_u32 agrees with git.cyr's _be_u32");
+    assert_eq(_tz_be_u32(tzb, 0), 0xFFFEFDFC, "the high bit stays non-negative");
+    assert_eq(streq(_tz_path("/usr/share/zoneinfo", "UTC"), "/usr/share/zoneinfo/UTC"), 1,
+      "_tz_path joins with one slash");
+    var tzl = alloc(8);
+    store64(tzl, 0 - 1);
+    assert_eq(_tz_slurp("no/such/zone", tzl), 0, "a missing file reads as nothing");
+    assert_eq(load64(tzl), 0 - 1, "a refused read leaves the length alone");
+    var tzc = _tz_slurp("cyrius.cyml", tzl);
+    assert_eq(tzc != 0, 1, "a regular file reads");
+    var tzst = alloc(144);
+    d_stat("cyrius.cyml", tzst);
+    assert_eq(load64(tzl), load64(tzst + STAT_SIZE), "the whole file, by its stat size");
+    assert_eq(memeq(tzc, "[package]", 9), 1, "and its bytes");
+
+    #ifndef CYRIUS_TARGET_AGNOS
+    test_group("a zone file read cannot hang (v1.8.2)");
+    # TZ can name anything, and commandress reads it on every redraw. The
+    # stat refuses a FIFO or a device by its size of 0, so the fd checks
+    # below are pinned on their own: they are what stands when one is
+    # swapped in after the stat, which no fixed test can arrange.
+    var tzd = alloc(64);
+    memcpy(tzd, "/tmp/darshini-tz-", 17);
+    var tzdl = fmt_int_buf(sys_getpid(), tzd + 17);
+    store8(tzd + 17 + tzdl, 0);
+    assert_eq(sys_mkdir(tzd, 448), 0, "scratch directory");
+    var tzf = _tz_path(tzd, "zone");
+    var tzfd = file_open(tzf, O_WRONLY | O_CREAT | O_TRUNC, 420);
+    assert_eq(sys_write(tzfd, "TZif2", 5), 5, "scratch zone file");
+    sys_close(tzfd);
+
+    var tzused = alloc_used();
+    var tzr = _tz_slurp(tzf, tzl);
+    assert_eq(load64(tzl), 5, "exact length");
+    assert_eq(memeq(tzr, "TZif2", 5), 1, "exact bytes");
+    assert_eq(alloc_used() - tzused < 4096, 1, "a small file costs its size, not the cap");
+
+    var tzlnk = _tz_path(tzd, "link");
+    sys_symlink(tzf, tzlnk);
+    store64(tzl, 0);
+    assert_eq(_tz_slurp(tzlnk, tzl) != 0, 1, "a symlink is followed: /etc/localtime usually is one");
+    assert_eq(load64(tzl), 5, "through the link");
+    var tzloop = _tz_path(tzd, "loop");
+    sys_symlink(tzloop, tzloop);
+    assert_eq(_tz_slurp(tzloop, tzl), 0, "a symlink loop reads as nothing");
+
+    var tze = _tz_path(tzd, "empty");
+    sys_close(file_open(tze, O_WRONLY | O_CREAT | O_TRUNC, 420));
+    assert_eq(_tz_slurp(tze, tzl), 0, "an empty file reads as nothing");
+
+    var tzdeny = _tz_path(tzd, "deny");
+    tzfd = file_open(tzdeny, O_WRONLY | O_CREAT | O_TRUNC, 0);
+    sys_write(tzfd, "TZif2", 5);
+    sys_close(tzfd);
+    if (sys_getuid() != 0) {
+        assert_eq(_tz_slurp(tzdeny, tzl), 0, "an unreadable file reads as nothing");
+    }
+
+    var tzbig = _tz_path(tzd, "big");
+    tzfd = file_open(tzbig, O_WRONLY | O_CREAT | O_TRUNC, 420);
+    sys_ftruncate(tzfd, _TZ_READ_CAP);
+    sys_close(tzfd);
+    assert_eq(_tz_slurp(tzbig, tzl) != 0, 1, "a file of exactly the cap reads");
+    assert_eq(load64(tzl), _TZ_READ_CAP, "all of it");
+    tzfd = file_open(tzbig, O_WRONLY, 0);
+    sys_ftruncate(tzfd, _TZ_READ_CAP + 1);
+    sys_close(tzfd);
+    assert_eq(_tz_slurp(tzbig, tzl), 0, "one byte past the cap is refused, not cut");
+
+    var tzp = _tz_path(tzd, "fifo");
+    assert_eq(sys_mknodat(AT_FDCWD, tzp, 4480, 0), 0, "scratch FIFO");   # S_IFIFO | 0600
+    assert_eq(_tz_slurp(tzp, tzl), 0, "a FIFO with no writer reads as nothing");
+    assert_eq(_tz_load_file(tzp), 0, "and does not load as a zone");
+    assert_eq(_tz_slurp("/dev/zero", tzl), 0, "a device reads as nothing");
+    assert_eq(_tz_slurp("/", tzl), 0, "a directory reads as nothing");
+    # A directory has a size, so it gets past the stat: only the fd check
+    # stops it, and it must do so before the buffer exists.
+    tzused = alloc_used();
+    var tzdirr = _tz_slurp("src", tzl);
+    var tzdird = alloc_used() - tzused;
+    assert_eq(tzdirr, 0, "a directory with a size reads as nothing");
+    assert_eq(tzdird, 0, "and is refused by the fd check, before the buffer");
+    # sysfs: a regular file that stats as 4096 and reads a few bytes.
+    if (_tz_stat("/sys/devices/system/cpu/online", tzst) == 0) {
+        assert_eq(_tz_slurp("/sys/devices/system/cpu/online", tzl), 0, "shorter than its stat: refused");
+    }
+
+    # The guards themselves, with a FIFO that got past the stat.
+    tzfd = _tz_open(tzf);
+    assert_eq(tzfd >= 0, 1, "_tz_open opens");
+    assert_eq(sys_fcntl(tzfd, 3, 0) & O_NONBLOCK, O_NONBLOCK, "_tz_open: O_NONBLOCK");
+    assert_eq(sys_fcntl(tzfd, 1, 0) & 1, 1, "_tz_open: close-on-exec");
+    # In this order, with nothing between: the bad fd runs on a stack still
+    # holding the regular file's stat, so ignoring fstat's failure answers 1.
+    var tzreg = _tz_fd_regular(tzfd);
+    var tzbadfd = _tz_fd_regular(0 - 1);
+    assert_eq(tzreg, 1, "_tz_fd_regular: a regular file");
+    assert_eq(tzbadfd, 0, "_tz_fd_regular: a bad fd is not");
+    sys_close(tzfd);
+    tzfd = _tz_open(tzp);
+    assert_eq(tzfd >= 0, 1, "_tz_open returns on a FIFO with no writer");
+    assert_eq(_tz_fd_regular(tzfd), 0, "_tz_fd_regular: a FIFO is not");
+    sys_close(tzfd);
+    tzfd = _tz_open("/dev/zero");
+    assert_eq(_tz_fd_regular(tzfd), 0, "_tz_fd_regular: a device is not");
+    sys_close(tzfd);
+    tzfd = _tz_open("/");
+    assert_eq(_tz_fd_regular(tzfd), 0, "_tz_fd_regular: a directory is not");
+    sys_close(tzfd);
+
+    sys_unlink(tzf);
+    sys_unlink(tzlnk);
+    sys_unlink(tzloop);
+    sys_unlink(tze);
+    sys_unlink(tzdeny);
+    sys_unlink(tzbig);
+    sys_unlink(tzp);
+    assert_eq(sys_rmdir(tzd), 0, "scratch directory removed");
+    _tz_on = 0;
+    #endif
+
     test_group("git_status_for_root");
     # v1.3.3: the `-T` root line. Its repo-relative path is the ctx
     # listing prefix itself, not prefix + display-name, so through

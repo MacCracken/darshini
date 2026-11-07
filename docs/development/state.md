@@ -7,7 +7,12 @@
 
 ## Version
 
-**1.8.1** — 2026-10-28: darshana 1.5.0 → 1.6.0, and **AGNOS
+**1.8.2** — 2026-11-06: **`src/tz.cyr` stands alone**, so commandress
+can pin that one file as a source dep. No output change on any target
+(A/B 0 / 2,973 on x86_64, 0 / 2,955 on aarch64, 0 / 2,105 on agnos under
+mirshi). Toolchain unchanged (cyrius 6.7.18, darshana 1.6.0).
+
+Prior: **1.8.1** — 2026-10-28: darshana 1.5.0 → 1.6.0, and **AGNOS
 decoration**. Where darshana's new `tty_isatty_is_per_fd()` is 1 (agnos
 ≥ 1.57.13) and stdout is a terminal, agnos gets what a Linux terminal
 gets: color, icons, the grid (at the console's width) and `-l` link
@@ -64,7 +69,9 @@ to stdout, exit. Pipe-aware (plain output on non-TTY).
 - `src/width.cyr` / `src/width_table.cyr` — terminal cell width of
   UTF-8 (v1.6.0; the table is generated)
 - `src/tz.cyr` — civil-date arithmetic and `--local-time`: TZif reader,
-  POSIX TZ rules, glibc's posixrules fallback (v1.6.0)
+  POSIX TZ rules, glibc's posixrules fallback (v1.6.0). Stdlib-only
+  since v1.8.2, with its own `_tz_` file helpers: commandress pins this
+  one file, and `tz_init` / `tz_offset` are a contract
 - `src/long.cyr` — `-l` (two-pass: collect, then emit aligned), for a
   directory's entries and path arguments alike; `emit_link_target`
   (` -> target` on a terminal, v1.7.0)
@@ -119,9 +126,10 @@ below run it on real hardware.
 
 ## Tests
 
-- `tests/darshini.tcyr` — **543** assertions (v1.8.1: the decoration
-  contract holds on agnos too; 542 at v1.8.0, 540 at v1.7.0,
-  527 at v1.6.0, 463 at v1.5.0, 301 at v1.4.0). v1.8.0: the `d_lstat`
+- `tests/darshini.tcyr` — **582** assertions (v1.8.2: `tz.cyr`'s own
+  helpers and everything its read refuses; 543 at v1.8.1, 542 at v1.8.0,
+  540 at v1.7.0, 527 at v1.6.0, 463 at v1.5.0, 301 at v1.4.0). v1.8.1:
+  the decoration contract holds on agnos too. v1.8.0: the `d_lstat`
   probe decides. v1.7.0: the directory-only folder rule,
   the generated tables. v1.6.0: terminal cells (CJK, combining, emoji,
   malformed), the cells grid, path-argument decoration, civil dates and
@@ -135,8 +143,8 @@ below run it on real hardware.
   extended flags, v4 prefix compression, long names, SHA-256, misframing),
   `_git_oid_len`, every `--git` status outcome including the u32 compare
   and `git_status_for_root`, the hardened magic probe. Cross-targets,
-  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 543 / 543;
-  agnos under mirshi 523 / 523 (no ownership or TZif tests there; its
+  both run by CI since v1.4.2: aarch64 under `qemu-aarch64` 582 / 582;
+  agnos under mirshi 531 / 531 (no ownership or TZif tests there; its
   errno assertions expect agnos's flat `-1`).
 - `tests/darshini.fcyr` — 8 fuzz targets with named invariants
   (v1.5.0 added wildmatch vs an independent reference matcher, v1.6.0
@@ -150,6 +158,10 @@ below run it on real hardware.
   ~30 zones and TZ forms, random instants and every DST transition;
   fails without GNU date — v1.6.1 — and on Ubuntu 26.04 uses `gnudate`
   from gnu-coreutils),
+  `tests/tz-standalone.sh` (v1.8.2: builds `src/tz.cyr` in a scratch
+  project from the stdlib alone, x86_64 / aarch64 / agnos, with and
+  without DCE, and compares it with GNU `date`; the agnos run needs
+  `MIRSHI=<path>`, which CI's agnos step exports),
   `tests/git-parity.sh` (v1.5.0: `--git` vs real git — ignore sets,
   `.git`, submodules, worktrees, ownership with sudo or as root; run it
   locally with the ownership part via
@@ -172,7 +184,8 @@ below run it on real hardware.
 - CI (`.github/workflows/ci.yml`, every job on `ubuntu-26.04`, actions
   pinned by commit SHA since v1.6.1) — build, golden examples, strict
   lint, tests, fuzz, agnos (mirshi) + aarch64 (qemu) suite / fuzz runs
-  and aarch64 output parity, git parity, tz parity, 29 smoke gates, DCE
+  and aarch64 output parity, git parity, tz parity, tz standalone, 29
+  smoke gates, DCE
   parity, security scan, generated tables, docs / version consistency.
   `release.yml` also checks the shipped aarch64 binary against the
   shipped x86_64 one (v1.8.0).
@@ -192,10 +205,13 @@ Each needs hardware or builds a runner lacks; run them before tagging.
   compared byte for byte with the x86_64 capture. (The fixture's socket
   is recreated after extraction, with its mode set explicitly: `bind()`
   applies the umask, and the Pi's ssh session runs with 002.)
-  v1.8.0: 542 / 542, fuzz ok, 276 / 276 captures identical.
-- **agnos on a real kernel**: `LIVE_REF_BIN=<previous agnos build> sh
-  tests/agnos-live.sh`. v1.8.1: 30 / 30 and the console segments on agnos
-  1.57.14.
+  v1.8.0: 542 / 542, fuzz ok, 276 / 276 captures identical. v1.8.2:
+  582 / 582, fuzz ok, and 1.8.1 against 1.8.2 on the Pi itself, 0 /
+  1,647 captures differ.
+- **agnos on a real kernel**: `sh tests/agnos-live.sh`, with
+  `LIVE_REF_BIN=<a pre-1.8.1 agnos build>` for the undecorated contrast
+  (a 1.8.1 or later build decorates, and fails that check). v1.8.2:
+  30 / 30 and the console segments on agnos 1.57.17.
 
 ## Dependencies
 
@@ -214,12 +230,20 @@ Each needs hardware or builds a runner lacks; run them before tagging.
 
 ## Consumers
 
-_None._ darshini is end-user-facing; "consumers" are user shell
-sessions and the maintainer's `ls` alias.
+The binary is end-user-facing: its consumers are user shell sessions
+and the maintainer's `ls` alias.
+
+- **commandress** (from 1.5.1) pins one file, `src/tz.cyr`, as
+  `[deps.darshini]`, tag-pinned, for its `time` segment. Its contract
+  is `tz_init()` and `tz_offset(t)`. `cyrius deps` also walks darshini's
+  own manifest, so that dep brings `[deps.darshana]` along: vendored and
+  prepended to the consumer's compile, though `tz.cyr` calls none of it
+  and DCE drops it. `modules = []` in the consumer's manifest did not
+  stop it (cyrius 6.7.18).
 
 ## Next
 
-See [`roadmap.md`](roadmap.md): nothing scheduled past 1.8.1 in 1.x.
+See [`roadmap.md`](roadmap.md): nothing scheduled past 1.8.2 in 1.x.
 Waiting on upstream: macOS / BSD (darshana arms), agnos lstat and
 decoration in CI (mirshi #102 / #110 / #111). Then 2.0.
 
@@ -249,6 +273,12 @@ decoration in CI (mirshi #102 / #110 / #111). Then 2.0.
   uutils' `date` (Ubuntu 26.04's default `/usr/bin/date`) disagrees on
   exactly those strings — DST before 1970, a no-rule name read as UTC —
   so `tests/tz-parity.sh` insists on GNU's (`gnudate` there).
+- **`src/tz.cyr` compiles without the rest of darshini** (v1.8.2).
+  Anything it calls must come from the stdlib or live in the file as
+  `_tz_` / `_TZ_`, and `walk.cyr`'s wrappers and `S_IF*` are off limits.
+  darshini's own build cannot catch a slip, since it compiles every
+  file together; `tests/tz-standalone.sh` does. Reading a zone must
+  stay bounded and non-blocking: commandress does it on every redraw.
 - **Grid widths are cells, from a generated table**: regenerate
   `src/width_table.cyr` with `tests/gen-width-table.py` (deliberately,
   not in CI — a runner's Python may carry another Unicode version).
